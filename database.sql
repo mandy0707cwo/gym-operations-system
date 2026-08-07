@@ -1,0 +1,187 @@
+-- 健身房營運系統：請在全新的 Supabase 專案之 SQL Editor 一次執行。
+create extension if not exists pgcrypto;
+
+create type public.app_role as enum ('coach', 'manager');
+create type public.purchase_kind as enum ('first', 'renewal');
+create type public.payment_plan as enum ('full', 'installment');
+
+create table public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  display_name text not null check (length(trim(display_name)) > 0),
+  role public.app_role not null default 'coach',
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+create table public.members (
+  id uuid primary key default gen_random_uuid(),
+  member_name text not null check (length(trim(member_name)) > 0),
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  created_by uuid not null references public.profiles(id),
+  unique (member_name)
+);
+
+create table public.daily_operations (
+  id uuid primary key default gen_random_uuid(),
+  operation_date date not null,
+  coach_id uuid not null references public.profiles(id),
+  classes_held integer not null default 0 check (classes_held >= 0),
+  classes_cancelled integer not null default 0 check (classes_cancelled >= 0),
+  trial_visits integer not null default 0 check (trial_visits >= 0),
+  trial_conversions integer not null default 0 check (trial_conversions >= 0),
+  note text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (operation_date, coach_id),
+  check (trial_conversions <= trial_visits)
+);
+
+create table public.purchases (
+  id uuid primary key default gen_random_uuid(),
+  member_id uuid not null references public.members(id),
+  purchase_kind public.purchase_kind not null,
+  coach_id uuid not null references public.profiles(id),
+  course_name text not null check (length(trim(course_name)) > 0),
+  total_sessions integer not null check (total_sessions > 0),
+  total_amount numeric(12,2) not null check (total_amount >= 0),
+  purchase_date date not null,
+  expiry_date date not null,
+  payment_plan public.payment_plan not null,
+  installment_count smallint not null check (installment_count between 1 and 3),
+  status text not null default 'active' check (status in ('active','completed','expired','cancelled')),
+  created_at timestamptz not null default now(),
+  created_by uuid not null references public.profiles(id),
+  check (expiry_date >= purchase_date),
+  check ((payment_plan = 'full' and installment_count = 1) or payment_plan = 'installment')
+);
+
+create table public.purchase_payments (
+  id uuid primary key default gen_random_uuid(),
+  purchase_id uuid not null references public.purchases(id) on delete cascade,
+  installment_no smallint not null check (installment_no between 1 and 3),
+  amount numeric(12,2) not null check (amount > 0),
+  paid_date date not null,
+  created_at timestamptz not null default now(),
+  created_by uuid not null references public.profiles(id),
+  unique (purchase_id, installment_no)
+);
+
+create or replace function public.validate_purchase_payment()
+returns trigger language plpgsql set search_path=public as $$
+declare v_purchase public.purchases%rowtype; v_paid numeric(12,2);
+begin
+  select * into v_purchase from public.purchases where id=new.purchase_id for update;
+  if new.installment_no > v_purchase.installment_count then
+    raise exception '付款期次超過購買設定的總期數';
+  end if;
+  select coalesce(sum(amount),0) into v_paid from public.purchase_payments
+    where purchase_id=new.purchase_id and id<>new.id;
+  if v_paid + new.amount > v_purchase.total_amount then
+    raise exception '累計付款金額不可超過成交總金額';
+  end if;
+  return new;
+end; $$;
+create trigger check_purchase_payment before insert or update on public.purchase_payments
+for each row execute function public.validate_purchase_payment();
+
+create table public.session_usages (
+  id uuid primary key default gen_random_uuid(),
+  purchase_id uuid not null references public.purchases(id),
+  usage_date date not null,
+  coach_id uuid not null references public.profiles(id),
+  session_seq integer not null check (session_seq > 0),
+  deducted_amount numeric(12,2) not null check (deducted_amount >= 0),
+  note text,
+  created_at timestamptz not null default now(),
+  created_by uuid not null references public.profiles(id),
+  unique (purchase_id, session_seq)
+);
+
+create index idx_daily_date_coach on public.daily_operations(operation_date, coach_id);
+create index idx_purchase_member on public.purchases(member_id);
+create index idx_purchase_date_coach on public.purchases(purchase_date, coach_id);
+create index idx_usage_date_coach on public.session_usages(usage_date, coach_id);
+
+create or replace function public.is_manager()
+returns boolean language sql stable security definer set search_path = public
+as $$ select exists(select 1 from public.profiles where id = auth.uid() and role = 'manager' and active); $$;
+
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public
+as $$
+begin
+  insert into public.profiles(id, display_name, role)
+  values(new.id, coalesce(nullif(trim(new.raw_user_meta_data->>'display_name'),''), split_part(new.email,'@',1)), 'coach');
+  return new;
+end; $$;
+create trigger on_auth_user_created after insert on auth.users
+for each row execute procedure public.handle_new_user();
+
+create or replace view public.purchase_balances with (security_invoker=true) as
+select p.id purchase_id, p.member_id, m.member_name, p.course_name, p.coach_id,
+       pr.display_name coach_name, p.total_sessions, p.total_amount,
+       count(u.id)::integer used_sessions,
+       p.total_sessions-count(u.id)::integer remaining_sessions,
+       round(p.total_amount-coalesce(sum(u.deducted_amount),0),2) remaining_amount,
+       p.expiry_date, p.status
+from public.purchases p
+join public.members m on m.id=p.member_id
+join public.profiles pr on pr.id=p.coach_id
+left join public.session_usages u on u.purchase_id=p.id
+group by p.id,m.member_name,pr.display_name;
+
+-- 原子扣課：鎖定購買資料，最後一堂扣完剩餘金額，避免四捨五入與多人競爭問題。
+create or replace function public.consume_session(
+  p_purchase_id uuid, p_usage_date date, p_coach_id uuid, p_note text default null
+) returns public.session_usages
+language plpgsql security invoker set search_path=public as $$
+declare
+  v_purchase public.purchases%rowtype;
+  v_used integer;
+  v_deducted numeric(12,2);
+  v_row public.session_usages%rowtype;
+begin
+  select * into v_purchase from public.purchases where id=p_purchase_id for update;
+  if not found then raise exception '找不到購買紀錄'; end if;
+  if v_purchase.status <> 'active' then raise exception '此課程不是有效狀態'; end if;
+  select count(*) into v_used from public.session_usages where purchase_id=p_purchase_id;
+  if v_used >= v_purchase.total_sessions then raise exception '剩餘堂數不足'; end if;
+  if v_used + 1 = v_purchase.total_sessions then
+    select round(v_purchase.total_amount-coalesce(sum(deducted_amount),0),2)
+      into v_deducted from public.session_usages where purchase_id=p_purchase_id;
+  else
+    v_deducted := round(v_purchase.total_amount/v_purchase.total_sessions,2);
+  end if;
+  insert into public.session_usages(purchase_id,usage_date,coach_id,session_seq,deducted_amount,note,created_by)
+  values(p_purchase_id,p_usage_date,p_coach_id,v_used+1,v_deducted,nullif(trim(p_note),''),auth.uid()) returning * into v_row;
+  if v_used+1=v_purchase.total_sessions then update public.purchases set status='completed' where id=p_purchase_id; end if;
+  return v_row;
+end; $$;
+
+alter table public.profiles enable row level security;
+alter table public.members enable row level security;
+alter table public.daily_operations enable row level security;
+alter table public.purchases enable row level security;
+alter table public.purchase_payments enable row level security;
+alter table public.session_usages enable row level security;
+
+create policy profiles_read on public.profiles for select to authenticated using (active);
+create policy profiles_manager_update on public.profiles for update to authenticated using (public.is_manager()) with check (public.is_manager());
+create policy members_read on public.members for select to authenticated using (true);
+create policy members_insert on public.members for insert to authenticated with check (created_by=auth.uid());
+create policy daily_read on public.daily_operations for select to authenticated using (coach_id=auth.uid() or public.is_manager());
+create policy daily_insert on public.daily_operations for insert to authenticated with check (coach_id=auth.uid() or public.is_manager());
+create policy daily_update on public.daily_operations for update to authenticated using (coach_id=auth.uid() or public.is_manager()) with check (coach_id=auth.uid() or public.is_manager());
+create policy purchase_read on public.purchases for select to authenticated using (coach_id=auth.uid() or public.is_manager());
+create policy purchase_insert on public.purchases for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
+create policy payment_read on public.purchase_payments for select to authenticated using (exists(select 1 from public.purchases p where p.id=purchase_id and (p.coach_id=auth.uid() or public.is_manager())));
+create policy payment_insert on public.purchase_payments for insert to authenticated with check (created_by=auth.uid() and exists(select 1 from public.purchases p where p.id=purchase_id and (p.coach_id=auth.uid() or public.is_manager())));
+create policy usage_read on public.session_usages for select to authenticated using (
+  coach_id=auth.uid() or public.is_manager() or
+  exists(select 1 from public.purchases p where p.id=purchase_id and p.coach_id=auth.uid())
+);
+create policy usage_insert on public.session_usages for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
+
+grant select on public.purchase_balances to authenticated;
+grant execute on function public.consume_session(uuid,date,uuid,text) to authenticated;
