@@ -30,13 +30,15 @@ def secret(name):
     except Exception:
         return ""
 
-@st.cache_resource
 def client():
+    """每個 Streamlit 使用者連線使用獨立 Supabase Auth session，避免帳號互相沿用。"""
     url, key = secret("SUPABASE_URL"), secret("SUPABASE_ANON_KEY")
     if not url or not key:
         st.error("尚未設定 SUPABASE_URL 與 SUPABASE_ANON_KEY。請依 README 完成設定。")
         st.stop()
-    return create_client(url, key)
+    if "_supabase_client" not in st.session_state:
+        st.session_state._supabase_client = create_client(url, key)
+    return st.session_state._supabase_client
 
 @st.cache_resource
 def admin_client():
