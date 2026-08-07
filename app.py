@@ -7,6 +7,7 @@ import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
 from supabase import create_client
+from supabase.lib.client_options import ClientOptions
 
 load_dotenv()
 st.set_page_config(page_title="健身房營運管理", page_icon="🏋️", layout="wide")
@@ -36,6 +37,18 @@ def client():
         st.error("尚未設定 SUPABASE_URL 與 SUPABASE_ANON_KEY。請依 README 完成設定。")
         st.stop()
     return create_client(url, key)
+
+@st.cache_resource
+def admin_client():
+    """僅供主管邀請帳號；Secret key 只存在 Streamlit 伺服器端。"""
+    url, key = secret("SUPABASE_URL"), secret("SUPABASE_SECRET_KEY")
+    if not key:
+        return None
+    return create_client(
+        url,
+        key,
+        options=ClientOptions(auto_refresh_token=False, persist_session=False),
+    )
 
 def rows(query):
     return query.execute().data or []
@@ -227,16 +240,67 @@ def dashboard_page(me):
     left.plotly_chart(px.bar(df,x="教練",y=["上課堂數","成交堂數"],barmode="group",title=f"教練堂數比較（{start} 至 {end}）",labels={"value":"堂數","variable":"指標"}),use_container_width=True)
     right.plotly_chart(px.bar(df,x="教練",y="成交金額",title=f"成交金額（{start} 至 {end}）",labels={"成交金額":"TWD"}),use_container_width=True)
 
+def coach_admin_page(me):
+    st.header("教練帳號管理")
+    if me["role"] != "manager":
+        st.warning("此頁僅限主管使用。")
+        return
+    admin = admin_client()
+    if admin is None:
+        st.error("尚未設定 SUPABASE_SECRET_KEY，請由系統管理者在 Streamlit Secrets 加入後重新啟動 App。")
+        return
+
+    st.subheader("邀請新教練")
+    st.caption("系統會寄出 Supabase 邀請信；教練由信件連結完成帳號設定。主管不需代設密碼。")
+    with st.form("invite_coach", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        display_name = c1.text_input("教練姓名")
+        email = c2.text_input("教練 Email")
+        invite = st.form_submit_button("寄出邀請")
+    if invite:
+        name, mail = display_name.strip(), email.strip().lower()
+        if not name or not mail or "@" not in mail:
+            st.error("請輸入教練姓名與有效的 Email。")
+        else:
+            try:
+                response = admin.auth.admin.invite_user_by_email(mail)
+                invited_user = getattr(response, "user", None)
+                if invited_user:
+                    admin.table("profiles").update({"display_name": name, "role": "coach", "active": True}).eq("id", invited_user.id).execute()
+                st.success(f"已寄出邀請給 {name}（{mail}）。")
+            except Exception as exc:
+                st.error(f"邀請失敗：{exc}")
+
+    st.subheader("現有帳號")
+    profiles = rows(client().table("profiles").select("id,display_name,role,active,created_at").order("display_name"))
+    if profiles:
+        show_table(profiles, ["display_name", "role", "active", "created_at"])
+        coach_profiles = [x for x in profiles if x["role"] == "coach"]
+        if coach_profiles:
+            labels = {x["display_name"]: x for x in coach_profiles}
+            with st.form("coach_status"):
+                selected_name = st.selectbox("選擇教練", list(labels))
+                new_active = st.selectbox("帳號狀態", ["啟用", "停用"])
+                update_status = st.form_submit_button("更新狀態")
+            if update_status:
+                target = labels[selected_name]
+                try:
+                    client().table("profiles").update({"active": new_active == "啟用"}).eq("id", target["id"]).execute()
+                    st.success(f"{selected_name} 已設定為{new_active}。")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"更新失敗：{exc}")
+
 user=login(); me=profile(user.id)
 with st.sidebar:
     st.title("🏋️ 營運管理")
     st.write(f'{me["display_name"]}｜{"主管" if me["role"]=="manager" else "教練"}')
-    pages=["每日營運","課程購買","銷課表"] + (["主管 Dashboard"] if me["role"]=="manager" else [])
+    pages=["每日營運","課程購買","銷課表"] + (["主管 Dashboard","教練帳號管理"] if me["role"]=="manager" else [])
     page=st.radio("功能",pages)
     if st.button("登出"):
         client().auth.sign_out(); st.session_state.clear(); st.rerun()
 
 try:
-    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page}[page](me)
+    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"教練帳號管理":coach_admin_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")

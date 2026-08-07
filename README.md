@@ -40,14 +40,18 @@ streamlit run app.py
 ```toml
 SUPABASE_URL = "https://YOUR_PROJECT.supabase.co"
 SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY"
+SUPABASE_SECRET_KEY = "YOUR_SUPABASE_SECRET_KEY"
 ```
 
 4. Deploy。完成後即可用 HTTPS 網址多人登入。
+
+`SUPABASE_SECRET_KEY` 只用於主管從 App 寄送教練邀請，必須存放於 Streamlit Secrets，絕不可提交到 GitHub。可使用新版 `sb_secret_...`；舊專案則使用 `service_role` key。
 
 ## 權限與資料邏輯
 
 - 教練：只能讀取與填寫自己的每日營運、購買與銷課資料。
 - 主管：可查看全體教練資料與 Dashboard，也可代為填寫。
+- 主管：可在「教練帳號管理」寄出邀請，並啟用或停用教練帳號。
 - 所有限制由 PostgreSQL Row Level Security 執行，不只依賴畫面隱藏。
 - 每一筆購買可有 1–3 期付款紀錄；同一期不可重複。
 - 扣課由資料庫交易函式執行並鎖定購買資料，避免多人同時超扣。
@@ -59,4 +63,3 @@ SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY"
 - 建立测试會員與課程，完成全堂數銷課，確認扣款合計等於成交總額。
 - 確認成交總額、期款、有效日期與會員姓名正確；系統不會自行認定稅務或收入認列方式。
 - 若需更正已扣課紀錄，目前應由主管在 Supabase 後台處理並保留稽核說明；正式營運前建議另建「沖銷」流程，不直接刪除紀錄。
-
