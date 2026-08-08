@@ -113,7 +113,8 @@ def profile(user_id):
     return data[0]
 
 def coach_options():
-    data = rows(client().table("profiles").select("id,display_name").eq("active",True).order("display_name"))
+    data = rows(client().table("profiles").select("id,display_name,role").eq("active",True).order("display_name"))
+    data = [x for x in data if x.get("role") in ("coach", "manager")]
     return {x["display_name"]:x["id"] for x in data}
 
 def show_table(data, columns=None):
@@ -152,6 +153,7 @@ def daily_page(me):
             except Exception as exc: st.error(f"儲存失敗：{exc}")
     data=rows(client().table("daily_operations").select("operation_date,coach_id,classes_held,classes_cancelled,trial_visits,trial_conversions,note").order("operation_date",desc=True).limit(100))
     names={v:k for k,v in coaches.items()}
+    data=[x for x in data if x.get("coach_id") in names]
     for x in data: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
     show_table(data,["operation_date","coach_name","classes_held","classes_cancelled","trial_visits","trial_conversions","note"])
 
@@ -200,7 +202,9 @@ def purchase_page(me):
                 st.success("購買與首期付款紀錄已建立。")
             except Exception as exc: st.error(f"建立失敗：{exc}")
     st.subheader("登錄後續期款")
-    purchases=rows(client().table("purchase_balances").select("purchase_id,member_name,course_name"))
+    purchases=rows(client().table("purchase_balances").select("purchase_id,member_name,course_name,coach_id"))
+    operational_ids=set(coaches.values())
+    purchases=[x for x in purchases if x.get("coach_id") in operational_ids]
     lookup={f'{x["member_name"]}｜{x["course_name"]}｜{x["purchase_id"][:8]}':x["purchase_id"] for x in purchases}
     if lookup:
         with st.form("payment"):
@@ -223,6 +227,7 @@ def usage_page(me):
     member_name=st.selectbox("會員名稱",list(member_map),index=None,placeholder="輸入或選擇會員")
     if not member_name: return
     balances=rows(client().table("purchase_balances").select("*").eq("member_id",member_map[member_name]).gt("remaining_sessions",0).order("expiry_date"))
+    balances=[x for x in balances if x.get("coach_id") in set(coaches.values())]
     show_table(balances,["course_name","coach_name","total_sessions","used_sessions","remaining_sessions","remaining_amount","expiry_date","status"])
     active=[x for x in balances if x["status"]=="active"]
     if not active: st.warning("此會員沒有可扣課的有效課程。") ; return
@@ -240,6 +245,7 @@ def usage_page(me):
         except Exception as exc: st.error(f"扣課失敗：{exc}")
     history=rows(client().table("session_usages").select("usage_date,coach_id,session_seq,deducted_amount,note").eq("purchase_id",selected["purchase_id"]).order("session_seq",desc=True))
     names={v:k for k,v in coaches.items()}
+    history=[x for x in history if x.get("coach_id") in names]
     for x in history: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
     st.subheader("扣課紀錄"); show_table(history,["usage_date","coach_name","session_seq","deducted_amount","note"])
 
@@ -388,26 +394,28 @@ def data_io_page(me):
     start = c1.date_input("開始日期", date.today().replace(day=1), key="export_start")
     end = c2.date_input("結束日期", date.today(), key="export_end")
     profiles = rows(admin.table("profiles").select("id,username,display_name,role,active").order("display_name"))
-    coach_map = {x["display_name"]: x["id"] for x in profiles if x["role"] in ("coach", "manager", "admin")}
+    operational_profiles = [x for x in profiles if x["role"] in ("coach", "manager")]
+    coach_map = {x["display_name"]: x["id"] for x in operational_profiles}
     selected_coaches = st.multiselect("教練（未選擇代表全部）", list(coach_map), key="export_coaches")
 
     if start > end:
         st.error("開始日期不可晚於結束日期。")
     else:
         coach_ids = {coach_map[x] for x in selected_coaches}
-        id_to_name = {x["id"]: x["display_name"] for x in profiles}
+        operational_ids = set(coach_map.values())
+        id_to_name = {x["id"]: x["display_name"] for x in operational_profiles}
         members = rows(admin.table("members").select("*").order("member_name"))
         operations = rows(admin.table("daily_operations").select("*").gte("operation_date", str(start)).lte("operation_date", str(end)).order("operation_date"))
         purchases = rows(admin.table("purchases").select("*").gte("purchase_date", str(start)).lte("purchase_date", str(end)).order("purchase_date"))
         usages = rows(admin.table("session_usages").select("*").gte("usage_date", str(start)).lte("usage_date", str(end)).order("usage_date"))
         purchase_ids = {x["id"] for x in purchases}
         payments = rows(admin.table("purchase_payments").select("*").gte("paid_date", str(start)).lte("paid_date", str(end)).order("paid_date"))
-        if coach_ids:
-            operations = [x for x in operations if x.get("coach_id") in coach_ids]
-            purchases = [x for x in purchases if x.get("coach_id") in coach_ids]
-            purchase_ids = {x["id"] for x in purchases}
-            usages = [x for x in usages if x.get("coach_id") in coach_ids]
-            payments = [x for x in payments if x.get("purchase_id") in purchase_ids]
+        effective_ids = coach_ids or operational_ids
+        operations = [x for x in operations if x.get("coach_id") in effective_ids]
+        purchases = [x for x in purchases if x.get("coach_id") in effective_ids]
+        purchase_ids = {x["id"] for x in purchases}
+        usages = [x for x in usages if x.get("coach_id") in effective_ids]
+        payments = [x for x in payments if x.get("purchase_id") in purchase_ids]
         for collection in (operations, purchases, usages):
             for item in collection:
                 if "coach_id" in item:
@@ -418,7 +426,7 @@ def data_io_page(me):
             "課程購買": pd.DataFrame(purchases),
             "付款紀錄": pd.DataFrame(payments),
             "銷課紀錄": pd.DataFrame(usages),
-            "帳號權限": pd.DataFrame(profiles),
+            "帳號權限": pd.DataFrame(operational_profiles),
         })
         st.download_button("下載 Excel 報表", report,
             file_name=f"健身房營運報表_{start}_{end}.xlsx",
