@@ -45,6 +45,7 @@ create table public.purchases (
   coach_id uuid not null references public.profiles(id),
   course_name text not null check (length(trim(course_name)) > 0),
   total_sessions integer not null check (total_sessions > 0),
+  session_hours numeric(4,2) not null default 1 check (session_hours > 0),
   total_amount numeric(12,2) not null check (total_amount >= 0),
   purchase_date date not null,
   expiry_date date not null,

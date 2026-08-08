@@ -19,7 +19,7 @@ LABELS = {
     "operation_date":"日期", "coach_name":"教練", "classes_held":"上課堂數",
     "classes_cancelled":"取消堂數", "trial_visits":"體驗人次",
     "trial_conversions":"體驗成交人次", "member_name":"會員名稱",
-    "course_name":"課程名稱", "total_sessions":"原始堂數",
+    "course_name":"課程名稱", "total_sessions":"原始堂數", "session_hours":"每堂課時數",
     "remaining_sessions":"剩餘堂數", "remaining_amount":"剩餘金額",
     "usage_date":"銷課日期", "session_seq":"第幾堂", "deducted_amount":"扣課金額",
 }
@@ -124,7 +124,10 @@ def show_table(data, columns=None):
         return
     if columns:
         df = df[[c for c in columns if c in df.columns]]
-    st.dataframe(df.rename(columns=LABELS), use_container_width=True, hide_index=True)
+    display_df=df.rename(columns=LABELS)
+    money_columns={LABELS.get(x,x) for x in ("total_amount","remaining_amount","deducted_amount","amount")}
+    money_config={x:st.column_config.NumberColumn(format="TWD %.0f") for x in money_columns if x in display_df.columns}
+    st.dataframe(display_df, use_container_width=True, hide_index=True, column_config=money_config)
 
 def daily_page(me):
     st.header("每日營運")
@@ -168,10 +171,11 @@ def purchase_page(me):
         member_name=c1.text_input("會員名稱（需完整一致）")
         kind=c2.selectbox("購買類型",["首次購買","續課"])
         coach_name=c3.selectbox("指導教練",list(allowed))
-        c1,c2,c3=st.columns(3)
+        c1,c2,c3,c4=st.columns(4)
         course=c1.text_input("課程名稱")
         sessions=c2.number_input("課程堂數",1,999,1)
-        amount=c3.number_input("成交總金額",0.0,10000000.0,step=100.0,format="%.2f")
+        session_hours=c3.number_input("每堂課時數",0.25,24.0,1.0,step=0.25,format="%.2f")
+        amount=c4.number_input("成交總金額",0.0,10000000.0,step=100.0,format="%.0f")
         c1,c2=st.columns(2)
         purchased=c1.date_input("購買日期",date.today())
         expiry=c2.date_input("有效日期",date.today()+timedelta(days=365))
@@ -179,7 +183,7 @@ def purchase_page(me):
             count=st.selectbox("總期數",[2,3])
             c1,c2,c3=st.columns(3)
             installment_no=c1.selectbox("此次為第幾期",list(range(1,count+1)))
-            paid=c2.number_input("此次支付金額",0.0,10000000.0,step=100.0,format="%.2f")
+            paid=c2.number_input("此次支付金額",0.0,10000000.0,step=100.0,format="%.0f")
             paid_date=c3.date_input("支付日期",purchased)
         else:
             count=1
@@ -204,7 +208,7 @@ def purchase_page(me):
                 else:
                     member_id=rows(client().table("members").insert({"member_name":member_name.strip(),"created_by":me["id"]}))[0]["id"]
                 p=rows(client().table("purchases").insert({"member_id":member_id,"purchase_kind":"first" if kind=="首次購買" else "renewal",
-                    "coach_id":allowed[coach_name],"course_name":course.strip(),"total_sessions":sessions,"total_amount":amount,
+                    "coach_id":allowed[coach_name],"course_name":course.strip(),"total_sessions":sessions,"session_hours":session_hours,"total_amount":amount,
                     "purchase_date":str(purchased),"expiry_date":str(expiry),"payment_plan":"full" if plan=="未分期" else "installment",
                     "installment_count":count,"created_by":me["id"]}))[0]
                 client().table("purchase_payments").insert({"purchase_id":p["id"],"installment_no":1,"amount":paid,"paid_date":str(paid_date),"created_by":me["id"]}).execute()
@@ -219,7 +223,7 @@ def purchase_page(me):
         with st.form("payment"):
             label=st.selectbox("購買紀錄",list(lookup))
             c1,c2,c3=st.columns(3)
-            no=c1.selectbox("期次",[1,2,3]); pay_amount=c2.number_input("支付金額",0.01,10000000.0,step=100.0); pay_date=c3.date_input("付款日期",date.today())
+            no=c1.selectbox("期次",[1,2,3]); pay_amount=c2.number_input("支付金額",1.0,10000000.0,step=100.0,format="%.0f"); pay_date=c3.date_input("付款日期",date.today())
             add=st.form_submit_button("新增付款")
         if add:
             try:
@@ -238,7 +242,7 @@ def usage_query_tabs():
     purchases=[]
     payments=[]
     if purchase_ids:
-        purchases=rows(client().table("purchases").select("id,payment_plan,installment_count").in_("id",purchase_ids))
+        purchases=rows(client().table("purchases").select("id,payment_plan,installment_count,session_hours").in_("id",purchase_ids))
         payments=rows(client().table("purchase_payments").select("purchase_id,installment_no,amount").in_("purchase_id",purchase_ids))
     purchase_map={x["id"]:x for x in purchases}
     payment_map={}
@@ -261,19 +265,19 @@ def usage_query_tabs():
             if payment["amount"] >= total_amount:
                 payment_status="已付清"
             elif purchase.get("payment_plan")=="installment":
-                payment_status=f'已付 {payment["count"]}/{purchase.get("installment_count", "-")} 期，TWD {payment["amount"]:,.2f}'
+                payment_status=f'已付 {payment["count"]}/{purchase.get("installment_count", "-")} 期，TWD {payment["amount"]:,.0f}'
             else:
-                payment_status=f'尚欠 TWD {total_amount-payment["amount"]:,.2f}'
+                payment_status=f'尚欠 TWD {total_amount-payment["amount"]:,.0f}'
             detail.append({
                 "會員名稱":item["member_name"],"課程名稱":item["course_name"],"成交教練":item["coach_name"],
-                "購買堂數":item["total_sessions"],"成交金額":total_amount,"已上堂數":item["used_sessions"],
+                "購買堂數":item["total_sessions"],"每堂課時數":float(purchase.get("session_hours") or 1),"成交金額":total_amount,"已上堂數":item["used_sessions"],
                 "剩餘堂數":item["remaining_sessions"],"剩餘金額":float(item["remaining_amount"]),
                 "有效期限":item["expiry_date"],"分期支付狀況":payment_status,
             })
         if detail:
             st.dataframe(pd.DataFrame(detail),hide_index=True,use_container_width=True,
-                column_config={"成交金額":st.column_config.NumberColumn(format="TWD %.2f"),
-                               "剩餘金額":st.column_config.NumberColumn(format="TWD %.2f")})
+                column_config={"成交金額":st.column_config.NumberColumn(format="TWD %.0f"),
+                               "剩餘金額":st.column_config.NumberColumn(format="TWD %.0f")})
         else:
             st.info("目前沒有可查詢的課程資料。")
 
@@ -291,8 +295,8 @@ def usage_query_tabs():
             average=total_amount/total_sessions if total_sessions else 0
             a,b,c=st.columns(3)
             a.metric("總銷課堂數",f"{total_sessions:,}")
-            b.metric("總銷課金額",f"TWD {total_amount:,.2f}")
-            c.metric("平均單價",f"TWD {average:,.2f}")
+            b.metric("總銷課金額",f"TWD {total_amount:,.0f}")
+            c.metric("平均單價",f"TWD {average:,.0f}")
             by_coach=[]
             for coach_name,coach_id in coaches.items():
                 coach_rows=[x for x in usages if x["coach_id"]==coach_id]
@@ -302,8 +306,8 @@ def usage_query_tabs():
                                      "平均單價":coach_amount/len(coach_rows)})
             if by_coach:
                 st.dataframe(pd.DataFrame(by_coach),hide_index=True,use_container_width=True,
-                    column_config={"銷課金額":st.column_config.NumberColumn(format="TWD %.2f"),
-                                   "平均單價":st.column_config.NumberColumn(format="TWD %.2f")})
+                    column_config={"銷課金額":st.column_config.NumberColumn(format="TWD %.0f"),
+                                   "平均單價":st.column_config.NumberColumn(format="TWD %.0f")})
 
     with tab3:
         today=date.today()
@@ -317,7 +321,7 @@ def usage_query_tabs():
                           "有效期限":x["expiry_date"],"剩餘天數":(pd.to_datetime(x["expiry_date"]).date()-today).days}
                          for x in expiring]
             st.dataframe(pd.DataFrame(expiry_rows),hide_index=True,use_container_width=True,
-                column_config={"剩餘金額":st.column_config.NumberColumn(format="TWD %.2f")})
+                column_config={"剩餘金額":st.column_config.NumberColumn(format="TWD %.0f")})
         else:
             st.info("未來 30 天內沒有即將到期且仍有剩餘堂數的課程。")
 
@@ -341,7 +345,7 @@ def usage_page(me):
         c1,c2=st.columns(2); usage_date=c1.date_input("銷課日期",date.today()); coach=c2.selectbox("授課教練",list(allowed))
         note=st.text_input("備註"); submit=st.form_submit_button("確認扣除 1 堂")
     per=Decimal(str(selected["remaining_amount"])) if selected["remaining_sessions"]==1 else (Decimal(str(selected["total_amount"]))/selected["total_sessions"]).quantize(Decimal("0.01"))
-    st.caption(f"本次預計扣除：1 堂／TWD {per:,.2f}；最後一堂會自動扣完剩餘金額。")
+    st.caption(f"本次預計扣除：1 堂／TWD {per:,.0f}；最後一堂會自動扣完剩餘金額。")
     if submit:
         try:
             client().rpc("consume_session",{"p_purchase_id":selected["purchase_id"],"p_usage_date":str(usage_date),"p_coach_id":allowed[coach],"p_note":note}).execute()
