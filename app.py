@@ -416,8 +416,10 @@ def dashboard_page(me):
     display_df["續課率"]=display_df["續課率"]*100
     st.dataframe(display_df,hide_index=True,use_container_width=True,column_config={"取消率":st.column_config.NumberColumn(format="%.1f%%"),"體驗成交率":st.column_config.NumberColumn(format="%.1f%%"),"續課率":st.column_config.NumberColumn(format="%.1f%%"),"成交總金額":st.column_config.NumberColumn(format="TWD %.0f"),"實際預收金額":st.column_config.NumberColumn(format="TWD %.0f"),"銷課金額":st.column_config.NumberColumn(format="TWD %.0f"),"平均每堂單價":st.column_config.NumberColumn(format="TWD %.0f")})
     left,right=st.columns(2)
-    left.plotly_chart(px.bar(df,x="教練",y=["上課堂數","成交堂數","銷課堂數"],barmode="group",title=f"教練堂數比較（{start} 至 {end}）",labels={"value":"堂數","variable":"指標"}),use_container_width=True)
-    right.plotly_chart(px.bar(df,x="教練",y=["成交總金額","實際預收金額","銷課金額"],barmode="group",title=f"成交、預收與銷課金額（{start} 至 {end}）",labels={"value":"TWD","variable":"金額類型"}),use_container_width=True)
+    count_metric=left.selectbox("堂數指標",["上課堂數","成交堂數","銷課堂數"],key="dashboard_count_metric")
+    amount_metric=right.selectbox("金額類型",["成交總金額","實際預收金額","銷課金額"],key="dashboard_amount_metric")
+    left.plotly_chart(px.bar(df,x="教練",y=count_metric,title=f"{count_metric}比較（{start} 至 {end}）",labels={count_metric:"堂數"}),use_container_width=True)
+    right.plotly_chart(px.bar(df,x="教練",y=amount_metric,title=f"{amount_metric}比較（{start} 至 {end}）",labels={amount_metric:"TWD"}),use_container_width=True)
 
 def account_admin_page(me):
     st.header("帳號與權限管理")
