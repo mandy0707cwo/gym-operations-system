@@ -165,8 +165,9 @@ def daily_page(me):
 def purchase_page(me):
     st.header("課程購買")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
-    courses=rows(client().table("course_catalog").select("course_name").order("course_name"))
+    courses=rows(client().table("course_catalog").select("course_name,session_hours").order("course_name"))
     course_names=[x["course_name"] for x in courses]
+    course_hours={x["course_name"]:float(x.get("session_hours") or 1) for x in courses}
     if not course_names:
         st.warning("尚未建立課程名稱，請由系統管理員先到「課程名稱管理」新增。")
         return
@@ -179,7 +180,7 @@ def purchase_page(me):
         c1,c2,c3,c4=st.columns(4)
         course=c1.selectbox("課程名稱",course_names)
         sessions=c2.number_input("課程堂數",1,999,1)
-        session_hours=c3.number_input("每堂課時數",0.25,24.0,1.0,step=0.25,format="%.2f")
+        session_hours=c3.number_input("每堂課時數",0.25,24.0,course_hours[course],step=0.25,format="%.2f",disabled=True)
         amount=c4.number_input("成交總金額",0.0,10000000.0,step=100.0,format="%.0f")
         c1,c2=st.columns(2)
         purchased=c1.date_input("購買日期",date.today())
@@ -477,6 +478,33 @@ def account_admin_page(me):
                 except Exception as exc:
                     st.error(f"更新失敗：{exc}")
 
+        st.subheader("刪除帳號")
+        deletable = {label: item for label, item in labels.items() if item["id"] != me["id"]}
+        if deletable:
+            with st.form("delete_account"):
+                delete_label = st.selectbox("選擇要刪除的帳號", list(deletable))
+                confirm_account_delete = st.checkbox("我確認永久刪除此帳號。此操作無法復原。")
+                delete_account = st.form_submit_button("永久刪除帳號")
+            if delete_account:
+                if not confirm_account_delete:
+                    st.error("請先勾選刪除確認。")
+                else:
+                    target = deletable[delete_label]
+                    references = 0
+                    for table_name, field in (("daily_operations","coach_id"),("purchases","coach_id"),
+                                              ("session_usages","coach_id"),("members","created_by"),
+                                              ("purchase_payments","created_by")):
+                        references += len(rows(admin.table(table_name).select("id").eq(field,target["id"]).limit(1)))
+                    if references:
+                        st.error("此帳號已有營運資料，為保留歷史紀錄不可永久刪除；請改為『停用』。")
+                    else:
+                        try:
+                            admin.auth.admin.delete_user(target["id"])
+                            st.success(f"已永久刪除帳號：{target.get('username') or target['display_name']}")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"刪除失敗：{exc}")
+
 def course_admin_page(me):
     st.header("課程名稱管理")
     if me["role"] != "admin":
@@ -487,23 +515,25 @@ def course_admin_page(me):
         st.error("尚未設定 SUPABASE_SECRET_KEY。")
         return
     with st.form("add_course",clear_on_submit=True):
-        course_name=st.text_input("新增課程名稱").strip()
+        c1,c2=st.columns(2)
+        course_name=c1.text_input("新增課程名稱").strip()
+        course_hours=c2.number_input("每堂課時數",0.25,24.0,1.0,step=0.25,format="%.2f")
         add_course=st.form_submit_button("新增課程")
     if add_course:
         if not course_name:
             st.error("課程名稱不可空白。")
         else:
             try:
-                admin.table("course_catalog").insert({"course_name":course_name}).execute()
+                admin.table("course_catalog").insert({"course_name":course_name,"session_hours":course_hours}).execute()
                 st.success(f"已新增課程：{course_name}")
                 st.rerun()
             except Exception as exc:
                 st.error(f"新增失敗，請確認課程名稱是否重複：{exc}")
-    courses=rows(admin.table("course_catalog").select("id,course_name,created_at").order("course_name"))
+    courses=rows(admin.table("course_catalog").select("id,course_name,session_hours,created_at").order("course_name"))
     if not courses:
         st.info("目前尚未建立課程名稱。")
         return
-    show_table(courses,["course_name","created_at"])
+    show_table(courses,["course_name","session_hours","created_at"])
     course_labels={x["course_name"]:x["id"] for x in courses}
     with st.form("delete_course"):
         selected_course=st.selectbox("選擇要刪除的課程",list(course_labels))
@@ -656,6 +686,161 @@ def data_io_page(me):
         except Exception as exc:
             st.error(f"無法讀取或匯入檔案：{exc}")
 
+def member_course_io_page(me):
+    admin=admin_client()
+    profiles=rows(admin.table("profiles").select("id,username,display_name,role"))
+    coach_profiles=[x for x in profiles if x["role"] in ("coach","manager")]
+    id_to_username={x["id"]:x.get("username") or x["display_name"] for x in coach_profiles}
+    username_to_id={v:k for k,v in id_to_username.items()}
+    members=rows(admin.table("members").select("id,member_name"))
+    member_names={x["id"]:x["member_name"] for x in members}
+
+    st.subheader("匯出會員課程與銷課表")
+    purchases=rows(admin.table("purchases").select("*").order("purchase_date"))
+    payments=rows(admin.table("purchase_payments").select("purchase_id,amount,paid_date"))
+    paid_map={}
+    paid_date_map={}
+    for x in payments:
+        paid_map[x["purchase_id"]]=paid_map.get(x["purchase_id"],0)+float(x["amount"])
+        paid_date_map[x["purchase_id"]]=max(str(x["paid_date"]),paid_date_map.get(x["purchase_id"],""))
+    course_rows=[]
+    for x in purchases:
+        course_rows.append({"purchase_id":x["id"],"member_name":member_names.get(x["member_id"],""),
+            "purchase_kind":x["purchase_kind"],"coach_username":id_to_username.get(x["coach_id"],""),
+            "course_name":x["course_name"],"total_sessions":x["total_sessions"],"session_hours":x.get("session_hours",1),
+            "total_amount":x["total_amount"],"purchase_date":x["purchase_date"],"expiry_date":x["expiry_date"],
+            "payment_plan":x["payment_plan"],"installment_count":x["installment_count"],
+            "paid_amount":paid_map.get(x["id"],0),"paid_date":paid_date_map.get(x["id"],"")})
+    usages=rows(admin.table("session_usages").select("*").order("usage_date"))
+    purchase_map={x["id"]:x for x in purchases}
+    usage_rows=[]
+    for x in usages:
+        p=purchase_map.get(x["purchase_id"],{})
+        usage_rows.append({"usage_id":x["id"],"purchase_id":x["purchase_id"],
+            "member_name":member_names.get(p.get("member_id"),""),"course_name":p.get("course_name",""),
+            "usage_date":x["usage_date"],"coach_username":id_to_username.get(x["coach_id"],""),
+            "session_seq":x["session_seq"],"deducted_amount":x["deducted_amount"],"note":x.get("note") or ""})
+    report=_excel_bytes({"會員課程":pd.DataFrame(course_rows),"銷課表":pd.DataFrame(usage_rows)})
+    st.download_button("下載會員課程與銷課表",report,file_name=f"會員課程與銷課表_{date.today()}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+
+    st.divider(); st.subheader("匯入會員課程與銷課表")
+    st.caption("請先下載範本。匯入會員課程時 purchase_id 可留空；匯入銷課表時 purchase_id 必須對應系統內的購買紀錄。")
+    course_template=pd.DataFrame(columns=["purchase_id","member_name","purchase_kind","coach_username","course_name","total_sessions","session_hours","total_amount","purchase_date","expiry_date","payment_plan","installment_count","paid_amount","paid_date"])
+    usage_template=pd.DataFrame(columns=["purchase_id","usage_date","coach_username","note"])
+    st.download_button("下載匯入範本",_excel_bytes({"會員課程":course_template,"銷課表":usage_template}),
+        file_name="會員課程與銷課表_匯入範本.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    uploaded=st.file_uploader("選擇 Excel 檔案",type=["xlsx"],key="course_usage_import")
+    if uploaded is not None:
+        try:
+            book=pd.ExcelFile(uploaded); errors=[]; clean_courses=[]; clean_usages=[]
+            if not any(x in book.sheet_names for x in ("會員課程","銷課表")):
+                errors.append("至少需要『會員課程』或『銷課表』工作表。")
+            if "會員課程" in book.sheet_names:
+                df=pd.read_excel(book,"會員課程").fillna("")
+                required=set(course_template.columns)-{"purchase_id"}
+                if not required.issubset(df.columns): errors.append("會員課程欄位不完整。")
+                else:
+                    for i,row in df.iterrows():
+                        try:
+                            username=str(row["coach_username"]).strip()
+                            if username not in username_to_id: raise ValueError("找不到教練帳號")
+                            kind=str(row["purchase_kind"]).strip().lower(); plan=str(row["payment_plan"]).strip().lower()
+                            if kind not in ("first","renewal"): raise ValueError("purchase_kind 必須為 first 或 renewal")
+                            if plan not in ("full","installment"): raise ValueError("payment_plan 必須為 full 或 installment")
+                            purchased=pd.to_datetime(row["purchase_date"]).date(); expiry=pd.to_datetime(row["expiry_date"]).date()
+                            if expiry<purchased: raise ValueError("有效日期不可早於購買日期")
+                            clean_courses.append({"source_id":str(row.get("purchase_id","")).strip(),"member_name":str(row["member_name"]).strip(),
+                                "coach_id":username_to_id[username],"purchase_kind":kind,"course_name":str(row["course_name"]).strip(),
+                                "total_sessions":int(row["total_sessions"]),"session_hours":float(row["session_hours"]),"total_amount":float(row["total_amount"]),
+                                "purchase_date":str(purchased),"expiry_date":str(expiry),"payment_plan":plan,"installment_count":int(row["installment_count"]),
+                                "paid_amount":float(row["paid_amount"] or 0),"paid_date":str(pd.to_datetime(row["paid_date"]).date()) if row["paid_date"] else str(purchased)})
+                        except Exception as exc: errors.append(f"會員課程第 {i+2} 列：{exc}")
+            if "銷課表" in book.sheet_names:
+                df=pd.read_excel(book,"銷課表").fillna("")
+                if not set(usage_template.columns).issubset(df.columns): errors.append("銷課表欄位不完整。")
+                else:
+                    for i,row in df.iterrows():
+                        try:
+                            username=str(row["coach_username"]).strip()
+                            if username not in username_to_id: raise ValueError("找不到教練帳號")
+                            clean_usages.append({"purchase_id":str(row["purchase_id"]).strip(),"usage_date":str(pd.to_datetime(row["usage_date"]).date()),"coach_id":username_to_id[username],"note":str(row["note"]).strip() or None})
+                        except Exception as exc: errors.append(f"銷課表第 {i+2} 列：{exc}")
+            if errors: st.error("匯入檢查未通過：\n- "+"\n- ".join(errors[:30]))
+            else:
+                st.success(f"檢查通過：會員課程 {len(clean_courses)} 筆、銷課 {len(clean_usages)} 筆。")
+                if st.button("確認匯入",type="primary"):
+                    for item in clean_courses:
+                        existing=rows(admin.table("members").select("id").eq("member_name",item["member_name"]))
+                        member_id=existing[0]["id"] if existing else rows(admin.table("members").insert({"member_name":item["member_name"],"created_by":me["id"]}))[0]["id"]
+                        payload={k:v for k,v in item.items() if k not in ("source_id","member_name","paid_amount","paid_date")}
+                        payload.update({"member_id":member_id,"created_by":me["id"]})
+                        created=rows(admin.table("purchases").insert(payload))[0]
+                        if item["paid_amount"]>0: admin.table("purchase_payments").insert({"purchase_id":created["id"],"installment_no":1,"amount":item["paid_amount"],"paid_date":item["paid_date"],"created_by":me["id"]}).execute()
+                    valid_ids={x["id"] for x in rows(admin.table("purchases").select("id"))}
+                    for item in clean_usages:
+                        if item["purchase_id"] not in valid_ids: raise ValueError(f'找不到 purchase_id：{item["purchase_id"]}')
+                        admin.rpc("consume_session",{"p_purchase_id":item["purchase_id"],"p_usage_date":item["usage_date"],"p_coach_id":item["coach_id"],"p_note":item["note"]}).execute()
+                    st.success("資料匯入完成。")
+        except Exception as exc: st.error(f"無法匯入檔案：{exc}")
+
+def record_admin_page(me):
+    admin=admin_client(); coaches=rows(admin.table("profiles").select("id,display_name,role"))
+    coach_map={x["display_name"]:x["id"] for x in coaches if x["role"] in ("coach","manager")}; id_name={v:k for k,v in coach_map.items()}
+    data_type=st.selectbox("資料類型",["每日營運","課程購買","銷課表"],key="manage_data_type")
+    if data_type=="每日營運":
+        records=rows(admin.table("daily_operations").select("*").order("operation_date",desc=True).limit(500))
+        labels={f'{x["operation_date"]}｜{id_name.get(x["coach_id"],"未知")}｜{x["id"][:8]}':x for x in records}
+    elif data_type=="課程購買":
+        records=rows(admin.table("purchase_balances").select("*").order("expiry_date",desc=True).limit(500))
+        labels={f'{x["member_name"]}｜{x["course_name"]}｜{x["purchase_id"][:8]}':x for x in records}
+    else:
+        records=rows(admin.table("session_usages").select("*").order("usage_date",desc=True).limit(500))
+        labels={f'{x["usage_date"]}｜{id_name.get(x["coach_id"],"未知")}｜第{x["session_seq"]}堂｜{x["id"][:8]}':x for x in records}
+    if not labels: st.info("目前沒有可管理的資料。"); return
+    selected=st.selectbox("選擇紀錄",list(labels)); record=labels[selected]
+    with st.form("record_edit"):
+        if data_type=="每日營運":
+            c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["operation_date"]).date()); coach=c2.selectbox("教練",list(coach_map),index=list(coach_map.values()).index(record["coach_id"]))
+            c1,c2,c3=st.columns(3); cancelled=c1.number_input("取消堂數",0,999,int(record["classes_cancelled"])); trials=c2.number_input("體驗人次",0,999,int(record["trial_visits"])); conversions=c3.number_input("體驗成交人次",0,999,int(record["trial_conversions"])); note=st.text_area("備註",record.get("note") or "")
+        elif data_type=="課程購買":
+            c1,c2,c3=st.columns(3); sessions=c1.number_input("課程堂數",1,999,int(record["total_sessions"])); amount=c2.number_input("成交總金額",0.0,10000000.0,float(record["total_amount"]),step=100.0,format="%.0f"); expiry=c3.date_input("有效期限",pd.to_datetime(record["expiry_date"]).date())
+        else:
+            c1,c2=st.columns(2); d=c1.date_input("銷課日期",pd.to_datetime(record["usage_date"]).date()); coach=c2.selectbox("教練",list(coach_map),index=list(coach_map.values()).index(record["coach_id"])); note=st.text_area("備註",record.get("note") or "")
+        update=st.form_submit_button("儲存修改")
+    if update:
+        try:
+            if data_type=="每日營運":
+                if conversions>trials: raise ValueError("體驗成交人次不可大於體驗人次")
+                held=len(rows(admin.table("session_usages").select("id").eq("usage_date",str(d)).eq("coach_id",coach_map[coach])))
+                admin.table("daily_operations").update({"operation_date":str(d),"coach_id":coach_map[coach],"classes_held":held,"classes_cancelled":cancelled,"trial_visits":trials,"trial_conversions":conversions,"note":note or None}).eq("id",record["id"]).execute()
+            elif data_type=="課程購買": admin.table("purchases").update({"total_sessions":sessions,"total_amount":amount,"expiry_date":str(expiry)}).eq("id",record["purchase_id"]).execute()
+            else: admin.table("session_usages").update({"usage_date":str(d),"coach_id":coach_map[coach],"note":note or None}).eq("id",record["id"]).execute()
+            st.success("資料已修改。"); st.rerun()
+        except Exception as exc: st.error(f"修改失敗：{exc}")
+    with st.form("record_delete"):
+        confirm=st.checkbox("我確認刪除此筆資料；此操作無法復原。")
+        delete=st.form_submit_button("刪除紀錄")
+    if delete:
+        if not confirm: st.error("請先勾選刪除確認。")
+        else:
+            try:
+                if data_type=="每日營運": admin.table("daily_operations").delete().eq("id",record["id"]).execute()
+                elif data_type=="課程購買":
+                    admin.table("session_usages").delete().eq("purchase_id",record["purchase_id"]).execute(); admin.table("purchases").delete().eq("id",record["purchase_id"]).execute()
+                else: admin.table("session_usages").delete().eq("id",record["id"]).execute()
+                st.success("資料已刪除。"); st.rerun()
+            except Exception as exc: st.error(f"刪除失敗：{exc}")
+
+def data_management_page(me):
+    st.header("資料管理")
+    if me["role"]!="admin": st.warning("此頁僅限系統管理員使用。"); return
+    if admin_client() is None: st.error("尚未設定 SUPABASE_SECRET_KEY。"); return
+    tab1,tab2,tab3=st.tabs(["課程名稱管理","資料匯入／匯出","查詢／修改／刪除"])
+    with tab1: course_admin_page(me)
+    with tab2: member_course_io_page(me)
+    with tab3: record_admin_page(me)
+
 user=login(); me=profile(user.id)
 with st.sidebar:
     st.title("🏋️ 營運管理")
@@ -663,7 +848,7 @@ with st.sidebar:
     pages=["每日營運","課程購買","銷課表"]
     if me["role"] in ("manager","admin"): pages.append("主管 Dashboard")
     if me["role"] == "admin":
-        pages.extend(["帳號與權限管理", "課程名稱管理", "資料匯入／匯出"])
+        pages.extend(["帳號與權限管理", "資料管理"])
     page=st.radio("功能",pages)
     if st.button("登出"):
         client().auth.sign_out(); st.session_state.clear(); st.rerun()
@@ -671,6 +856,6 @@ with st.sidebar:
 collapse_sidebar_on_mobile()
 
 try:
-    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"帳號與權限管理":account_admin_page,"課程名稱管理":course_admin_page,"資料匯入／匯出":data_io_page}[page](me)
+    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")

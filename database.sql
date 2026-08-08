@@ -26,6 +26,7 @@ create table public.members (
 create table public.course_catalog (
   id uuid primary key default gen_random_uuid(),
   course_name text not null unique check (length(trim(course_name)) > 0),
+  session_hours numeric(4,2) not null default 1 check (session_hours > 0),
   created_at timestamptz not null default now()
 );
 
@@ -191,6 +192,7 @@ create policy members_read on public.members for select to authenticated using (
 create policy members_insert on public.members for insert to authenticated with check (created_by=auth.uid());
 create policy course_catalog_read on public.course_catalog for select to authenticated using (true);
 create policy course_catalog_admin_insert on public.course_catalog for insert to authenticated with check (public.is_admin());
+create policy course_catalog_admin_update on public.course_catalog for update to authenticated using (public.is_admin()) with check (public.is_admin());
 create policy course_catalog_admin_delete on public.course_catalog for delete to authenticated using (public.is_admin());
 create policy daily_read on public.daily_operations for select to authenticated using (coach_id=auth.uid() or public.is_manager());
 create policy daily_insert on public.daily_operations for insert to authenticated with check (coach_id=auth.uid() or public.is_manager());
