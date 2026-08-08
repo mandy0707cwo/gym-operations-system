@@ -46,7 +46,6 @@ def client():
         st.session_state._supabase_client = create_client(url, key)
     return st.session_state._supabase_client
 
-@st.cache_resource
 def admin_client():
     """僅供主管邀請帳號；Secret key 只存在 Streamlit 伺服器端。"""
     url, key = secret("SUPABASE_URL"), secret("SUPABASE_SECRET_KEY")
