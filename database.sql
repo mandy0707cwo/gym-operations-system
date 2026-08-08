@@ -181,6 +181,9 @@ create policy daily_insert on public.daily_operations for insert to authenticate
 create policy daily_update on public.daily_operations for update to authenticated using (coach_id=auth.uid() or public.is_manager()) with check (coach_id=auth.uid() or public.is_manager());
 create policy purchase_read on public.purchases for select to authenticated using (coach_id=auth.uid() or public.is_manager());
 create policy purchase_insert on public.purchases for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
+create policy purchase_update on public.purchases for update to authenticated
+using (coach_id=auth.uid() or public.is_manager())
+with check (coach_id=auth.uid() or public.is_manager());
 create policy payment_read on public.purchase_payments for select to authenticated using (exists(select 1 from public.purchases p where p.id=purchase_id and (p.coach_id=auth.uid() or public.is_manager())));
 create policy payment_insert on public.purchase_payments for insert to authenticated with check (created_by=auth.uid() and exists(select 1 from public.purchases p where p.id=purchase_id and (p.coach_id=auth.uid() or public.is_manager())));
 create policy usage_read on public.session_usages for select to authenticated using (
