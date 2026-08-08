@@ -134,17 +134,19 @@ def daily_page(me):
         c1,c2 = st.columns(2)
         op_date = c1.date_input("日期", date.today())
         coach_name = c2.selectbox("教練", list(allowed))
-        c1,c2,c3,c4 = st.columns(4)
-        held = c1.number_input("每日上課堂數",0,100,0)
-        cancelled = c2.number_input("上課取消堂數",0,100,0)
-        trials = c3.number_input("體驗人次",0,100,0)
-        converted = c4.number_input("體驗成交人次",0,100,0)
+        st.caption("每日上課堂數由銷課紀錄自動統計，不需手動輸入。")
+        c1,c2,c3 = st.columns(3)
+        cancelled = c1.number_input("上課取消堂數",0,100,0)
+        trials = c2.number_input("體驗人次",0,100,0)
+        converted = c3.number_input("體驗成交人次",0,100,0)
         note = st.text_area("備註")
         save = st.form_submit_button("儲存")
     if save:
         if converted > trials:
             st.error("體驗成交人次不可大於體驗人次。")
         else:
+            usage_rows=rows(client().table("session_usages").select("id").eq("usage_date",str(op_date)).eq("coach_id",allowed[coach_name]))
+            held=len(usage_rows)
             payload={"operation_date":str(op_date),"coach_id":allowed[coach_name],"classes_held":held,
                      "classes_cancelled":cancelled,"trial_visits":trials,"trial_conversions":converted,"note":note or None}
             try:
@@ -238,9 +240,10 @@ def usage_page(me):
     show_table(balances,["course_name","coach_name","total_sessions","used_sessions","remaining_sessions","remaining_amount","expiry_date","status"])
     active=[x for x in balances if x["status"]=="active"]
     if not active: st.warning("此會員沒有可扣課的有效課程。") ; return
-    lookup={f'{x["course_name"]}｜剩 {x["remaining_sessions"]} 堂｜餘額 {x["remaining_amount"]}':x for x in active}
+    lookup={f'{x["course_name"]}｜成交教練：{x["coach_name"]}｜剩 {x["remaining_sessions"]} 堂｜餘額 {x["remaining_amount"]}':x for x in active}
     with st.form("consume"):
         label=st.selectbox("選擇課程",list(lookup)); selected=lookup[label]
+        st.info(f'成交教練：{selected["coach_name"]}')
         c1,c2=st.columns(2); usage_date=c1.date_input("銷課日期",date.today()); coach=c2.selectbox("授課教練",list(allowed))
         note=st.text_input("備註"); submit=st.form_submit_button("確認扣除 1 堂")
     per=Decimal(str(selected["remaining_amount"])) if selected["remaining_sessions"]==1 else (Decimal(str(selected["total_amount"]))/selected["total_sessions"]).quantize(Decimal("0.01"))

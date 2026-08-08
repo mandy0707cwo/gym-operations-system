@@ -161,6 +161,11 @@ begin
   end if;
   insert into public.session_usages(purchase_id,usage_date,coach_id,session_seq,deducted_amount,note,created_by)
   values(p_purchase_id,p_usage_date,p_coach_id,v_used+1,v_deducted,nullif(trim(p_note),''),auth.uid()) returning * into v_row;
+  insert into public.daily_operations(operation_date,coach_id,classes_held,classes_cancelled,trial_visits,trial_conversions)
+  values(p_usage_date,p_coach_id,1,0,0,0)
+  on conflict(operation_date,coach_id) do update
+  set classes_held=(select count(*) from public.session_usages
+                    where usage_date=p_usage_date and coach_id=p_coach_id);
   if v_used+1=v_purchase.total_sessions then update public.purchases set status='completed' where id=p_purchase_id; end if;
   return v_row;
 end; $$;
