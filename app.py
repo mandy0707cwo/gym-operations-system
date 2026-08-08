@@ -23,7 +23,7 @@ LABELS = {
     "remaining_sessions":"剩餘堂數", "remaining_amount":"剩餘金額",
     "usage_date":"銷課日期", "session_seq":"第幾堂", "deducted_amount":"扣課金額",
 }
-ROLE_LABELS = {"coach": "教練", "manager": "主管", "admin": "系統管理員"}
+ROLE_LABELS = {"coach": "教練", "shared_coach": "共用教練帳號", "manager": "主管", "admin": "系統管理員"}
 USERNAME_RE = re.compile(r"^[a-z0-9_]{3,30}$")
 
 def username_email(username):
@@ -132,7 +132,7 @@ def show_table(data, columns=None):
 def daily_page(me):
     st.header("每日營運")
     coaches = coach_options()
-    allowed = coaches if me["role"] in ("manager","admin") else {me["display_name"]:me["id"]}
+    allowed = coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
     with st.form("daily"):
         c1,c2 = st.columns(2)
         op_date = c1.date_input("日期", date.today())
@@ -164,7 +164,12 @@ def daily_page(me):
 
 def purchase_page(me):
     st.header("課程購買")
-    coaches=coach_options(); allowed=coaches if me["role"] in ("manager","admin") else {me["display_name"]:me["id"]}
+    coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
+    courses=rows(client().table("course_catalog").select("course_name").order("course_name"))
+    course_names=[x["course_name"] for x in courses]
+    if not course_names:
+        st.warning("尚未建立課程名稱，請由系統管理員先到「課程名稱管理」新增。")
+        return
     plan=st.selectbox("付款方式",["未分期","分期"],key="purchase_payment_plan")
     with st.form("purchase"):
         c1,c2,c3=st.columns(3)
@@ -172,7 +177,7 @@ def purchase_page(me):
         kind=c2.selectbox("購買類型",["首次購買","續課"])
         coach_name=c3.selectbox("指導教練",list(allowed))
         c1,c2,c3,c4=st.columns(4)
-        course=c1.text_input("課程名稱")
+        course=c1.selectbox("課程名稱",course_names)
         sessions=c2.number_input("課程堂數",1,999,1)
         session_hours=c3.number_input("每堂課時數",0.25,24.0,1.0,step=0.25,format="%.2f")
         amount=c4.number_input("成交總金額",0.0,10000000.0,step=100.0,format="%.0f")
@@ -195,7 +200,6 @@ def purchase_page(me):
     if save:
         errors=[]
         if not member_name.strip(): errors.append("會員名稱不可空白")
-        if not course.strip(): errors.append("課程名稱不可空白")
         if expiry<purchased: errors.append("有效日期不可早於購買日期")
         if paid<=0: errors.append("此次支付金額須大於 0")
         if paid>amount: errors.append("此次支付金額不可大於成交總金額")
@@ -327,7 +331,7 @@ def usage_query_tabs():
 
 def usage_page(me):
     st.header("銷課表")
-    coaches=coach_options(); allowed=coaches if me["role"] in ("manager","admin") else {me["display_name"]:me["id"]}
+    coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
     members=rows(client().table("members").select("id,member_name").eq("active",True).order("member_name"))
     if not members: st.info("請先建立課程購買紀錄。") ; usage_query_tabs() ; return
     member_map={x["member_name"]:x["id"] for x in members}
@@ -424,10 +428,10 @@ def account_admin_page(me):
         display_name = c2.text_input("顯示姓名").strip()
         c1, c2 = st.columns(2)
         new_password = c1.text_input("初始密碼（至少 8 碼）", type="password")
-        role_label = c2.selectbox("權限", ["教練", "主管", "系統管理員"])
+        role_label = c2.selectbox("權限", ["教練", "共用教練帳號", "主管", "系統管理員"])
         create_account = st.form_submit_button("建立帳號")
     if create_account:
-        role_value = {"教練":"coach", "主管":"manager", "系統管理員":"admin"}[role_label]
+        role_value = {"教練":"coach", "共用教練帳號":"shared_coach", "主管":"manager", "系統管理員":"admin"}[role_label]
         if not USERNAME_RE.fullmatch(new_account):
             st.error("帳號須為 3–30 個小寫英文字母、數字或底線。")
         elif not display_name:
@@ -453,7 +457,7 @@ def account_admin_page(me):
         labels = {f'{x["display_name"]}｜{x.get("username") or "尚未轉換"}': x for x in profiles}
         with st.form("account_update"):
             selected_name = st.selectbox("選擇帳號", list(labels))
-            new_role_label = st.selectbox("權限", ["教練", "主管", "系統管理員"])
+            new_role_label = st.selectbox("權限", ["教練", "共用教練帳號", "主管", "系統管理員"])
             new_active = st.selectbox("帳號狀態", ["啟用", "停用"])
             reset_password = st.text_input("重設密碼（留空表示不變；至少 8 碼）", type="password")
             update_status = st.form_submit_button("更新帳號")
@@ -465,13 +469,56 @@ def account_admin_page(me):
                 st.error("重設密碼至少需要 8 碼。")
             else:
                 try:
-                    role_value={"教練":"coach","主管":"manager","系統管理員":"admin"}[new_role_label]
+                    role_value={"教練":"coach","共用教練帳號":"shared_coach","主管":"manager","系統管理員":"admin"}[new_role_label]
                     admin.table("profiles").update({"role":role_value,"active":new_active=="啟用"}).eq("id",target["id"]).execute()
                     if reset_password: admin.auth.admin.update_user_by_id(target["id"], {"password":reset_password})
                     st.success("帳號與權限已更新。")
                     st.rerun()
                 except Exception as exc:
                     st.error(f"更新失敗：{exc}")
+
+def course_admin_page(me):
+    st.header("課程名稱管理")
+    if me["role"] != "admin":
+        st.warning("此頁僅限系統管理員使用。")
+        return
+    admin=admin_client()
+    if admin is None:
+        st.error("尚未設定 SUPABASE_SECRET_KEY。")
+        return
+    with st.form("add_course",clear_on_submit=True):
+        course_name=st.text_input("新增課程名稱").strip()
+        add_course=st.form_submit_button("新增課程")
+    if add_course:
+        if not course_name:
+            st.error("課程名稱不可空白。")
+        else:
+            try:
+                admin.table("course_catalog").insert({"course_name":course_name}).execute()
+                st.success(f"已新增課程：{course_name}")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"新增失敗，請確認課程名稱是否重複：{exc}")
+    courses=rows(admin.table("course_catalog").select("id,course_name,created_at").order("course_name"))
+    if not courses:
+        st.info("目前尚未建立課程名稱。")
+        return
+    show_table(courses,["course_name","created_at"])
+    course_labels={x["course_name"]:x["id"] for x in courses}
+    with st.form("delete_course"):
+        selected_course=st.selectbox("選擇要刪除的課程",list(course_labels))
+        confirm_delete=st.checkbox("我確認刪除此課程名稱；既有會員購買紀錄仍會保留。")
+        delete_course=st.form_submit_button("刪除課程名稱")
+    if delete_course:
+        if not confirm_delete:
+            st.error("請先勾選刪除確認。")
+        else:
+            try:
+                admin.table("course_catalog").delete().eq("id",course_labels[selected_course]).execute()
+                st.success(f"已刪除課程名稱：{selected_course}")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"刪除失敗：{exc}")
 
 def _excel_bytes(sheet_frames):
     output = BytesIO()
@@ -616,7 +663,7 @@ with st.sidebar:
     pages=["每日營運","課程購買","銷課表"]
     if me["role"] in ("manager","admin"): pages.append("主管 Dashboard")
     if me["role"] == "admin":
-        pages.extend(["帳號與權限管理", "資料匯入／匯出"])
+        pages.extend(["帳號與權限管理", "課程名稱管理", "資料匯入／匯出"])
     page=st.radio("功能",pages)
     if st.button("登出"):
         client().auth.sign_out(); st.session_state.clear(); st.rerun()
@@ -624,6 +671,6 @@ with st.sidebar:
 collapse_sidebar_on_mobile()
 
 try:
-    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"帳號與權限管理":account_admin_page,"資料匯入／匯出":data_io_page}[page](me)
+    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"帳號與權限管理":account_admin_page,"課程名稱管理":course_admin_page,"資料匯入／匯出":data_io_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")

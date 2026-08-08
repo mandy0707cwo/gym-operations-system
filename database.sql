@@ -1,7 +1,7 @@
 -- 健身房營運系統：請在全新的 Supabase 專案之 SQL Editor 一次執行。
 create extension if not exists pgcrypto;
 
-create type public.app_role as enum ('coach', 'manager', 'admin');
+create type public.app_role as enum ('coach', 'shared_coach', 'manager', 'admin');
 create type public.purchase_kind as enum ('first', 'renewal');
 create type public.payment_plan as enum ('full', 'installment');
 
@@ -21,6 +21,12 @@ create table public.members (
   created_at timestamptz not null default now(),
   created_by uuid not null references public.profiles(id),
   unique (member_name)
+);
+
+create table public.course_catalog (
+  id uuid primary key default gen_random_uuid(),
+  course_name text not null unique check (length(trim(course_name)) > 0),
+  created_at timestamptz not null default now()
 );
 
 create table public.daily_operations (
@@ -107,7 +113,7 @@ create index idx_usage_date_coach on public.session_usages(usage_date, coach_id)
 
 create or replace function public.is_manager()
 returns boolean language sql stable security definer set search_path = public
-as $$ select exists(select 1 from public.profiles where id = auth.uid() and role in ('manager','admin') and active); $$;
+as $$ select exists(select 1 from public.profiles where id = auth.uid() and role in ('shared_coach','manager','admin') and active); $$;
 
 create or replace function public.is_admin()
 returns boolean language sql stable security definer set search_path = public
@@ -173,6 +179,7 @@ end; $$;
 
 alter table public.profiles enable row level security;
 alter table public.members enable row level security;
+alter table public.course_catalog enable row level security;
 alter table public.daily_operations enable row level security;
 alter table public.purchases enable row level security;
 alter table public.purchase_payments enable row level security;
@@ -182,6 +189,9 @@ create policy profiles_read on public.profiles for select to authenticated using
 create policy profiles_admin_update on public.profiles for update to authenticated using (public.is_admin()) with check (public.is_admin());
 create policy members_read on public.members for select to authenticated using (true);
 create policy members_insert on public.members for insert to authenticated with check (created_by=auth.uid());
+create policy course_catalog_read on public.course_catalog for select to authenticated using (true);
+create policy course_catalog_admin_insert on public.course_catalog for insert to authenticated with check (public.is_admin());
+create policy course_catalog_admin_delete on public.course_catalog for delete to authenticated using (public.is_admin());
 create policy daily_read on public.daily_operations for select to authenticated using (coach_id=auth.uid() or public.is_manager());
 create policy daily_insert on public.daily_operations for insert to authenticated with check (coach_id=auth.uid() or public.is_manager());
 create policy daily_update on public.daily_operations for update to authenticated using (coach_id=auth.uid() or public.is_manager()) with check (coach_id=auth.uid() or public.is_manager());
