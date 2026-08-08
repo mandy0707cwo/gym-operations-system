@@ -390,34 +390,32 @@ def dashboard_page(me):
         renewal_count=sum(1 for x in p if x["purchase_kind"]=="renewal")
         received=sum(float(x["amount"]) for x in payments if payment_purchase_map.get(x["purchase_id"])==cid)
         used_sessions=len(u); used_amount=sum(float(x["deducted_amount"]) for x in u)
-        result.append({"教練":names[cid],"上課堂數":held,"取消率":cancelled/(held+cancelled) if held+cancelled else None,
+        result.append({"教練":names[cid],"取消率":cancelled/(held+cancelled) if held+cancelled else None,
                        "體驗成交率":converted/trials if trials else None,"續課率":renewal_count/len(p) if p else None,
                        "成交堂數":sessions,"成交總金額":amount,"實際預收金額":received,
                        "銷課堂數":used_sessions,"銷課金額":used_amount,
                        "平均每堂單價":amount/sessions if sessions else None})
     df=pd.DataFrame(result)
     if df.empty: st.info("沒有可顯示的資料。") ; return
-    totals=df[["上課堂數","成交堂數","成交總金額","實際預收金額","銷課堂數","銷課金額"]].sum()
+    totals=df[["成交堂數","成交總金額","實際預收金額","銷課堂數","銷課金額"]].sum()
     total_purchase_count=len([x for x in purchases if x["coach_id"] in ids])
     total_renewals=len([x for x in purchases if x["coach_id"] in ids and x["purchase_kind"]=="renewal"])
     overall_renewal=total_renewals/total_purchase_count if total_purchase_count else None
     a,b,c,d,e=st.columns(5)
-    a.metric("上課堂數",f'{totals["上課堂數"]:,.0f}')
+    a.metric("銷課堂數",f'{totals["銷課堂數"]:,.0f}')
     b.metric("成交堂數",f'{totals["成交堂數"]:,.0f}')
     c.metric("續課率",f'{overall_renewal:.1%}' if overall_renewal is not None else "—")
     d.metric("成交總金額",f'TWD {totals["成交總金額"]:,.0f}')
     e.metric("實際預收金額",f'TWD {totals["實際預收金額"]:,.0f}')
-    a2,b2,_=st.columns([1,1,3])
-    a2.metric("銷課堂數",f'{totals["銷課堂數"]:,.0f}')
-    b2.metric("銷課金額",f'TWD {totals["銷課金額"]:,.0f}')
+    st.metric("銷課金額",f'TWD {totals["銷課金額"]:,.0f}')
     display_df=df.copy()
     display_df["取消率"]=display_df["取消率"]*100
     display_df["體驗成交率"]=display_df["體驗成交率"]*100
     display_df["續課率"]=display_df["續課率"]*100
     st.dataframe(display_df,hide_index=True,use_container_width=True,column_config={"取消率":st.column_config.NumberColumn(format="%.1f%%"),"體驗成交率":st.column_config.NumberColumn(format="%.1f%%"),"續課率":st.column_config.NumberColumn(format="%.1f%%"),"成交總金額":st.column_config.NumberColumn(format="TWD %.0f"),"實際預收金額":st.column_config.NumberColumn(format="TWD %.0f"),"銷課金額":st.column_config.NumberColumn(format="TWD %.0f"),"平均每堂單價":st.column_config.NumberColumn(format="TWD %.0f")})
     left,right=st.columns(2)
-    count_metric=left.selectbox("堂數指標",["上課堂數","成交堂數","銷課堂數"],key="dashboard_count_metric")
-    amount_metric=right.selectbox("金額類型",["成交總金額","實際預收金額","銷課金額"],key="dashboard_amount_metric")
+    count_metric=left.selectbox("堂數指標",["成交堂數","銷課堂數"],key="dashboard_count_metric")
+    amount_metric=right.selectbox("金額類型",["成交總金額","銷課金額"],key="dashboard_amount_metric")
     left.plotly_chart(px.bar(df,x="教練",y=count_metric,title=f"{count_metric}比較（{start} 至 {end}）",labels={count_metric:"堂數"}),use_container_width=True)
     right.plotly_chart(px.bar(df,x="教練",y=amount_metric,title=f"{amount_metric}比較（{start} 至 {end}）",labels={amount_metric:"TWD"}),use_container_width=True)
 
