@@ -1,6 +1,6 @@
 # 健身房線上營運管理系統
 
-以 Streamlit + Supabase（PostgreSQL / Auth）建立，可供多人遠端登入。包含每日營運、課程購買與最多三期付款、原子化銷課、主管 Dashboard。
+以 Streamlit + Supabase（PostgreSQL / Auth）建立，可供多人以系統帳號與密碼遠端登入。包含每日營運、課程購買與最多三期付款、原子化銷課、主管 Dashboard，以及 admin 帳號與權限管理。
 
 ## 一、建立資料庫
 
@@ -11,12 +11,14 @@
 
 ```sql
 update public.profiles p
-set role = 'manager'
+set role = 'admin'
 from auth.users u
 where p.id = u.id and u.email = 'manager@example.com';
 ```
 
-後續使用者可在 Authentication 建立，預設角色為 `coach`。主管角色調整建議只由 Supabase 後台操作。
+第一位使用者設為 `admin` 後，其餘帳號直接從 App 的「帳號與權限管理」建立，不需使用 Email。
+
+既有專案更新時，請在 SQL Editor 執行 `migration_username_admin.sql`。最早建立的主管會升級為 `admin`，登入後可在「帳號與權限管理」轉換為不含 Email 的系統帳號。
 
 ## 二、本機執行（Windows PowerShell）
 
@@ -51,7 +53,7 @@ SUPABASE_SECRET_KEY = "YOUR_SUPABASE_SECRET_KEY"
 
 - 教練：只能讀取與填寫自己的每日營運、購買與銷課資料。
 - 主管：可查看全體教練資料與 Dashboard，也可代為填寫。
-- 主管：可在「教練帳號管理」寄出邀請，並啟用或停用教練帳號。
+- 系統管理員：admin 可直接建立帳號／初始密碼、指定教練或主管權限、重設密碼及停用帳號。
 - 所有限制由 PostgreSQL Row Level Security 執行，不只依賴畫面隱藏。
 - 每一筆購買可有 1–3 期付款紀錄；同一期不可重複。
 - 扣課由資料庫交易函式執行並鎖定購買資料，避免多人同時超扣。

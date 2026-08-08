@@ -1,12 +1,13 @@
 -- 健身房營運系統：請在全新的 Supabase 專案之 SQL Editor 一次執行。
 create extension if not exists pgcrypto;
 
-create type public.app_role as enum ('coach', 'manager');
+create type public.app_role as enum ('coach', 'manager', 'admin');
 create type public.purchase_kind as enum ('first', 'renewal');
 create type public.payment_plan as enum ('full', 'installment');
 
 create table public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
+  username text unique check (username is null or username ~ '^[a-z0-9_]{3,30}$'),
   display_name text not null check (length(trim(display_name)) > 0),
   role public.app_role not null default 'coach',
   active boolean not null default true,
@@ -105,14 +106,19 @@ create index idx_usage_date_coach on public.session_usages(usage_date, coach_id)
 
 create or replace function public.is_manager()
 returns boolean language sql stable security definer set search_path = public
-as $$ select exists(select 1 from public.profiles where id = auth.uid() and role = 'manager' and active); $$;
+as $$ select exists(select 1 from public.profiles where id = auth.uid() and role in ('manager','admin') and active); $$;
+
+create or replace function public.is_admin()
+returns boolean language sql stable security definer set search_path = public
+as $$ select exists(select 1 from public.profiles where id = auth.uid() and role = 'admin' and active); $$;
 
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public
 as $$
 begin
-  insert into public.profiles(id, display_name, role)
-  values(new.id, coalesce(nullif(trim(new.raw_user_meta_data->>'display_name'),''), split_part(new.email,'@',1)), 'coach');
+  insert into public.profiles(id, username, display_name, role)
+  values(new.id, nullif(lower(trim(new.raw_user_meta_data->>'username')),''),
+    coalesce(nullif(trim(new.raw_user_meta_data->>'display_name'),''), split_part(new.email,'@',1)), 'coach');
   return new;
 end; $$;
 create trigger on_auth_user_created after insert on auth.users
@@ -167,7 +173,7 @@ alter table public.purchase_payments enable row level security;
 alter table public.session_usages enable row level security;
 
 create policy profiles_read on public.profiles for select to authenticated using (active);
-create policy profiles_manager_update on public.profiles for update to authenticated using (public.is_manager()) with check (public.is_manager());
+create policy profiles_admin_update on public.profiles for update to authenticated using (public.is_admin()) with check (public.is_admin());
 create policy members_read on public.members for select to authenticated using (true);
 create policy members_insert on public.members for insert to authenticated with check (created_by=auth.uid());
 create policy daily_read on public.daily_operations for select to authenticated using (coach_id=auth.uid() or public.is_manager());

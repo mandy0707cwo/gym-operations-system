@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -20,6 +21,11 @@ LABELS = {
     "remaining_sessions":"剩餘堂數", "remaining_amount":"剩餘金額",
     "usage_date":"銷課日期", "session_seq":"第幾堂", "deducted_amount":"扣課金額",
 }
+ROLE_LABELS = {"coach": "教練", "manager": "主管", "admin": "系統管理員"}
+USERNAME_RE = re.compile(r"^[a-z0-9_]{3,30}$")
+
+def username_email(username):
+    return f"{username.lower()}@gym-users.example.com"
 
 def secret(name):
     value = os.getenv(name)
@@ -59,14 +65,17 @@ def login():
     if "user" in st.session_state:
         return st.session_state.user
     st.title("健身房營運管理系統")
-    st.caption("請使用已建立的 Email 與密碼登入")
+    st.caption("請使用系統管理員建立的帳號與密碼登入")
     with st.form("login"):
-        email = st.text_input("Email")
+        username = st.text_input("帳號")
         password = st.text_input("密碼", type="password")
         submitted = st.form_submit_button("登入", use_container_width=True)
     if submitted:
         try:
-            result = client().auth.sign_in_with_password({"email":email.strip(), "password":password})
+            login_name = username.strip().lower()
+            # 保留既有管理員 Email 一次過渡登入；新帳號一律使用系統帳號。
+            email = login_name if "@" in login_name else username_email(login_name)
+            result = client().auth.sign_in_with_password({"email":email, "password":password})
             st.session_state.user = result.user
             st.rerun()
         except Exception as exc:
@@ -74,7 +83,7 @@ def login():
     st.stop()
 
 def profile(user_id):
-    data = rows(client().table("profiles").select("id,display_name,role,active").eq("id",user_id))
+    data = rows(client().table("profiles").select("id,username,display_name,role,active").eq("id",user_id))
     if not data or not data[0]["active"]:
         st.error("帳號尚未啟用或沒有使用者資料，請聯絡主管。")
         st.stop()
@@ -96,7 +105,7 @@ def show_table(data, columns=None):
 def daily_page(me):
     st.header("每日營運")
     coaches = coach_options()
-    allowed = coaches if me["role"]=="manager" else {me["display_name"]:me["id"]}
+    allowed = coaches if me["role"] in ("manager","admin") else {me["display_name"]:me["id"]}
     with st.form("daily"):
         c1,c2 = st.columns(2)
         op_date = c1.date_input("日期", date.today())
@@ -125,7 +134,7 @@ def daily_page(me):
 
 def purchase_page(me):
     st.header("課程購買")
-    coaches=coach_options(); allowed=coaches if me["role"]=="manager" else {me["display_name"]:me["id"]}
+    coaches=coach_options(); allowed=coaches if me["role"] in ("manager","admin") else {me["display_name"]:me["id"]}
     with st.form("purchase"):
         c1,c2,c3=st.columns(3)
         member_name=c1.text_input("會員名稱（需完整一致）")
@@ -184,7 +193,7 @@ def purchase_page(me):
 
 def usage_page(me):
     st.header("銷課表")
-    coaches=coach_options(); allowed=coaches if me["role"]=="manager" else {me["display_name"]:me["id"]}
+    coaches=coach_options(); allowed=coaches if me["role"] in ("manager","admin") else {me["display_name"]:me["id"]}
     members=rows(client().table("members").select("id,member_name").eq("active",True).order("member_name"))
     if not members: st.info("請先建立課程購買紀錄。") ; return
     member_map={x["member_name"]:x["id"] for x in members}
@@ -213,7 +222,7 @@ def usage_page(me):
 
 def dashboard_page(me):
     st.header("主管 Dashboard")
-    if me["role"]!="manager": st.warning("此頁僅限主管使用。") ; return
+    if me["role"] not in ("manager","admin"): st.warning("此頁僅限主管與系統管理員使用。") ; return
     coaches=coach_options(); c1,c2,c3=st.columns(3)
     start=c1.date_input("開始日期",date.today().replace(day=1)); end=c2.date_input("結束日期",date.today())
     selected=c3.multiselect("教練",list(coaches),default=list(coaches))
@@ -242,53 +251,86 @@ def dashboard_page(me):
     left.plotly_chart(px.bar(df,x="教練",y=["上課堂數","成交堂數"],barmode="group",title=f"教練堂數比較（{start} 至 {end}）",labels={"value":"堂數","variable":"指標"}),use_container_width=True)
     right.plotly_chart(px.bar(df,x="教練",y="成交金額",title=f"成交金額（{start} 至 {end}）",labels={"成交金額":"TWD"}),use_container_width=True)
 
-def coach_admin_page(me):
-    st.header("教練帳號管理")
-    if me["role"] != "manager":
-        st.warning("此頁僅限主管使用。")
+def account_admin_page(me):
+    st.header("帳號與權限管理")
+    if me["role"] != "admin":
+        st.warning("此頁僅限系統管理員使用。")
         return
     admin = admin_client()
     if admin is None:
         st.error("尚未設定 SUPABASE_SECRET_KEY，請由系統管理者在 Streamlit Secrets 加入後重新啟動 App。")
         return
 
-    st.subheader("邀請新教練")
-    st.caption("系統會寄出 Supabase 邀請信；教練由信件連結完成帳號設定。主管不需代設密碼。")
-    with st.form("invite_coach", clear_on_submit=True):
+    if not me.get("username"):
+        st.warning("目前管理員仍使用舊 Email 登入。請先設定管理員系統帳號；完成後會登出，之後改用新帳號登入。")
+        with st.form("convert_admin"):
+            new_username = st.text_input("管理員新帳號").strip().lower()
+            convert = st.form_submit_button("轉換管理員登入帳號")
+        if convert:
+            if not USERNAME_RE.fullmatch(new_username):
+                st.error("帳號須為 3–30 個小寫英文字母、數字或底線。")
+            else:
+                try:
+                    admin.auth.admin.update_user_by_id(me["id"], {"email": username_email(new_username), "email_confirm": True})
+                    admin.table("profiles").update({"username": new_username}).eq("id", me["id"]).execute()
+                    client().auth.sign_out(); st.session_state.clear()
+                    st.success("管理員帳號已轉換，請使用新帳號登入。")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"轉換失敗：{exc}")
+
+    st.subheader("建立新帳號")
+    with st.form("create_account", clear_on_submit=True):
         c1, c2 = st.columns(2)
-        display_name = c1.text_input("教練姓名")
-        email = c2.text_input("教練 Email")
-        invite = st.form_submit_button("寄出邀請")
-    if invite:
-        name, mail = display_name.strip(), email.strip().lower()
-        if not name or not mail or "@" not in mail:
-            st.error("請輸入教練姓名與有效的 Email。")
+        new_account = c1.text_input("登入帳號").strip().lower()
+        display_name = c2.text_input("顯示姓名").strip()
+        c1, c2 = st.columns(2)
+        new_password = c1.text_input("初始密碼（至少 8 碼）", type="password")
+        role_label = c2.selectbox("權限", ["教練", "主管", "系統管理員"])
+        create_account = st.form_submit_button("建立帳號")
+    if create_account:
+        role_value = {"教練":"coach", "主管":"manager", "系統管理員":"admin"}[role_label]
+        if not USERNAME_RE.fullmatch(new_account):
+            st.error("帳號須為 3–30 個小寫英文字母、數字或底線。")
+        elif not display_name:
+            st.error("顯示姓名不可空白。")
+        elif len(new_password) < 8:
+            st.error("密碼至少需要 8 碼。")
         else:
             try:
-                response = admin.auth.admin.invite_user_by_email(mail)
-                invited_user = getattr(response, "user", None)
-                if invited_user:
-                    admin.table("profiles").update({"display_name": name, "role": "coach", "active": True}).eq("id", invited_user.id).execute()
-                st.success(f"已寄出邀請給 {name}（{mail}）。")
+                response = admin.auth.admin.create_user({"email":username_email(new_account), "password":new_password,
+                    "email_confirm":True, "user_metadata":{"username":new_account,"display_name":display_name}})
+                created_user = getattr(response, "user", None)
+                if not created_user: raise RuntimeError("Supabase 未回傳新使用者")
+                admin.table("profiles").update({"username":new_account,"display_name":display_name,"role":role_value,"active":True}).eq("id",created_user.id).execute()
+                st.success(f"已建立帳號 {new_account}（{role_label}）。")
             except Exception as exc:
-                st.error(f"邀請失敗：{exc}")
+                st.error(f"建立失敗：{exc}")
 
     st.subheader("現有帳號")
-    profiles = rows(client().table("profiles").select("id,display_name,role,active,created_at").order("display_name"))
+    profiles = rows(admin.table("profiles").select("id,username,display_name,role,active,created_at").order("display_name"))
     if profiles:
-        show_table(profiles, ["display_name", "role", "active", "created_at"])
-        coach_profiles = [x for x in profiles if x["role"] == "coach"]
-        if coach_profiles:
-            labels = {x["display_name"]: x for x in coach_profiles}
-            with st.form("coach_status"):
-                selected_name = st.selectbox("選擇教練", list(labels))
-                new_active = st.selectbox("帳號狀態", ["啟用", "停用"])
-                update_status = st.form_submit_button("更新狀態")
-            if update_status:
-                target = labels[selected_name]
+        table_rows=[{**x,"role":ROLE_LABELS.get(x["role"],x["role"])} for x in profiles]
+        show_table(table_rows, ["username", "display_name", "role", "active", "created_at"])
+        labels = {f'{x["display_name"]}｜{x.get("username") or "尚未轉換"}': x for x in profiles}
+        with st.form("account_update"):
+            selected_name = st.selectbox("選擇帳號", list(labels))
+            new_role_label = st.selectbox("權限", ["教練", "主管", "系統管理員"])
+            new_active = st.selectbox("帳號狀態", ["啟用", "停用"])
+            reset_password = st.text_input("重設密碼（留空表示不變；至少 8 碼）", type="password")
+            update_status = st.form_submit_button("更新帳號")
+        if update_status:
+            target = labels[selected_name]
+            if target["id"] == me["id"] and new_active == "停用":
+                st.error("不可停用目前登入的管理員帳號。")
+            elif reset_password and len(reset_password) < 8:
+                st.error("重設密碼至少需要 8 碼。")
+            else:
                 try:
-                    client().table("profiles").update({"active": new_active == "啟用"}).eq("id", target["id"]).execute()
-                    st.success(f"{selected_name} 已設定為{new_active}。")
+                    role_value={"教練":"coach","主管":"manager","系統管理員":"admin"}[new_role_label]
+                    admin.table("profiles").update({"role":role_value,"active":new_active=="啟用"}).eq("id",target["id"]).execute()
+                    if reset_password: admin.auth.admin.update_user_by_id(target["id"], {"password":reset_password})
+                    st.success("帳號與權限已更新。")
                     st.rerun()
                 except Exception as exc:
                     st.error(f"更新失敗：{exc}")
@@ -296,13 +338,15 @@ def coach_admin_page(me):
 user=login(); me=profile(user.id)
 with st.sidebar:
     st.title("🏋️ 營運管理")
-    st.write(f'{me["display_name"]}｜{"主管" if me["role"]=="manager" else "教練"}')
-    pages=["每日營運","課程購買","銷課表"] + (["主管 Dashboard","教練帳號管理"] if me["role"]=="manager" else [])
+    st.write(f'{me["display_name"]}｜{ROLE_LABELS.get(me["role"],me["role"])}')
+    pages=["每日營運","課程購買","銷課表"]
+    if me["role"] in ("manager","admin"): pages.append("主管 Dashboard")
+    if me["role"] == "admin": pages.append("帳號與權限管理")
     page=st.radio("功能",pages)
     if st.button("登出"):
         client().auth.sign_out(); st.session_state.clear(); st.rerun()
 
 try:
-    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"教練帳號管理":coach_admin_page}[page](me)
+    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"帳號與權限管理":account_admin_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")
