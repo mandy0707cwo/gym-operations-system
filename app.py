@@ -807,26 +807,32 @@ def record_admin_page(me):
         labels={f'{x["usage_date"]}｜{id_name.get(x["coach_id"],"未知")}｜第{x["session_seq"]}堂｜{x["id"][:8]}':x for x in records}
     if not labels: st.info("目前沒有可管理的資料。"); return
     selected=st.selectbox("選擇紀錄",list(labels)); record=labels[selected]
+    record_coach_map=dict(coach_map)
+    if data_type in ("每日營運","銷課表") and record.get("coach_id") not in record_coach_map.values():
+        historical_name=id_name.get(record.get("coach_id"),f'歷史帳號 {str(record.get("coach_id",""))[:8]}')
+        record_coach_map[f'{historical_name}（歷史資料）']=record.get("coach_id")
+    coach_names=list(record_coach_map)
+    current_coach_index=list(record_coach_map.values()).index(record.get("coach_id")) if record.get("coach_id") in record_coach_map.values() else 0
     with st.form("record_edit"):
         if data_type=="每日營運":
-            c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["operation_date"]).date()); coach=c2.selectbox("教練",list(coach_map),index=list(coach_map.values()).index(record["coach_id"]))
+            c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["operation_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
             c1,c2,c3=st.columns(3); cancelled=c1.number_input("取消堂數",0,999,int(record["classes_cancelled"])); trials=c2.number_input("體驗人次",0,999,int(record["trial_visits"])); conversions=c3.number_input("體驗成交人次",0,999,int(record["trial_conversions"])); note=st.text_area("備註",record.get("note") or "")
         elif data_type=="課程購買":
             c1,c2,c3=st.columns(3); sessions=c1.number_input("課程堂數",1,999,int(record["total_sessions"])); amount=c2.number_input("成交總金額",0.0,10000000.0,float(record["total_amount"]),step=100.0,format="%.0f"); expiry=c3.date_input("有效期限",pd.to_datetime(record["expiry_date"]).date())
         else:
-            c1,c2=st.columns(2); d=c1.date_input("銷課日期",pd.to_datetime(record["usage_date"]).date()); coach=c2.selectbox("教練",list(coach_map),index=list(coach_map.values()).index(record["coach_id"])); note=st.text_area("備註",record.get("note") or "")
+            c1,c2=st.columns(2); d=c1.date_input("銷課日期",pd.to_datetime(record["usage_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index); note=st.text_area("備註",record.get("note") or "")
         update=st.form_submit_button("儲存修改")
     if update:
         try:
             if data_type=="每日營運":
                 if conversions>trials: raise ValueError("體驗成交人次不可大於體驗人次")
-                held=len(rows(admin.table("session_usages").select("id").eq("usage_date",str(d)).eq("coach_id",coach_map[coach])))
-                admin.table("daily_operations").update({"operation_date":str(d),"coach_id":coach_map[coach],"classes_held":held,"classes_cancelled":cancelled,"trial_visits":trials,"trial_conversions":conversions,"note":note or None}).eq("id",record["id"]).execute()
+                held=len(rows(admin.table("session_usages").select("id").eq("usage_date",str(d)).eq("coach_id",record_coach_map[coach])))
+                admin.table("daily_operations").update({"operation_date":str(d),"coach_id":record_coach_map[coach],"classes_held":held,"classes_cancelled":cancelled,"trial_visits":trials,"trial_conversions":conversions,"note":note or None}).eq("id",record["id"]).execute()
             elif data_type=="課程購買": admin.table("purchases").update({"total_sessions":sessions,"total_amount":amount,"expiry_date":str(expiry)}).eq("id",record["purchase_id"]).execute()
             else:
                 old_date,old_coach=record["usage_date"],record["coach_id"]
-                admin.table("session_usages").update({"usage_date":str(d),"coach_id":coach_map[coach],"note":note or None}).eq("id",record["id"]).execute()
-                _sync_daily_classes(admin,old_date,old_coach); _sync_daily_classes(admin,d,coach_map[coach])
+                admin.table("session_usages").update({"usage_date":str(d),"coach_id":record_coach_map[coach],"note":note or None}).eq("id",record["id"]).execute()
+                _sync_daily_classes(admin,old_date,old_coach); _sync_daily_classes(admin,d,record_coach_map[coach])
             st.success("資料已修改。"); st.rerun()
         except Exception as exc: st.error(f"修改失敗：{exc}")
     with st.form("record_delete"):
