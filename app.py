@@ -7,6 +7,7 @@ from decimal import Decimal
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from supabase import create_client
 from supabase.lib.client_options import ClientOptions
@@ -60,6 +61,28 @@ def admin_client():
 
 def rows(query):
     return query.execute().data or []
+
+def collapse_sidebar_on_mobile():
+    """手機版切換頁面後自動收合側邊選單，桌面版不受影響。"""
+    components.html(
+        """
+        <script>
+        (() => {
+          if (window.parent.innerWidth > 768) return;
+          const doc = window.parent.document;
+          const closeButton = doc.querySelector(
+            '[data-testid="stSidebarCollapseButton"] button, button[kind="header"]'
+          );
+          const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+          if (sidebar && closeButton && sidebar.getBoundingClientRect().width > 0) {
+            setTimeout(() => closeButton.click(), 120);
+          }
+        })();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
 
 def login():
     if "user" in st.session_state:
@@ -480,6 +503,8 @@ with st.sidebar:
     page=st.radio("功能",pages)
     if st.button("登出"):
         client().auth.sign_out(); st.session_state.clear(); st.rerun()
+
+collapse_sidebar_on_mobile()
 
 try:
     {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"帳號與權限管理":account_admin_page,"資料匯入／匯出":data_io_page}[page](me)
