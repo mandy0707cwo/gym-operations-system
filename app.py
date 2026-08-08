@@ -160,6 +160,7 @@ def daily_page(me):
 def purchase_page(me):
     st.header("課程購買")
     coaches=coach_options(); allowed=coaches if me["role"] in ("manager","admin") else {me["display_name"]:me["id"]}
+    plan=st.selectbox("付款方式",["未分期","分期"],key="purchase_payment_plan")
     with st.form("purchase"):
         c1,c2,c3=st.columns(3)
         member_name=c1.text_input("會員名稱（需完整一致）")
@@ -169,15 +170,21 @@ def purchase_page(me):
         course=c1.text_input("課程名稱")
         sessions=c2.number_input("課程堂數",1,999,1)
         amount=c3.number_input("成交總金額",0.0,10000000.0,step=100.0,format="%.2f")
-        c1,c2,c3=st.columns(3)
+        c1,c2=st.columns(2)
         purchased=c1.date_input("購買日期",date.today())
         expiry=c2.date_input("有效日期",date.today()+timedelta(days=365))
-        plan=c3.selectbox("付款方式",["未分期","分期"])
-        count=st.selectbox("總期數",[2,3],disabled=plan=="未分期") if plan=="分期" else 1
-        c1,c2,c3=st.columns(3)
-        installment_no=c1.selectbox("此次為第幾期",list(range(1,count+1)))
-        paid=c2.number_input("此次支付金額",0.0,10000000.0,step=100.0,format="%.2f")
-        paid_date=c3.date_input("支付日期",purchased)
+        if plan=="分期":
+            count=st.selectbox("總期數",[2,3])
+            c1,c2,c3=st.columns(3)
+            installment_no=c1.selectbox("此次為第幾期",list(range(1,count+1)))
+            paid=c2.number_input("此次支付金額",0.0,10000000.0,step=100.0,format="%.2f")
+            paid_date=c3.date_input("支付日期",purchased)
+        else:
+            count=1
+            installment_no=1
+            paid=amount
+            paid_date=purchased
+            st.caption("未分期將於建立紀錄時，自動以成交總金額記錄為一次付清。")
         save=st.form_submit_button("建立購買紀錄")
     if save:
         errors=[]
