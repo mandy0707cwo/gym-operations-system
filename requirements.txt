@@ -3,4 +3,5 @@ supabase==2.18.1
 pandas==2.3.1
 plotly==6.2.0
 python-dotenv==1.1.1
-
+openpyxl==3.1.5
+xlsxwriter==3.2.5

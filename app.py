@@ -1,5 +1,6 @@
 import os
 import re
+from io import BytesIO
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -334,18 +335,153 @@ def account_admin_page(me):
                 except Exception as exc:
                     st.error(f"更新失敗：{exc}")
 
+def _excel_bytes(sheet_frames):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter", datetime_format="yyyy-mm-dd") as writer:
+        for sheet_name, frame in sheet_frames.items():
+            safe_name = sheet_name[:31]
+            frame.to_excel(writer, sheet_name=safe_name, index=False)
+            worksheet = writer.sheets[safe_name]
+            worksheet.freeze_panes(1, 0)
+            worksheet.autofilter(0, 0, max(len(frame), 1), max(len(frame.columns) - 1, 0))
+            for col_no, column in enumerate(frame.columns):
+                values = frame[column].fillna("").astype(str) if not frame.empty else pd.Series(dtype=str)
+                width = min(max([len(str(column))] + values.map(len).tolist()) + 2, 32)
+                worksheet.set_column(col_no, col_no, width)
+    return output.getvalue()
+
+def data_io_page(me):
+    st.header("資料匯入／匯出")
+    if me["role"] != "admin":
+        st.warning("此頁僅限系統管理員使用。")
+        return
+    admin = admin_client()
+    if admin is None:
+        st.error("尚未設定 SUPABASE_SECRET_KEY。")
+        return
+
+    st.subheader("匯出 Excel 報表")
+    c1, c2 = st.columns(2)
+    start = c1.date_input("開始日期", date.today().replace(day=1), key="export_start")
+    end = c2.date_input("結束日期", date.today(), key="export_end")
+    profiles = rows(admin.table("profiles").select("id,username,display_name,role,active").order("display_name"))
+    coach_map = {x["display_name"]: x["id"] for x in profiles if x["role"] in ("coach", "manager", "admin")}
+    selected_coaches = st.multiselect("教練（未選擇代表全部）", list(coach_map), key="export_coaches")
+
+    if start > end:
+        st.error("開始日期不可晚於結束日期。")
+    else:
+        coach_ids = {coach_map[x] for x in selected_coaches}
+        id_to_name = {x["id"]: x["display_name"] for x in profiles}
+        members = rows(admin.table("members").select("*").order("member_name"))
+        operations = rows(admin.table("daily_operations").select("*").gte("operation_date", str(start)).lte("operation_date", str(end)).order("operation_date"))
+        purchases = rows(admin.table("purchases").select("*").gte("purchase_date", str(start)).lte("purchase_date", str(end)).order("purchase_date"))
+        usages = rows(admin.table("session_usages").select("*").gte("usage_date", str(start)).lte("usage_date", str(end)).order("usage_date"))
+        purchase_ids = {x["id"] for x in purchases}
+        payments = rows(admin.table("purchase_payments").select("*").gte("paid_date", str(start)).lte("paid_date", str(end)).order("paid_date"))
+        if coach_ids:
+            operations = [x for x in operations if x.get("coach_id") in coach_ids]
+            purchases = [x for x in purchases if x.get("coach_id") in coach_ids]
+            purchase_ids = {x["id"] for x in purchases}
+            usages = [x for x in usages if x.get("coach_id") in coach_ids]
+            payments = [x for x in payments if x.get("purchase_id") in purchase_ids]
+        for collection in (operations, purchases, usages):
+            for item in collection:
+                if "coach_id" in item:
+                    item["coach_name"] = id_to_name.get(item["coach_id"], "")
+        report = _excel_bytes({
+            "會員名單": pd.DataFrame(members),
+            "每日營運": pd.DataFrame(operations),
+            "課程購買": pd.DataFrame(purchases),
+            "付款紀錄": pd.DataFrame(payments),
+            "銷課紀錄": pd.DataFrame(usages),
+            "帳號權限": pd.DataFrame(profiles),
+        })
+        st.download_button("下載 Excel 報表", report,
+            file_name=f"健身房營運報表_{start}_{end}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True)
+
+    st.divider()
+    st.subheader("匯入 Excel")
+    st.caption("目前支援會員名單與每日營運。系統會先檢查整份檔案；有錯誤時不會寫入資料庫。")
+    member_template = pd.DataFrame(columns=["member_name", "active"])
+    operation_template = pd.DataFrame(columns=["operation_date", "coach_username", "classes_held", "classes_cancelled", "trial_visits", "trial_conversions", "note"])
+    template = _excel_bytes({"會員名單": member_template, "每日營運": operation_template})
+    st.download_button("下載匯入範本", template, file_name="健身房資料匯入範本.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    uploaded = st.file_uploader("選擇填妥的 Excel 範本", type=["xlsx"])
+    if uploaded is not None:
+        try:
+            workbook = pd.ExcelFile(uploaded)
+            allowed_sheets = [x for x in ("會員名單", "每日營運") if x in workbook.sheet_names]
+            if not allowed_sheets:
+                st.error("檔案必須至少包含「會員名單」或「每日營運」工作表。")
+                return
+            errors = []
+            member_df = pd.read_excel(workbook, "會員名單") if "會員名單" in allowed_sheets else pd.DataFrame()
+            op_df = pd.read_excel(workbook, "每日營運") if "每日營運" in allowed_sheets else pd.DataFrame()
+            required_members = {"member_name", "active"}
+            required_ops = {"operation_date", "coach_username", "classes_held", "classes_cancelled", "trial_visits", "trial_conversions", "note"}
+            if not member_df.empty and not required_members.issubset(member_df.columns):
+                errors.append("會員名單欄位不完整。")
+            if not op_df.empty and not required_ops.issubset(op_df.columns):
+                errors.append("每日營運欄位不完整。")
+            username_map = {x.get("username"): x["id"] for x in profiles if x.get("username")}
+            clean_members, clean_ops = [], []
+            if not errors:
+                for index, item in member_df.fillna("").iterrows():
+                    name = str(item["member_name"]).strip()
+                    if not name:
+                        errors.append(f"會員名單第 {index + 2} 列：會員名稱不可空白。")
+                    else:
+                        active_value = str(item["active"]).strip().lower()
+                        clean_members.append({"member_name": name, "active": active_value not in ("false", "0", "否", "停用")})
+                for index, item in op_df.fillna("").iterrows():
+                    try:
+                        op_date = pd.to_datetime(item["operation_date"]).date()
+                        username = str(item["coach_username"]).strip().lower()
+                        counts = {key: int(item[key]) for key in ("classes_held", "classes_cancelled", "trial_visits", "trial_conversions")}
+                        if username not in username_map:
+                            raise ValueError("找不到教練帳號")
+                        if any(value < 0 for value in counts.values()):
+                            raise ValueError("人次與堂數不可為負數")
+                        if counts["trial_conversions"] > counts["trial_visits"]:
+                            raise ValueError("體驗成交人次不可大於體驗人次")
+                        clean_ops.append({"operation_date": str(op_date), "coach_id": username_map[username], **counts,
+                            "note": str(item["note"]).strip() or None})
+                    except Exception as exc:
+                        errors.append(f"每日營運第 {index + 2} 列：{exc}")
+            if errors:
+                st.error("匯入檢查未通過：\n- " + "\n- ".join(errors[:20]))
+            else:
+                st.success(f"檢查通過：會員 {len(clean_members)} 筆、每日營運 {len(clean_ops)} 筆。")
+                if st.button("確認匯入資料庫", type="primary"):
+                    for item in clean_members:
+                        existing = rows(admin.table("members").select("id").eq("member_name", item["member_name"]))
+                        if existing:
+                            admin.table("members").update({"active": item["active"]}).eq("id", existing[0]["id"]).execute()
+                        else:
+                            admin.table("members").insert({**item, "created_by": me["id"]}).execute()
+                    for item in clean_ops:
+                        admin.table("daily_operations").upsert(item, on_conflict="operation_date,coach_id").execute()
+                    st.success("資料匯入完成。")
+        except Exception as exc:
+            st.error(f"無法讀取或匯入檔案：{exc}")
+
 user=login(); me=profile(user.id)
 with st.sidebar:
     st.title("🏋️ 營運管理")
     st.write(f'{me["display_name"]}｜{ROLE_LABELS.get(me["role"],me["role"])}')
     pages=["每日營運","課程購買","銷課表"]
     if me["role"] in ("manager","admin"): pages.append("主管 Dashboard")
-    if me["role"] == "admin": pages.append("帳號與權限管理")
+    if me["role"] == "admin":
+        pages.extend(["帳號與權限管理", "資料匯入／匯出"])
     page=st.radio("功能",pages)
     if st.button("登出"):
         client().auth.sign_out(); st.session_state.clear(); st.rerun()
 
 try:
-    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"帳號與權限管理":account_admin_page}[page](me)
+    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"帳號與權限管理":account_admin_page,"資料匯入／匯出":data_io_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")
