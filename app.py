@@ -17,7 +17,7 @@ st.set_page_config(page_title="健身房營運管理", page_icon="🏋️", layo
 
 LABELS = {
     "operation_date":"日期", "coach_name":"教練", "classes_held":"上課堂數",
-    "classes_cancelled":"取消堂數", "trial_visits":"體驗人次",
+    "classes_cancelled":"銷課取消堂數", "trial_visits":"體驗人次",
     "trial_conversions":"體驗成交人次", "member_name":"會員名稱",
     "course_name":"課程名稱", "total_sessions":"原始堂數", "session_hours":"每堂課時數",
     "remaining_sessions":"剩餘堂數", "remaining_amount":"剩餘金額",
@@ -139,7 +139,7 @@ def daily_page(me):
         coach_name = c2.selectbox("教練", list(allowed))
         st.caption("每日上課堂數由銷課紀錄自動統計，不需手動輸入。")
         c1,c2,c3 = st.columns(3)
-        cancelled = c1.number_input("上課取消堂數",0,100,0)
+        cancelled = c1.number_input("銷課取消堂數",0,100,0)
         trials = c2.number_input("體驗人次",0,100,0)
         converted = c3.number_input("體驗成交人次",0,100,0)
         note = st.text_area("備註")
@@ -390,10 +390,10 @@ def dashboard_page(me):
         renewal_count=sum(1 for x in p if x["purchase_kind"]=="renewal")
         received=sum(float(x["amount"]) for x in payments if payment_purchase_map.get(x["purchase_id"])==cid)
         used_sessions=len(u); used_amount=sum(float(x["deducted_amount"]) for x in u)
-        result.append({"教練":names[cid],"銷課取消率":cancelled/(used_sessions+cancelled) if used_sessions+cancelled else None,
-                       "體驗成交率":converted/trials if trials else None,"續課率":renewal_count/len(p) if p else None,
-                       "成交堂數":sessions,"成交總金額":amount,"實際預收金額":received,
-                       "銷課堂數":used_sessions,"銷課金額":used_amount,
+        result.append({"教練":names[cid],"銷課堂數":used_sessions,"銷課金額":used_amount,
+                       "銷課取消率":cancelled/(used_sessions+cancelled) if used_sessions+cancelled else None,
+                       "續約率":renewal_count/len(p) if p else None,"成交堂數":sessions,
+                       "成交總金額":amount,"實際預收金額":received,
                        "平均每堂單價":amount/sessions if sessions else None})
     df=pd.DataFrame(result)
     if df.empty: st.info("沒有可顯示的資料。") ; return
@@ -401,18 +401,24 @@ def dashboard_page(me):
     total_purchase_count=len([x for x in purchases if x["coach_id"] in ids])
     total_renewals=len([x for x in purchases if x["coach_id"] in ids and x["purchase_kind"]=="renewal"])
     overall_renewal=total_renewals/total_purchase_count if total_purchase_count else None
-    a,b,c,d,e=st.columns(5)
+    total_cancelled=sum(x["classes_cancelled"] for x in ops if x["coach_id"] in ids)
+    overall_cancel_rate=total_cancelled/(totals["銷課堂數"]+total_cancelled) if totals["銷課堂數"]+total_cancelled else None
+    average_unit=totals["成交總金額"]/totals["成交堂數"] if totals["成交堂數"] else None
+    a,b,c,d=st.columns(4)
     a.metric("銷課堂數",f'{totals["銷課堂數"]:,.0f}')
-    b.metric("成交堂數",f'{totals["成交堂數"]:,.0f}')
-    c.metric("續課率",f'{overall_renewal:.1%}' if overall_renewal is not None else "—")
-    d.metric("成交總金額",f'TWD {totals["成交總金額"]:,.0f}')
-    e.metric("實際預收金額",f'TWD {totals["實際預收金額"]:,.0f}')
-    st.metric("銷課金額",f'TWD {totals["銷課金額"]:,.0f}')
+    b.metric("銷課金額",f'TWD {totals["銷課金額"]:,.0f}')
+    c.metric("銷課取消率",f'{overall_cancel_rate:.1%}' if overall_cancel_rate is not None else "—")
+    d.metric("續約率",f'{overall_renewal:.1%}' if overall_renewal is not None else "—")
+    a2,b2,c2,d2=st.columns(4)
+    a2.metric("成交堂數",f'{totals["成交堂數"]:,.0f}')
+    b2.metric("成交總金額",f'TWD {totals["成交總金額"]:,.0f}')
+    c2.metric("實際預收金額",f'TWD {totals["實際預收金額"]:,.0f}')
+    d2.metric("平均每堂單價",f'TWD {average_unit:,.0f}' if average_unit is not None else "—")
     display_df=df.copy()
     display_df["銷課取消率"]=display_df["銷課取消率"]*100
-    display_df["體驗成交率"]=display_df["體驗成交率"]*100
-    display_df["續課率"]=display_df["續課率"]*100
-    st.dataframe(display_df,hide_index=True,use_container_width=True,column_config={"銷課取消率":st.column_config.NumberColumn(format="%.1f%%"),"體驗成交率":st.column_config.NumberColumn(format="%.1f%%"),"續課率":st.column_config.NumberColumn(format="%.1f%%"),"成交總金額":st.column_config.NumberColumn(format="TWD %.0f"),"實際預收金額":st.column_config.NumberColumn(format="TWD %.0f"),"銷課金額":st.column_config.NumberColumn(format="TWD %.0f"),"平均每堂單價":st.column_config.NumberColumn(format="TWD %.0f")})
+    display_df["續約率"]=display_df["續約率"]*100
+    display_df=display_df[["教練","銷課堂數","銷課金額","銷課取消率","續約率","成交堂數","成交總金額","實際預收金額","平均每堂單價"]]
+    st.dataframe(display_df,hide_index=True,use_container_width=True,column_config={"銷課取消率":st.column_config.NumberColumn(format="%.1f%%"),"續約率":st.column_config.NumberColumn(format="%.1f%%"),"成交總金額":st.column_config.NumberColumn(format="TWD %.0f"),"實際預收金額":st.column_config.NumberColumn(format="TWD %.0f"),"銷課金額":st.column_config.NumberColumn(format="TWD %.0f"),"平均每堂單價":st.column_config.NumberColumn(format="TWD %.0f")})
     left,right=st.columns(2)
     count_metric=left.selectbox("堂數指標",["成交堂數","銷課堂數"],key="dashboard_count_metric")
     amount_metric=right.selectbox("金額類型",["成交總金額","銷課金額"],key="dashboard_amount_metric")
