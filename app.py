@@ -780,9 +780,17 @@ def member_course_io_page(me):
                     valid_ids={x["id"] for x in rows(admin.table("purchases").select("id"))}
                     for item in clean_usages:
                         if item["purchase_id"] not in valid_ids: raise ValueError(f'找不到 purchase_id：{item["purchase_id"]}')
-                        admin.rpc("consume_session",{"p_purchase_id":item["purchase_id"],"p_usage_date":item["usage_date"],"p_coach_id":item["coach_id"],"p_note":item["note"]}).execute()
+                        client().rpc("consume_session",{"p_purchase_id":item["purchase_id"],"p_usage_date":item["usage_date"],"p_coach_id":item["coach_id"],"p_note":item["note"]}).execute()
                     st.success("資料匯入完成。")
         except Exception as exc: st.error(f"無法匯入檔案：{exc}")
+
+def _sync_daily_classes(admin, operation_date, coach_id):
+    held=len(rows(admin.table("session_usages").select("id").eq("usage_date",str(operation_date)).eq("coach_id",coach_id)))
+    existing=rows(admin.table("daily_operations").select("id").eq("operation_date",str(operation_date)).eq("coach_id",coach_id))
+    if existing:
+        admin.table("daily_operations").update({"classes_held":held}).eq("id",existing[0]["id"]).execute()
+    elif held:
+        admin.table("daily_operations").insert({"operation_date":str(operation_date),"coach_id":coach_id,"classes_held":held,"classes_cancelled":0,"trial_visits":0,"trial_conversions":0}).execute()
 
 def record_admin_page(me):
     admin=admin_client(); coaches=rows(admin.table("profiles").select("id,display_name,role"))
@@ -815,7 +823,10 @@ def record_admin_page(me):
                 held=len(rows(admin.table("session_usages").select("id").eq("usage_date",str(d)).eq("coach_id",coach_map[coach])))
                 admin.table("daily_operations").update({"operation_date":str(d),"coach_id":coach_map[coach],"classes_held":held,"classes_cancelled":cancelled,"trial_visits":trials,"trial_conversions":conversions,"note":note or None}).eq("id",record["id"]).execute()
             elif data_type=="課程購買": admin.table("purchases").update({"total_sessions":sessions,"total_amount":amount,"expiry_date":str(expiry)}).eq("id",record["purchase_id"]).execute()
-            else: admin.table("session_usages").update({"usage_date":str(d),"coach_id":coach_map[coach],"note":note or None}).eq("id",record["id"]).execute()
+            else:
+                old_date,old_coach=record["usage_date"],record["coach_id"]
+                admin.table("session_usages").update({"usage_date":str(d),"coach_id":coach_map[coach],"note":note or None}).eq("id",record["id"]).execute()
+                _sync_daily_classes(admin,old_date,old_coach); _sync_daily_classes(admin,d,coach_map[coach])
             st.success("資料已修改。"); st.rerun()
         except Exception as exc: st.error(f"修改失敗：{exc}")
     with st.form("record_delete"):
@@ -827,8 +838,12 @@ def record_admin_page(me):
             try:
                 if data_type=="每日營運": admin.table("daily_operations").delete().eq("id",record["id"]).execute()
                 elif data_type=="課程購買":
+                    affected=rows(admin.table("session_usages").select("usage_date,coach_id").eq("purchase_id",record["purchase_id"]))
                     admin.table("session_usages").delete().eq("purchase_id",record["purchase_id"]).execute(); admin.table("purchases").delete().eq("id",record["purchase_id"]).execute()
-                else: admin.table("session_usages").delete().eq("id",record["id"]).execute()
+                    for item in affected: _sync_daily_classes(admin,item["usage_date"],item["coach_id"])
+                else:
+                    admin.table("session_usages").delete().eq("id",record["id"]).execute()
+                    _sync_daily_classes(admin,record["usage_date"],record["coach_id"])
                 st.success("資料已刪除。"); st.rerun()
             except Exception as exc: st.error(f"刪除失敗：{exc}")
 
