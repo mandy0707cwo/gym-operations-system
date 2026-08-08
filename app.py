@@ -227,19 +227,109 @@ def purchase_page(me):
                 st.success("付款紀錄已新增。")
             except Exception as exc: st.error(f"新增失敗（請檢查期次是否重複或超出設定）：{exc}")
 
+def usage_query_tabs():
+    st.divider()
+    st.subheader("銷課查詢")
+    coaches=coach_options()
+    operational_ids=set(coaches.values())
+    balances=rows(client().table("purchase_balances").select("*").order("expiry_date"))
+    balances=[x for x in balances if x.get("coach_id") in operational_ids]
+    purchase_ids=[x["purchase_id"] for x in balances]
+    purchases=[]
+    payments=[]
+    if purchase_ids:
+        purchases=rows(client().table("purchases").select("id,payment_plan,installment_count").in_("id",purchase_ids))
+        payments=rows(client().table("purchase_payments").select("purchase_id,installment_no,amount").in_("purchase_id",purchase_ids))
+    purchase_map={x["id"]:x for x in purchases}
+    payment_map={}
+    for payment in payments:
+        summary=payment_map.setdefault(payment["purchase_id"],{"amount":0.0,"count":0})
+        summary["amount"]+=float(payment["amount"])
+        summary["count"]+=1
+
+    tab1,tab2,tab3=st.tabs(["課程餘額與支付","銷課統計","一個月內到期"])
+    with tab1:
+        detail=[]
+        for item in balances:
+            purchase=purchase_map.get(item["purchase_id"],{})
+            payment=payment_map.get(item["purchase_id"],{"amount":0.0,"count":0})
+            total_amount=float(item["total_amount"])
+            if payment["amount"] >= total_amount:
+                payment_status="已付清"
+            elif purchase.get("payment_plan")=="installment":
+                payment_status=f'已付 {payment["count"]}/{purchase.get("installment_count", "-")} 期，TWD {payment["amount"]:,.2f}'
+            else:
+                payment_status=f'尚欠 TWD {total_amount-payment["amount"]:,.2f}'
+            detail.append({
+                "會員名稱":item["member_name"],"課程名稱":item["course_name"],"成交教練":item["coach_name"],
+                "購買堂數":item["total_sessions"],"成交金額":total_amount,"已上堂數":item["used_sessions"],
+                "剩餘堂數":item["remaining_sessions"],"剩餘金額":float(item["remaining_amount"]),
+                "有效期限":item["expiry_date"],"分期支付狀況":payment_status,
+            })
+        if detail:
+            st.dataframe(pd.DataFrame(detail),hide_index=True,use_container_width=True,
+                column_config={"成交金額":st.column_config.NumberColumn(format="TWD %.2f"),
+                               "剩餘金額":st.column_config.NumberColumn(format="TWD %.2f")})
+        else:
+            st.info("目前沒有可查詢的課程資料。")
+
+    with tab2:
+        c1,c2=st.columns(2)
+        query_start=c1.date_input("開始日期",date.today().replace(day=1),key="usage_query_start")
+        query_end=c2.date_input("結束日期",date.today(),key="usage_query_end")
+        if query_start>query_end:
+            st.error("開始日期不可晚於結束日期。")
+        else:
+            usages=rows(client().table("session_usages").select("usage_date,coach_id,deducted_amount").gte("usage_date",str(query_start)).lte("usage_date",str(query_end)))
+            usages=[x for x in usages if x.get("coach_id") in operational_ids]
+            total_sessions=len(usages)
+            total_amount=sum(float(x["deducted_amount"]) for x in usages)
+            average=total_amount/total_sessions if total_sessions else 0
+            a,b,c=st.columns(3)
+            a.metric("總銷課堂數",f"{total_sessions:,}")
+            b.metric("總銷課金額",f"TWD {total_amount:,.2f}")
+            c.metric("平均單價",f"TWD {average:,.2f}")
+            by_coach=[]
+            for coach_name,coach_id in coaches.items():
+                coach_rows=[x for x in usages if x["coach_id"]==coach_id]
+                if coach_rows:
+                    coach_amount=sum(float(x["deducted_amount"]) for x in coach_rows)
+                    by_coach.append({"教練":coach_name,"銷課堂數":len(coach_rows),"銷課金額":coach_amount,
+                                     "平均單價":coach_amount/len(coach_rows)})
+            if by_coach:
+                st.dataframe(pd.DataFrame(by_coach),hide_index=True,use_container_width=True,
+                    column_config={"銷課金額":st.column_config.NumberColumn(format="TWD %.2f"),
+                                   "平均單價":st.column_config.NumberColumn(format="TWD %.2f")})
+
+    with tab3:
+        today=date.today()
+        deadline=today+timedelta(days=30)
+        expiring=[x for x in balances if x["status"]=="active" and x["remaining_sessions"]>0
+                  and today<=pd.to_datetime(x["expiry_date"]).date()<=deadline]
+        st.caption(f"查詢期間：{today} 至 {deadline}")
+        if expiring:
+            expiry_rows=[{"會員名稱":x["member_name"],"課程名稱":x["course_name"],"成交教練":x["coach_name"],
+                          "剩餘堂數":x["remaining_sessions"],"剩餘金額":float(x["remaining_amount"]),
+                          "有效期限":x["expiry_date"],"剩餘天數":(pd.to_datetime(x["expiry_date"]).date()-today).days}
+                         for x in expiring]
+            st.dataframe(pd.DataFrame(expiry_rows),hide_index=True,use_container_width=True,
+                column_config={"剩餘金額":st.column_config.NumberColumn(format="TWD %.2f")})
+        else:
+            st.info("未來 30 天內沒有即將到期且仍有剩餘堂數的課程。")
+
 def usage_page(me):
     st.header("銷課表")
     coaches=coach_options(); allowed=coaches if me["role"] in ("manager","admin") else {me["display_name"]:me["id"]}
     members=rows(client().table("members").select("id,member_name").eq("active",True).order("member_name"))
-    if not members: st.info("請先建立課程購買紀錄。") ; return
+    if not members: st.info("請先建立課程購買紀錄。") ; usage_query_tabs() ; return
     member_map={x["member_name"]:x["id"] for x in members}
     member_name=st.selectbox("會員名稱",list(member_map),index=None,placeholder="輸入或選擇會員")
-    if not member_name: return
+    if not member_name: usage_query_tabs() ; return
     balances=rows(client().table("purchase_balances").select("*").eq("member_id",member_map[member_name]).gt("remaining_sessions",0).order("expiry_date"))
     balances=[x for x in balances if x.get("coach_id") in set(coaches.values())]
     show_table(balances,["course_name","coach_name","total_sessions","used_sessions","remaining_sessions","remaining_amount","expiry_date","status"])
     active=[x for x in balances if x["status"]=="active"]
-    if not active: st.warning("此會員沒有可扣課的有效課程。") ; return
+    if not active: st.warning("此會員沒有可扣課的有效課程。") ; usage_query_tabs() ; return
     lookup={f'{x["course_name"]}｜成交教練：{x["coach_name"]}｜剩 {x["remaining_sessions"]} 堂｜餘額 {x["remaining_amount"]}':x for x in active}
     with st.form("consume"):
         label=st.selectbox("選擇課程",list(lookup)); selected=lookup[label]
@@ -258,6 +348,7 @@ def usage_page(me):
     history=[x for x in history if x.get("coach_id") in names]
     for x in history: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
     st.subheader("扣課紀錄"); show_table(history,["usage_date","coach_name","session_seq","deducted_amount","note"])
+    usage_query_tabs()
 
 def dashboard_page(me):
     st.header("主管 Dashboard")
