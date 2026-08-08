@@ -247,10 +247,14 @@ def usage_query_tabs():
         summary["amount"]+=float(payment["amount"])
         summary["count"]+=1
 
-    tab1,tab2,tab3=st.tabs(["課程餘額與支付","銷課統計","一個月內到期"])
+    tab1,tab2,tab3=st.tabs(["會員課程查詢","銷課統計","一個月內到期"])
     with tab1:
+        selected_coach=st.selectbox("成交教練",["全部教練"]+list(coaches),key="member_course_coach_filter")
+        filtered_balances=balances if selected_coach=="全部教練" else [
+            x for x in balances if x.get("coach_id")==coaches[selected_coach]
+        ]
         detail=[]
-        for item in balances:
+        for item in filtered_balances:
             purchase=purchase_map.get(item["purchase_id"],{})
             payment=payment_map.get(item["purchase_id"],{"amount":0.0,"count":0})
             total_amount=float(item["total_amount"])
