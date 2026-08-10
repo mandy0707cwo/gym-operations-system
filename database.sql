@@ -45,6 +45,39 @@ create table public.daily_operations (
   check (trial_conversions <= trial_visits)
 );
 
+create table public.trial_items (
+  id uuid primary key default gen_random_uuid(), entry_date date not null,
+  content text not null check (length(trim(content)) > 0),
+  hours numeric(5,2) not null check (hours > 0),
+  coach_id uuid not null references public.profiles(id),
+  created_at timestamptz not null default now(), created_by uuid not null references public.profiles(id)
+);
+
+create table public.single_sales (
+  id uuid primary key default gen_random_uuid(), entry_date date not null,
+  content text not null check (length(trim(content)) > 0),
+  hours numeric(5,2) not null check (hours > 0),
+  coach_id uuid not null references public.profiles(id),
+  created_at timestamptz not null default now(), created_by uuid not null references public.profiles(id)
+);
+
+create table public.event_supports (
+  id uuid primary key default gen_random_uuid(), entry_date date not null,
+  content text not null check (length(trim(content)) > 0),
+  hours numeric(5,2) not null check (hours > 0),
+  deducted_hours numeric(5,2) not null default 0 check (deducted_hours >= 0 and deducted_hours <= hours),
+  deduction_reason text, coach_id uuid not null references public.profiles(id),
+  created_at timestamptz not null default now(), created_by uuid not null references public.profiles(id),
+  check (deducted_hours = 0 or length(trim(deduction_reason)) > 0)
+);
+
+create table public.session_cancellations (
+  id uuid primary key default gen_random_uuid(), cancel_date date not null,
+  coach_id uuid not null references public.profiles(id),
+  cancelled_sessions integer not null check (cancelled_sessions > 0), reason text,
+  created_at timestamptz not null default now(), created_by uuid not null references public.profiles(id)
+);
+
 create table public.purchases (
   id uuid primary key default gen_random_uuid(),
   member_id uuid not null references public.members(id),
@@ -111,6 +144,10 @@ create index idx_daily_date_coach on public.daily_operations(operation_date, coa
 create index idx_purchase_member on public.purchases(member_id);
 create index idx_purchase_date_coach on public.purchases(purchase_date, coach_id);
 create index idx_usage_date_coach on public.session_usages(usage_date, coach_id);
+create index idx_trial_date_coach on public.trial_items(entry_date, coach_id);
+create index idx_single_sale_date_coach on public.single_sales(entry_date, coach_id);
+create index idx_event_date_coach on public.event_supports(entry_date, coach_id);
+create index idx_cancel_date_coach on public.session_cancellations(cancel_date, coach_id);
 
 create or replace function public.is_manager()
 returns boolean language sql stable security definer set search_path = public
@@ -185,6 +222,10 @@ alter table public.daily_operations enable row level security;
 alter table public.purchases enable row level security;
 alter table public.purchase_payments enable row level security;
 alter table public.session_usages enable row level security;
+alter table public.trial_items enable row level security;
+alter table public.single_sales enable row level security;
+alter table public.event_supports enable row level security;
+alter table public.session_cancellations enable row level security;
 
 create policy profiles_read on public.profiles for select to authenticated using (active);
 create policy profiles_admin_update on public.profiles for update to authenticated using (public.is_admin()) with check (public.is_admin());
@@ -209,6 +250,15 @@ create policy usage_read on public.session_usages for select to authenticated us
   exists(select 1 from public.purchases p where p.id=purchase_id and p.coach_id=auth.uid())
 );
 create policy usage_insert on public.session_usages for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
+
+create policy trial_read on public.trial_items for select to authenticated using (coach_id=auth.uid() or public.is_manager());
+create policy trial_insert on public.trial_items for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
+create policy single_sale_read on public.single_sales for select to authenticated using (coach_id=auth.uid() or public.is_manager());
+create policy single_sale_insert on public.single_sales for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
+create policy event_read on public.event_supports for select to authenticated using (coach_id=auth.uid() or public.is_manager());
+create policy event_insert on public.event_supports for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
+create policy cancellation_read on public.session_cancellations for select to authenticated using (coach_id=auth.uid() or public.is_manager());
+create policy cancellation_insert on public.session_cancellations for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
 
 grant select on public.purchase_balances to authenticated;
 grant execute on function public.consume_session(uuid,date,uuid,text) to authenticated;

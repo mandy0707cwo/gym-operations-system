@@ -22,6 +22,9 @@ LABELS = {
     "course_name":"課程名稱", "total_sessions":"原始堂數", "session_hours":"每堂課時數",
     "remaining_sessions":"剩餘堂數", "remaining_amount":"剩餘金額",
     "usage_date":"銷課日期", "session_seq":"第幾堂", "deducted_amount":"扣課金額",
+    "entry_date":"日期", "content":"內容", "hours":"時數",
+    "deducted_hours":"應扣除時間", "deduction_reason":"扣除原因",
+    "cancel_date":"取消日期", "cancelled_sessions":"銷課取消堂數", "reason":"取消原因",
 }
 ROLE_LABELS = {"coach": "教練", "shared_coach": "共用教練帳號", "manager": "主管", "admin": "系統管理員"}
 USERNAME_RE = re.compile(r"^[a-z0-9_]{3,30}$")
@@ -133,34 +136,48 @@ def daily_page(me):
     st.header("每日營運")
     coaches = coach_options()
     allowed = coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
-    with st.form("daily"):
-        c1,c2 = st.columns(2)
-        op_date = c1.date_input("日期", date.today())
-        coach_name = c2.selectbox("教練", list(allowed))
-        st.caption("每日上課堂數由銷課紀錄自動統計，不需手動輸入。")
-        c1,c2,c3 = st.columns(3)
-        cancelled = c1.number_input("銷課取消堂數",0,100,0)
-        trials = c2.number_input("體驗人次",0,100,0)
-        converted = c3.number_input("體驗成交人次",0,100,0)
-        note = st.text_area("備註")
-        save = st.form_submit_button("儲存")
-    if save:
-        if converted > trials:
-            st.error("體驗成交人次不可大於體驗人次。")
-        else:
-            usage_rows=rows(client().table("session_usages").select("id").eq("usage_date",str(op_date)).eq("coach_id",allowed[coach_name]))
-            held=len(usage_rows)
-            payload={"operation_date":str(op_date),"coach_id":allowed[coach_name],"classes_held":held,
-                     "classes_cancelled":cancelled,"trial_visits":trials,"trial_conversions":converted,"note":note or None}
-            try:
-                client().table("daily_operations").upsert(payload,on_conflict="operation_date,coach_id").execute()
-                st.success("每日營運資料已儲存；同日同教練資料會更新而非重複新增。")
-            except Exception as exc: st.error(f"儲存失敗：{exc}")
-    data=rows(client().table("daily_operations").select("operation_date,coach_id,classes_held,classes_cancelled,trial_visits,trial_conversions,note").order("operation_date",desc=True).limit(100))
     names={v:k for k,v in coaches.items()}
-    data=[x for x in data if x.get("coach_id") in names]
-    for x in data: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
-    show_table(data,["operation_date","coach_name","classes_held","classes_cancelled","trial_visits","trial_conversions","note"])
+    tab1,tab2,tab3=st.tabs(["體驗項目","單堂銷售","活動支援"])
+
+    def standard_entry(tab, table_name, form_key, content_label):
+        with tab:
+            with st.form(form_key,clear_on_submit=True):
+                c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today()); coach_name=c2.selectbox("教練",list(allowed))
+                c1,c2=st.columns(2); content=c1.text_input(content_label); hours=c2.number_input("時數",0.25,24.0,1.0,step=0.25)
+                save=st.form_submit_button("新增紀錄")
+            if save:
+                if not content.strip(): st.error(f"{content_label}不可空白。")
+                else:
+                    try:
+                        client().table(table_name).insert({"entry_date":str(entry_date),"content":content.strip(),"hours":hours,"coach_id":allowed[coach_name],"created_by":me["id"]}).execute()
+                        st.success("紀錄已新增。"); st.rerun()
+                    except Exception as exc: st.error(f"新增失敗：{exc}")
+            data=rows(client().table(table_name).select("entry_date,content,hours,coach_id").order("entry_date",desc=True).limit(100))
+            data=[x for x in data if x.get("coach_id") in names]
+            for x in data: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
+            show_table(data,["entry_date","content","hours","coach_name"])
+
+    standard_entry(tab1,"trial_items","trial_item_form","體驗內容")
+    standard_entry(tab2,"single_sales","single_sale_form","銷售內容")
+    with tab3:
+        with st.form("event_support_form",clear_on_submit=True):
+            c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today(),key="event_date"); coach_name=c2.selectbox("教練",list(allowed),key="event_coach")
+            content=st.text_input("活動內容")
+            c1,c2=st.columns(2); hours=c1.number_input("時數",0.25,24.0,1.0,step=0.25,key="event_hours"); deducted_hours=c2.number_input("應扣除時間",0.0,24.0,0.0,step=0.25)
+            reason=st.text_input("扣除原因"); save=st.form_submit_button("新增紀錄")
+        if save:
+            if not content.strip(): st.error("活動內容不可空白。")
+            elif deducted_hours>hours: st.error("應扣除時間不可大於活動時數。")
+            elif deducted_hours>0 and not reason.strip(): st.error("有扣除時間時必須填寫扣除原因。")
+            else:
+                try:
+                    client().table("event_supports").insert({"entry_date":str(entry_date),"content":content.strip(),"hours":hours,"coach_id":allowed[coach_name],"deducted_hours":deducted_hours,"deduction_reason":reason.strip() or None,"created_by":me["id"]}).execute()
+                    st.success("紀錄已新增。"); st.rerun()
+                except Exception as exc: st.error(f"新增失敗：{exc}")
+        data=rows(client().table("event_supports").select("entry_date,content,hours,deducted_hours,deduction_reason,coach_id").order("entry_date",desc=True).limit(100))
+        data=[x for x in data if x.get("coach_id") in names]
+        for x in data: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
+        show_table(data,["entry_date","content","coach_name","hours","deducted_hours","deduction_reason"])
 
 def purchase_page(me):
     st.header("課程購買")
@@ -333,6 +350,19 @@ def usage_query_tabs():
 def usage_page(me):
     st.header("銷課表")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
+    with st.expander("新增銷課取消紀錄",expanded=False):
+        with st.form("session_cancellation",clear_on_submit=True):
+            c1,c2,c3=st.columns(3); cancel_date=c1.date_input("取消日期",date.today()); cancel_coach=c2.selectbox("教練",list(allowed)); cancel_count=c3.number_input("銷課取消堂數",1,100,1)
+            cancel_reason=st.text_input("取消原因"); add_cancel=st.form_submit_button("新增取消紀錄")
+        if add_cancel:
+            try:
+                client().table("session_cancellations").insert({"cancel_date":str(cancel_date),"coach_id":allowed[cancel_coach],"cancelled_sessions":cancel_count,"reason":cancel_reason.strip() or None,"created_by":me["id"]}).execute()
+                st.success("銷課取消紀錄已新增。"); st.rerun()
+            except Exception as exc: st.error(f"新增失敗：{exc}")
+        cancellations=rows(client().table("session_cancellations").select("cancel_date,coach_id,cancelled_sessions,reason").order("cancel_date",desc=True).limit(100))
+        coach_names={v:k for k,v in coaches.items()}; cancellations=[x for x in cancellations if x.get("coach_id") in coach_names]
+        for x in cancellations: x["coach_name"]=coach_names.get(x.pop("coach_id"),"未知")
+        show_table(cancellations,["cancel_date","coach_name","cancelled_sessions","reason"])
     members=rows(client().table("members").select("id,member_name").eq("active",True).order("member_name"))
     if not members: st.info("請先建立課程購買紀錄。") ; usage_query_tabs() ; return
     member_map={x["member_name"]:x["id"] for x in members}
@@ -371,7 +401,7 @@ def dashboard_page(me):
     selected=c3.multiselect("教練",list(coaches),default=list(coaches))
     if start>end: st.error("開始日期不可晚於結束日期。") ; return
     ids=[coaches[x] for x in selected]
-    ops=rows(client().table("daily_operations").select("*").gte("operation_date",str(start)).lte("operation_date",str(end)))
+    cancellations=rows(client().table("session_cancellations").select("coach_id,cancelled_sessions,cancel_date").gte("cancel_date",str(start)).lte("cancel_date",str(end)))
     purchases=rows(client().table("purchases").select("id,coach_id,purchase_kind,total_sessions,total_amount,purchase_date").gte("purchase_date",str(start)).lte("purchase_date",str(end)))
     usages=rows(client().table("session_usages").select("coach_id,deducted_amount,usage_date").gte("usage_date",str(start)).lte("usage_date",str(end)))
     payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").gte("paid_date",str(start)).lte("paid_date",str(end)))
@@ -382,10 +412,9 @@ def dashboard_page(me):
         payment_purchase_map={x["id"]:x["coach_id"] for x in payment_purchases}
     names={v:k for k,v in coaches.items()}; result=[]
     for cid in ids:
-        o=[x for x in ops if x["coach_id"]==cid]; p=[x for x in purchases if x["coach_id"]==cid]
+        p=[x for x in purchases if x["coach_id"]==cid]
         u=[x for x in usages if x["coach_id"]==cid]
-        cancelled=sum(x["classes_cancelled"] for x in o)
-        trials=sum(x["trial_visits"] for x in o); converted=sum(x["trial_conversions"] for x in o)
+        cancelled=sum(x["cancelled_sessions"] for x in cancellations if x["coach_id"]==cid)
         sessions=sum(x["total_sessions"] for x in p); amount=sum(float(x["total_amount"]) for x in p)
         renewal_count=sum(1 for x in p if x["purchase_kind"]=="renewal")
         received=sum(float(x["amount"]) for x in payments if payment_purchase_map.get(x["purchase_id"])==cid)
@@ -401,7 +430,7 @@ def dashboard_page(me):
     total_purchase_count=len([x for x in purchases if x["coach_id"] in ids])
     total_renewals=len([x for x in purchases if x["coach_id"] in ids and x["purchase_kind"]=="renewal"])
     overall_renewal=total_renewals/total_purchase_count if total_purchase_count else None
-    total_cancelled=sum(x["classes_cancelled"] for x in ops if x["coach_id"] in ids)
+    total_cancelled=sum(x["cancelled_sessions"] for x in cancellations if x["coach_id"] in ids)
     overall_cancel_rate=total_cancelled/(totals["銷課堂數"]+total_cancelled) if totals["銷課堂數"]+total_cancelled else None
     average_unit=totals["成交總金額"]/totals["成交堂數"] if totals["成交堂數"] else None
     a,b,c,d=st.columns(4)
