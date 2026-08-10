@@ -833,12 +833,20 @@ def member_course_io_page(me):
     profiles=rows(admin.table("profiles").select("id,username,display_name,role"))
     coach_profiles=[x for x in profiles if x["role"] in ("coach","manager")]
     id_to_username={x["id"]:x.get("username") or x["display_name"] for x in coach_profiles}
+    id_to_display_name={x["id"]:x["display_name"] for x in coach_profiles}
     username_to_id={v:k for k,v in id_to_username.items()}
     members=rows(admin.table("members").select("id,member_name"))
     member_names={x["id"]:x["member_name"] for x in members}
 
     st.subheader("匯出資料報表")
     purchases=rows(admin.table("purchases").select("*").order("purchase_date"))
+    purchases=sorted(purchases,key=lambda x:(str(x["purchase_date"]),str(x.get("created_at") or ""),str(x["id"])))
+    daily_purchase_sequences={}
+    purchase_code_map={}
+    for purchase in purchases:
+        purchase_date_key=str(purchase["purchase_date"])
+        daily_purchase_sequences[purchase_date_key]=daily_purchase_sequences.get(purchase_date_key,0)+1
+        purchase_code_map[purchase["id"]]=f'{purchase_date_key.replace("-","")}-{daily_purchase_sequences[purchase_date_key]:03d}'
     payments=rows(admin.table("purchase_payments").select("purchase_id,amount,paid_date"))
     paid_map={}
     paid_date_map={}
@@ -847,8 +855,8 @@ def member_course_io_page(me):
         paid_date_map[x["purchase_id"]]=max(str(x["paid_date"]),paid_date_map.get(x["purchase_id"],""))
     course_rows=[]
     for x in purchases:
-        course_rows.append({"purchase_id":x["id"],"member_name":member_names.get(x["member_id"],""),
-            "purchase_kind":x["purchase_kind"],"coach_username":id_to_username.get(x["coach_id"],""),
+        course_rows.append({"purchase_id":purchase_code_map[x["id"]],"member_name":member_names.get(x["member_id"],""),
+            "purchase_kind":x["purchase_kind"],"coach_username":id_to_display_name.get(x["coach_id"],""),
             "course_name":x["course_name"],"total_sessions":x["total_sessions"],"session_hours":x.get("session_hours",1),
             "total_amount":x["total_amount"],"purchase_date":x["purchase_date"],"expiry_date":x["expiry_date"],
             "payment_plan":x["payment_plan"],"installment_count":x["installment_count"],
@@ -858,16 +866,16 @@ def member_course_io_page(me):
     usage_rows=[]
     for x in usages:
         p=purchase_map.get(x["purchase_id"],{})
-        usage_rows.append({"usage_id":x["id"],"purchase_id":x["purchase_id"],
+        usage_rows.append({"usage_id":x["id"],"purchase_id":purchase_code_map.get(x["purchase_id"],""),
             "member_name":member_names.get(p.get("member_id"),""),"course_name":p.get("course_name",""),
-            "usage_date":x["usage_date"],"coach_username":id_to_username.get(x["coach_id"],""),
+            "usage_date":x["usage_date"],"coach_username":id_to_display_name.get(x["coach_id"],""),
             "session_seq":x["session_seq"],"deducted_amount":x["deducted_amount"],"note":x.get("note") or ""})
     trial_rows=rows(admin.table("trial_items").select("entry_date,member_name,content,hours,coach_id,created_at").order("entry_date"))
     single_sale_rows=rows(admin.table("single_sales").select("entry_date,content,hours,coach_id,created_at").order("entry_date"))
     event_rows=rows(admin.table("event_supports").select("entry_date,content,hours,deducted_hours,deduction_reason,coach_id,created_at").order("entry_date"))
     for collection in (trial_rows,single_sale_rows,event_rows):
         for item in collection:
-            item["coach_username"]=id_to_username.get(item.pop("coach_id"),"")
+            item["coach_username"]=id_to_display_name.get(item.pop("coach_id"),"")
     report=_excel_bytes({"課程購買":pd.DataFrame(course_rows),"銷課表":pd.DataFrame(usage_rows),
         "體驗項目":pd.DataFrame(trial_rows),"單堂銷售":pd.DataFrame(single_sale_rows),"活動支援":pd.DataFrame(event_rows)})
     st.download_button("下載資料匯出報表",report,file_name=f"健身房資料匯出報表_{date.today()}.xlsx",
