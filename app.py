@@ -416,6 +416,7 @@ def dashboard_page(me):
     if start>end: st.error("開始日期不可晚於結束日期。") ; return
     ids=[coaches[x] for x in selected]
     cancellations=rows(client().table("session_cancellations").select("coach_id,cancelled_sessions,cancel_date").gte("cancel_date",str(start)).lte("cancel_date",str(end)))
+    trials=rows(client().table("trial_items").select("coach_id,member_name,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
     purchases=rows(client().table("purchases").select("id,coach_id,purchase_kind,total_sessions,total_amount,purchase_date").gte("purchase_date",str(start)).lte("purchase_date",str(end)))
     usages=rows(client().table("session_usages").select("coach_id,deducted_amount,usage_date").gte("usage_date",str(start)).lte("usage_date",str(end)))
     payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").gte("paid_date",str(start)).lte("paid_date",str(end)))
@@ -430,28 +431,38 @@ def dashboard_page(me):
         u=[x for x in usages if x["coach_id"]==cid]
         cancelled=sum(x["cancelled_sessions"] for x in cancellations if x["coach_id"]==cid)
         sessions=sum(x["total_sessions"] for x in p); amount=sum(float(x["total_amount"]) for x in p)
+        trial_names={str(x.get("member_name") or "").strip().casefold() for x in trials if x["coach_id"]==cid and str(x.get("member_name") or "").strip()}
+        trial_count=len(trial_names)
+        first_count=sum(1 for x in p if x["purchase_kind"]=="first")
         renewal_count=sum(1 for x in p if x["purchase_kind"]=="renewal")
         received=sum(float(x["amount"]) for x in payments if payment_purchase_map.get(x["purchase_id"])==cid)
         used_sessions=len(u); used_amount=sum(float(x["deducted_amount"]) for x in u)
         result.append({"教練":names[cid],"銷課堂數":used_sessions,"銷課金額":used_amount,
                        "銷課取消率":cancelled/(used_sessions+cancelled) if used_sessions+cancelled else None,
+                       "體驗人次":trial_count,"體驗成交率":first_count/trial_count if trial_count else None,
                        "續約率":renewal_count/len(p) if p else None,"成交堂數":sessions,
                        "成交總金額":amount,"實際預收金額":received,
                        "平均每堂單價":amount/sessions if sessions else None})
     df=pd.DataFrame(result)
     if df.empty: st.info("沒有可顯示的資料。") ; return
     totals=df[["成交堂數","成交總金額","實際預收金額","銷課堂數","銷課金額"]].sum()
+    overall_trial_names={str(x.get("member_name") or "").strip().casefold() for x in trials if x["coach_id"] in ids and str(x.get("member_name") or "").strip()}
+    total_trial_count=len(overall_trial_names)
+    total_first_count=len([x for x in purchases if x["coach_id"] in ids and x["purchase_kind"]=="first"])
+    overall_trial_conversion=total_first_count/total_trial_count if total_trial_count else None
     total_purchase_count=len([x for x in purchases if x["coach_id"] in ids])
     total_renewals=len([x for x in purchases if x["coach_id"] in ids and x["purchase_kind"]=="renewal"])
     overall_renewal=total_renewals/total_purchase_count if total_purchase_count else None
     total_cancelled=sum(x["cancelled_sessions"] for x in cancellations if x["coach_id"] in ids)
     overall_cancel_rate=total_cancelled/(totals["銷課堂數"]+total_cancelled) if totals["銷課堂數"]+total_cancelled else None
     average_unit=totals["成交總金額"]/totals["成交堂數"] if totals["成交堂數"] else None
-    a,b,c,d=st.columns(4)
+    a,b,c,d,e,f=st.columns(6)
     a.metric("銷課堂數",f'{totals["銷課堂數"]:,.0f}')
     b.metric("銷課金額",f'TWD {totals["銷課金額"]:,.0f}')
     c.metric("銷課取消率",f'{overall_cancel_rate:.1%}' if overall_cancel_rate is not None else "—")
-    d.metric("續約率",f'{overall_renewal:.1%}' if overall_renewal is not None else "—")
+    d.metric("體驗人次",f'{total_trial_count:,.0f}')
+    e.metric("體驗成交率",f'{overall_trial_conversion:.1%}' if overall_trial_conversion is not None else "—")
+    f.metric("續約率",f'{overall_renewal:.1%}' if overall_renewal is not None else "—")
     a2,b2,c2,d2=st.columns(4)
     a2.metric("成交堂數",f'{totals["成交堂數"]:,.0f}')
     b2.metric("成交總金額",f'TWD {totals["成交總金額"]:,.0f}')
@@ -459,13 +470,15 @@ def dashboard_page(me):
     d2.metric("平均每堂單價",f'TWD {average_unit:,.0f}' if average_unit is not None else "—")
     display_df=df.copy()
     display_df["銷課取消率"]=display_df["銷課取消率"]*100
+    display_df["體驗成交率"]=display_df["體驗成交率"]*100
     display_df["續約率"]=display_df["續約率"]*100
-    display_df=display_df[["教練","銷課堂數","銷課金額","銷課取消率","續約率","成交堂數","成交總金額","實際預收金額","平均每堂單價"]]
-    st.dataframe(display_df,hide_index=True,use_container_width=True,column_config={"銷課取消率":st.column_config.NumberColumn(format="%.1f%%"),"續約率":st.column_config.NumberColumn(format="%.1f%%"),"成交總金額":st.column_config.NumberColumn(format="TWD %.0f"),"實際預收金額":st.column_config.NumberColumn(format="TWD %.0f"),"銷課金額":st.column_config.NumberColumn(format="TWD %.0f"),"平均每堂單價":st.column_config.NumberColumn(format="TWD %.0f")})
+    display_df=display_df[["教練","銷課堂數","銷課金額","銷課取消率","體驗人次","體驗成交率","續約率","成交堂數","成交總金額","實際預收金額","平均每堂單價"]]
+    st.dataframe(display_df,hide_index=True,use_container_width=True,column_config={"銷課取消率":st.column_config.NumberColumn(format="%.1f%%"),"體驗成交率":st.column_config.NumberColumn(format="%.1f%%"),"續約率":st.column_config.NumberColumn(format="%.1f%%"),"成交總金額":st.column_config.NumberColumn(format="TWD %.0f"),"實際預收金額":st.column_config.NumberColumn(format="TWD %.0f"),"銷課金額":st.column_config.NumberColumn(format="TWD %.0f"),"平均每堂單價":st.column_config.NumberColumn(format="TWD %.0f")})
     left,right=st.columns(2)
-    count_metric=left.selectbox("堂數指標",["成交堂數","銷課堂數"],key="dashboard_count_metric")
+    count_metric=left.selectbox("數量指標",["成交堂數","銷課堂數","體驗人次"],key="dashboard_count_metric")
     amount_metric=right.selectbox("金額類型",["成交總金額","銷課金額"],key="dashboard_amount_metric")
-    left.plotly_chart(px.bar(df,x="教練",y=count_metric,title=f"{count_metric}比較（{start} 至 {end}）",labels={count_metric:"堂數"}),use_container_width=True)
+    count_unit="人次" if count_metric=="體驗人次" else "堂數"
+    left.plotly_chart(px.bar(df,x="教練",y=count_metric,title=f"{count_metric}比較（{start} 至 {end}）",labels={count_metric:count_unit}),use_container_width=True)
     right.plotly_chart(px.bar(df,x="教練",y=amount_metric,title=f"{amount_metric}比較（{start} 至 {end}）",labels={amount_metric:"TWD"}),use_container_width=True)
 
 def account_admin_page(me):
