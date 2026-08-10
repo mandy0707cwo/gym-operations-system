@@ -30,6 +30,14 @@ create table public.course_catalog (
   created_at timestamptz not null default now()
 );
 
+create table public.operation_item_catalog (
+  id uuid primary key default gen_random_uuid(),
+  item_type text not null check (item_type in ('trial','single_sale')),
+  item_name text not null check (length(trim(item_name)) > 0),
+  created_at timestamptz not null default now(),
+  unique (item_type, item_name)
+);
+
 create table public.daily_operations (
   id uuid primary key default gen_random_uuid(),
   operation_date date not null,
@@ -74,7 +82,7 @@ create table public.event_supports (
 create table public.session_cancellations (
   id uuid primary key default gen_random_uuid(), cancel_date date not null,
   coach_id uuid not null references public.profiles(id),
-  cancelled_sessions integer not null check (cancelled_sessions > 0), reason text,
+  cancelled_sessions integer not null check (cancelled_sessions >= 0), reason text,
   created_at timestamptz not null default now(), created_by uuid not null references public.profiles(id)
 );
 
@@ -223,6 +231,7 @@ alter table public.purchases enable row level security;
 alter table public.purchase_payments enable row level security;
 alter table public.session_usages enable row level security;
 alter table public.trial_items enable row level security;
+alter table public.operation_item_catalog enable row level security;
 alter table public.single_sales enable row level security;
 alter table public.event_supports enable row level security;
 alter table public.session_cancellations enable row level security;
@@ -252,6 +261,7 @@ create policy usage_read on public.session_usages for select to authenticated us
 create policy usage_insert on public.session_usages for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
 
 create policy trial_read on public.trial_items for select to authenticated using (coach_id=auth.uid() or public.is_manager());
+create policy operation_item_catalog_read on public.operation_item_catalog for select to authenticated using (true);
 create policy trial_insert on public.trial_items for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
 create policy single_sale_read on public.single_sales for select to authenticated using (coach_id=auth.uid() or public.is_manager());
 create policy single_sale_insert on public.single_sales for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));

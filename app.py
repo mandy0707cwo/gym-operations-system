@@ -139,26 +139,29 @@ def daily_page(me):
     names={v:k for k,v in coaches.items()}
     tab1,tab2,tab3=st.tabs(["體驗項目","單堂銷售","活動支援"])
 
-    def standard_entry(tab, table_name, form_key, content_label):
+    def standard_entry(tab, table_name, form_key, content_label, catalog_type):
         with tab:
+            catalog=rows(client().table("operation_item_catalog").select("item_name").eq("item_type",catalog_type).order("item_name"))
+            item_names=[x["item_name"] for x in catalog]
+            if not item_names:
+                st.warning(f"尚未建立{content_label}選項，請由系統管理員到「資料管理」新增。")
+                return
             with st.form(form_key,clear_on_submit=True):
                 c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today()); coach_name=c2.selectbox("教練",list(allowed))
-                c1,c2=st.columns(2); content=c1.text_input(content_label); hours=c2.number_input("時數",0.25,24.0,1.0,step=0.25)
+                c1,c2=st.columns(2); content=c1.selectbox(content_label,item_names); hours=c2.number_input("時數",0.25,24.0,1.0,step=0.25)
                 save=st.form_submit_button("新增紀錄")
             if save:
-                if not content.strip(): st.error(f"{content_label}不可空白。")
-                else:
-                    try:
-                        client().table(table_name).insert({"entry_date":str(entry_date),"content":content.strip(),"hours":hours,"coach_id":allowed[coach_name],"created_by":me["id"]}).execute()
-                        st.success("紀錄已新增。"); st.rerun()
-                    except Exception as exc: st.error(f"新增失敗：{exc}")
+                try:
+                    client().table(table_name).insert({"entry_date":str(entry_date),"content":content,"hours":hours,"coach_id":allowed[coach_name],"created_by":me["id"]}).execute()
+                    st.success("紀錄已新增。"); st.rerun()
+                except Exception as exc: st.error(f"新增失敗：{exc}")
             data=rows(client().table(table_name).select("entry_date,content,hours,coach_id").order("entry_date",desc=True).limit(100))
             data=[x for x in data if x.get("coach_id") in names]
             for x in data: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
             show_table(data,["entry_date","content","hours","coach_name"])
 
-    standard_entry(tab1,"trial_items","trial_item_form","體驗內容")
-    standard_entry(tab2,"single_sales","single_sale_form","銷售內容")
+    standard_entry(tab1,"trial_items","trial_item_form","體驗內容","trial")
+    standard_entry(tab2,"single_sales","single_sale_form","銷售內容","single_sale")
     with tab3:
         with st.form("event_support_form",clear_on_submit=True):
             c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today(),key="event_date"); coach_name=c2.selectbox("教練",list(allowed),key="event_coach")
@@ -352,7 +355,7 @@ def usage_page(me):
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
     with st.expander("新增銷課取消紀錄",expanded=False):
         with st.form("session_cancellation",clear_on_submit=True):
-            c1,c2,c3=st.columns(3); cancel_date=c1.date_input("取消日期",date.today()); cancel_coach=c2.selectbox("教練",list(allowed)); cancel_count=c3.number_input("銷課取消堂數",1,100,1)
+            c1,c2,c3=st.columns(3); cancel_date=c1.date_input("取消日期",date.today()); cancel_coach=c2.selectbox("教練",list(allowed)); cancel_count=c3.number_input("銷課取消堂數",0,100,0)
             cancel_reason=st.text_input("取消原因"); add_cancel=st.form_submit_button("新增取消紀錄")
         if add_cancel:
             try:
@@ -607,6 +610,61 @@ def course_admin_page(me):
                 admin.table("course_catalog").delete().eq("id",course_labels[selected_course]).execute()
                 st.success(f"已刪除課程名稱：{selected_course}")
                 st.rerun()
+            except Exception as exc:
+                st.error(f"刪除失敗：{exc}")
+
+def operation_item_admin_page(me, item_type, title):
+    st.subheader(title)
+    if me["role"] != "admin":
+        st.warning("此功能僅限系統管理員使用。")
+        return
+    admin=admin_client()
+    if admin is None:
+        st.error("尚未設定 SUPABASE_SECRET_KEY。")
+        return
+    with st.form(f"add_operation_item_{item_type}",clear_on_submit=True):
+        new_name=st.text_input("新增項目名稱").strip()
+        add_item=st.form_submit_button("新增項目")
+    if add_item:
+        if not new_name:
+            st.error("項目名稱不可空白。")
+        else:
+            try:
+                admin.table("operation_item_catalog").insert({"item_type":item_type,"item_name":new_name}).execute()
+                st.success(f"已新增：{new_name}"); st.rerun()
+            except Exception as exc:
+                st.error(f"新增失敗，請確認名稱是否重複：{exc}")
+    items=rows(admin.table("operation_item_catalog").select("id,item_name,created_at").eq("item_type",item_type).order("item_name"))
+    if not items:
+        st.info("目前尚未建立項目。")
+        return
+    show_table(items,["item_name","created_at"])
+    item_map={x["item_name"]:x["id"] for x in items}
+    with st.form(f"edit_operation_item_{item_type}"):
+        selected=st.selectbox("選擇項目",list(item_map))
+        edited_name=st.text_input("修改後名稱",value=selected).strip()
+        update_item=st.form_submit_button("儲存修改")
+    if update_item:
+        if not edited_name:
+            st.error("項目名稱不可空白。")
+        else:
+            try:
+                admin.table("operation_item_catalog").update({"item_name":edited_name}).eq("id",item_map[selected]).execute()
+                st.success("項目已修改。既有歷史紀錄仍保留原內容。")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"修改失敗，請確認名稱是否重複：{exc}")
+    with st.form(f"delete_operation_item_{item_type}"):
+        delete_name=st.selectbox("選擇要刪除的項目",list(item_map),key=f"delete_select_{item_type}")
+        confirm=st.checkbox("我確認刪除此下拉選項；既有歷史紀錄不會被刪除。")
+        delete_item=st.form_submit_button("刪除項目")
+    if delete_item:
+        if not confirm:
+            st.error("請先勾選確認。")
+        else:
+            try:
+                admin.table("operation_item_catalog").delete().eq("id",item_map[delete_name]).execute()
+                st.success(f"已刪除選項：{delete_name}"); st.rerun()
             except Exception as exc:
                 st.error(f"刪除失敗：{exc}")
 
@@ -917,10 +975,12 @@ def data_management_page(me):
     st.header("資料管理")
     if me["role"]!="admin": st.warning("此頁僅限系統管理員使用。"); return
     if admin_client() is None: st.error("尚未設定 SUPABASE_SECRET_KEY。"); return
-    tab1,tab2,tab3=st.tabs(["課程名稱管理","資料匯入／匯出","查詢／修改／刪除"])
+    tab1,tab2,tab3,tab4,tab5=st.tabs(["課程名稱管理","體驗項目管理","單堂銷售管理","資料匯入／匯出","查詢／修改／刪除"])
     with tab1: course_admin_page(me)
-    with tab2: member_course_io_page(me)
-    with tab3: record_admin_page(me)
+    with tab2: operation_item_admin_page(me,"trial","體驗項目管理")
+    with tab3: operation_item_admin_page(me,"single_sale","單堂銷售管理")
+    with tab4: member_course_io_page(me)
+    with tab5: record_admin_page(me)
 
 user=login(); me=profile(user.id)
 with st.sidebar:
