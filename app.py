@@ -952,8 +952,24 @@ def _sync_daily_classes(admin, operation_date, coach_id):
 def record_admin_page(me):
     admin=admin_client(); coaches=rows(admin.table("profiles").select("id,display_name,role"))
     coach_map={x["display_name"]:x["id"] for x in coaches if x["role"] in ("coach","manager")}; id_name={v:k for k,v in coach_map.items()}
-    data_type=st.selectbox("資料類型",["體驗項目","單堂銷售","活動支援","課程購買","銷課表"],key="manage_data_type")
-    if data_type=="體驗項目":
+    data_type=st.selectbox("資料類型",["體驗項目","單堂銷售","活動支援","銷課取消紀錄","課程購買","銷課表"],key="manage_data_type")
+    if data_type=="銷課取消紀錄":
+        with st.expander("新增銷課取消紀錄",expanded=False):
+            with st.form("admin_add_session_cancellation",clear_on_submit=True):
+                c1,c2,c3=st.columns(3)
+                new_cancel_date=c1.date_input("取消日期",date.today(),key="admin_cancel_date")
+                new_cancel_coach=c2.selectbox("教練",list(coach_map),key="admin_cancel_coach")
+                new_cancel_count=c3.number_input("銷課取消堂數",0,100,0,key="admin_cancel_count")
+                new_cancel_reason=st.text_input("取消原因",key="admin_cancel_reason")
+                add_cancel=st.form_submit_button("新增紀錄")
+            if add_cancel:
+                try:
+                    admin.table("session_cancellations").insert({"cancel_date":str(new_cancel_date),"coach_id":coach_map[new_cancel_coach],"cancelled_sessions":new_cancel_count,"reason":new_cancel_reason.strip() or None,"created_by":me["id"]}).execute()
+                    st.success("銷課取消紀錄已新增。"); st.rerun()
+                except Exception as exc: st.error(f"新增失敗：{exc}")
+        records=rows(admin.table("session_cancellations").select("*").order("cancel_date",desc=True).limit(500))
+        labels={f'{x["cancel_date"]}｜{id_name.get(x["coach_id"],"未知")}｜取消 {x["cancelled_sessions"]} 堂｜{x["id"][:8]}':x for x in records}
+    elif data_type=="體驗項目":
         records=rows(admin.table("trial_items").select("*").order("entry_date",desc=True).limit(500))
         labels={f'{x["entry_date"]}｜{x.get("member_name") or "未填姓名"}｜{id_name.get(x["coach_id"],"未知")}｜{x["id"][:8]}':x for x in records}
     elif data_type=="單堂銷售":
@@ -971,13 +987,17 @@ def record_admin_page(me):
     if not labels: st.info("目前沒有可管理的資料。"); return
     selected=st.selectbox("選擇紀錄",list(labels)); record=labels[selected]
     record_coach_map=dict(coach_map)
-    if data_type in ("體驗項目","單堂銷售","活動支援","銷課表") and record.get("coach_id") not in record_coach_map.values():
+    if data_type in ("體驗項目","單堂銷售","活動支援","銷課取消紀錄","銷課表") and record.get("coach_id") not in record_coach_map.values():
         historical_name=id_name.get(record.get("coach_id"),f'歷史帳號 {str(record.get("coach_id",""))[:8]}')
         record_coach_map[f'{historical_name}（歷史資料）']=record.get("coach_id")
     coach_names=list(record_coach_map)
     current_coach_index=list(record_coach_map.values()).index(record.get("coach_id")) if record.get("coach_id") in record_coach_map.values() else 0
     with st.form("record_edit"):
-        if data_type=="體驗項目":
+        if data_type=="銷課取消紀錄":
+            c1,c2,c3=st.columns(3)
+            d=c1.date_input("取消日期",pd.to_datetime(record["cancel_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index); cancelled_sessions=c3.number_input("銷課取消堂數",0,100,int(record["cancelled_sessions"]))
+            reason=st.text_input("取消原因",record.get("reason") or "")
+        elif data_type=="體驗項目":
             c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["entry_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
             member_name=st.text_input("體驗會員姓名",record.get("member_name") or ""); content=st.text_input("體驗內容",record["content"]); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25)
         elif data_type=="單堂銷售":
@@ -995,7 +1015,9 @@ def record_admin_page(me):
         update=st.form_submit_button("儲存修改")
     if update:
         try:
-            if data_type=="體驗項目":
+            if data_type=="銷課取消紀錄":
+                admin.table("session_cancellations").update({"cancel_date":str(d),"coach_id":record_coach_map[coach],"cancelled_sessions":cancelled_sessions,"reason":reason.strip() or None}).eq("id",record["id"]).execute()
+            elif data_type=="體驗項目":
                 if not member_name.strip() or not content.strip(): raise ValueError("體驗會員姓名及體驗內容不可空白")
                 admin.table("trial_items").update({"entry_date":str(d),"coach_id":record_coach_map[coach],"member_name":member_name.strip(),"content":content.strip(),"hours":hours}).eq("id",record["id"]).execute()
             elif data_type=="單堂銷售":
@@ -1020,7 +1042,8 @@ def record_admin_page(me):
         if not confirm: st.error("請先勾選刪除確認。")
         else:
             try:
-                if data_type=="體驗項目": admin.table("trial_items").delete().eq("id",record["id"]).execute()
+                if data_type=="銷課取消紀錄": admin.table("session_cancellations").delete().eq("id",record["id"]).execute()
+                elif data_type=="體驗項目": admin.table("trial_items").delete().eq("id",record["id"]).execute()
                 elif data_type=="單堂銷售": admin.table("single_sales").delete().eq("id",record["id"]).execute()
                 elif data_type=="活動支援": admin.table("event_supports").delete().eq("id",record["id"]).execute()
                 elif data_type=="課程購買":
@@ -1037,7 +1060,7 @@ def data_management_page(me):
     st.header("資料管理")
     if me["role"]!="admin": st.warning("此頁僅限系統管理員使用。"); return
     if admin_client() is None: st.error("尚未設定 SUPABASE_SECRET_KEY。"); return
-    tab1,tab2,tab3,tab4,tab5=st.tabs(["課程名稱管理","體驗項目管理","單堂銷售管理","資料匯入／匯出","查詢／修改／刪除"])
+    tab1,tab2,tab3,tab4,tab5=st.tabs(["課程名稱管理","體驗項目管理","單堂銷售管理","資料匯入／匯出","新增／修改／刪除"])
     with tab1: course_admin_page(me)
     with tab2: operation_item_admin_page(me,"trial","體驗項目管理")
     with tab3: operation_item_admin_page(me,"single_sale","單堂銷售管理")
