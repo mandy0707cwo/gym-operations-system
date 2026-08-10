@@ -19,6 +19,7 @@ LABELS = {
     "operation_date":"日期", "coach_name":"教練", "classes_held":"上課堂數",
     "classes_cancelled":"銷課取消堂數", "trial_visits":"體驗人次",
     "trial_conversions":"體驗成交人次", "member_name":"會員名稱",
+    "trial_member_name":"體驗會員姓名",
     "course_name":"課程名稱", "total_sessions":"原始堂數", "session_hours":"每堂課時數",
     "remaining_sessions":"剩餘堂數", "remaining_amount":"剩餘金額",
     "usage_date":"銷課日期", "session_seq":"第幾堂", "deducted_amount":"扣課金額",
@@ -139,7 +140,7 @@ def daily_page(me):
     names={v:k for k,v in coaches.items()}
     tab1,tab2,tab3=st.tabs(["體驗項目","單堂銷售","活動支援"])
 
-    def standard_entry(tab, table_name, form_key, content_label, catalog_type):
+    def standard_entry(tab, table_name, form_key, content_label, catalog_type, require_member=False):
         with tab:
             catalog=rows(client().table("operation_item_catalog").select("item_name").eq("item_type",catalog_type).order("item_name"))
             item_names=[x["item_name"] for x in catalog]
@@ -148,19 +149,29 @@ def daily_page(me):
                 return
             with st.form(form_key,clear_on_submit=True):
                 c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today()); coach_name=c2.selectbox("教練",list(allowed))
+                member_name=st.text_input("體驗會員姓名") if require_member else None
                 c1,c2=st.columns(2); content=c1.selectbox(content_label,item_names); hours=c2.number_input("時數",0.25,24.0,1.0,step=0.25)
                 save=st.form_submit_button("新增紀錄")
             if save:
-                try:
-                    client().table(table_name).insert({"entry_date":str(entry_date),"content":content,"hours":hours,"coach_id":allowed[coach_name],"created_by":me["id"]}).execute()
-                    st.success("紀錄已新增。"); st.rerun()
-                except Exception as exc: st.error(f"新增失敗：{exc}")
-            data=rows(client().table(table_name).select("entry_date,content,hours,coach_id").order("entry_date",desc=True).limit(100))
+                if require_member and not member_name.strip():
+                    st.error("體驗會員姓名不可空白。")
+                else:
+                    try:
+                        payload={"entry_date":str(entry_date),"content":content,"hours":hours,"coach_id":allowed[coach_name],"created_by":me["id"]}
+                        if require_member: payload["member_name"]=member_name.strip()
+                        client().table(table_name).insert(payload).execute()
+                        st.success("紀錄已新增。"); st.rerun()
+                    except Exception as exc: st.error(f"新增失敗：{exc}")
+            select_fields="entry_date,content,hours,coach_id,member_name" if require_member else "entry_date,content,hours,coach_id"
+            data=rows(client().table(table_name).select(select_fields).order("entry_date",desc=True).limit(100))
             data=[x for x in data if x.get("coach_id") in names]
-            for x in data: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
-            show_table(data,["entry_date","content","hours","coach_name"])
+            for x in data:
+                x["coach_name"]=names.get(x.pop("coach_id"),"未知")
+                if require_member: x["trial_member_name"]=x.pop("member_name",None)
+            columns=["entry_date"] + (["trial_member_name"] if require_member else []) + ["content","hours","coach_name"]
+            show_table(data,columns)
 
-    standard_entry(tab1,"trial_items","trial_item_form","體驗內容","trial")
+    standard_entry(tab1,"trial_items","trial_item_form","體驗內容","trial",require_member=True)
     standard_entry(tab2,"single_sales","single_sale_form","銷售內容","single_sale")
     with tab3:
         with st.form("event_support_form",clear_on_submit=True):

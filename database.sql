@@ -55,6 +55,7 @@ create table public.daily_operations (
 
 create table public.trial_items (
   id uuid primary key default gen_random_uuid(), entry_date date not null,
+  member_name text not null check (length(trim(member_name)) > 0),
   content text not null check (length(trim(content)) > 0),
   hours numeric(5,2) not null check (hours > 0),
   coach_id uuid not null references public.profiles(id),
