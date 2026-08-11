@@ -1144,25 +1144,40 @@ def record_admin_page(me):
                 _sync_daily_classes(admin,old_date,old_coach); _sync_daily_classes(admin,d,record_coach_map[coach])
             st.success("資料已修改。"); st.rerun()
         except Exception as exc: st.error(f"修改失敗：{exc}")
+    st.divider()
+    st.subheader("多筆刪除")
+    select_all=st.checkbox("選取目前查詢結果的全部資料",key=f"delete_all_{data_type}")
+    delete_labels=list(labels) if select_all else st.multiselect(
+        "選擇要刪除的紀錄",list(labels),key=f"delete_records_{data_type}"
+    )
+    delete_records=[labels[label] for label in delete_labels]
+    if delete_records:
+        st.warning(f"即將刪除 {len(delete_records)} 筆「{data_type}」資料。")
     with st.form("record_delete"):
-        confirm=st.checkbox("我確認刪除此筆資料；此操作無法復原。")
-        delete=st.form_submit_button("刪除紀錄")
+        confirm=st.checkbox(f"我確認刪除已選取的 {len(delete_records)} 筆資料；此操作無法復原。")
+        delete=st.form_submit_button("刪除選取紀錄",type="primary")
     if delete:
-        if not confirm: st.error("請先勾選刪除確認。")
+        if not delete_records: st.error("請先選擇至少一筆要刪除的資料。")
+        elif not confirm: st.error("請先勾選刪除確認。")
         else:
             try:
-                if data_type=="銷課取消紀錄": admin.table("session_cancellations").delete().eq("id",record["id"]).execute()
-                elif data_type=="體驗項目": admin.table("trial_items").delete().eq("id",record["id"]).execute()
-                elif data_type=="單堂銷售": admin.table("single_sales").delete().eq("id",record["id"]).execute()
-                elif data_type=="活動支援": admin.table("event_supports").delete().eq("id",record["id"]).execute()
+                record_ids=[item["id"] for item in delete_records if item.get("id")]
+                if data_type=="銷課取消紀錄": admin.table("session_cancellations").delete().in_("id",record_ids).execute()
+                elif data_type=="體驗項目": admin.table("trial_items").delete().in_("id",record_ids).execute()
+                elif data_type=="單堂銷售": admin.table("single_sales").delete().in_("id",record_ids).execute()
+                elif data_type=="活動支援": admin.table("event_supports").delete().in_("id",record_ids).execute()
                 elif data_type=="課程購買":
-                    affected=rows(admin.table("session_usages").select("usage_date,coach_id").eq("purchase_id",record["purchase_id"]))
-                    admin.table("session_usages").delete().eq("purchase_id",record["purchase_id"]).execute(); admin.table("purchases").delete().eq("id",record["purchase_id"]).execute()
-                    for item in affected: _sync_daily_classes(admin,item["usage_date"],item["coach_id"])
+                    purchase_ids=list({item["purchase_id"] for item in delete_records})
+                    affected=rows(admin.table("session_usages").select("usage_date,coach_id").in_("purchase_id",purchase_ids))
+                    admin.table("session_usages").delete().in_("purchase_id",purchase_ids).execute()
+                    admin.table("purchases").delete().in_("id",purchase_ids).execute()
+                    for usage_date,coach_id in {(item["usage_date"],item["coach_id"]) for item in affected}:
+                        _sync_daily_classes(admin,usage_date,coach_id)
                 else:
-                    admin.table("session_usages").delete().eq("id",record["id"]).execute()
-                    _sync_daily_classes(admin,record["usage_date"],record["coach_id"])
-                st.success("資料已刪除。"); st.rerun()
+                    affected={(item["usage_date"],item["coach_id"]) for item in delete_records}
+                    admin.table("session_usages").delete().in_("id",record_ids).execute()
+                    for usage_date,coach_id in affected: _sync_daily_classes(admin,usage_date,coach_id)
+                st.success(f"已刪除 {len(delete_records)} 筆資料。"); st.rerun()
             except Exception as exc: st.error(f"刪除失敗：{exc}")
 
 def data_management_page(me):
