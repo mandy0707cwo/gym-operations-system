@@ -103,6 +103,7 @@ create table public.purchases (
   expiry_date date not null,
   payment_plan public.payment_plan not null,
   installment_count smallint not null check (installment_count between 1 and 3),
+  note text,
   status text not null default 'active' check (status in ('active','completed','expired','cancelled')),
   created_at timestamptz not null default now(),
   created_by uuid not null references public.profiles(id),
@@ -187,7 +188,7 @@ select p.id purchase_id, p.member_id, m.member_name, p.course_name, p.coach_id,
        count(u.id)::integer used_sessions,
        p.total_sessions-count(u.id)::integer remaining_sessions,
        round(p.total_amount-coalesce(sum(u.deducted_amount),0),2) remaining_amount,
-       p.expiry_date, p.status
+       p.expiry_date, p.status, p.note
 from public.purchases p
 join public.members m on m.id=p.member_id
 join public.profiles pr on pr.id=p.coach_id

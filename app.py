@@ -220,6 +220,7 @@ def purchase_page(me):
         c1,c2=st.columns(2)
         purchased=c1.date_input("購買日期",date.today())
         expiry=c2.date_input("有效日期",date.today()+timedelta(days=365))
+        purchase_note=st.text_area("備註")
         if plan=="分期":
             count=st.selectbox("總期數",[2,3])
             c1,c2,c3=st.columns(3)
@@ -250,7 +251,7 @@ def purchase_page(me):
                 p=rows(client().table("purchases").insert({"member_id":member_id,"purchase_kind":"first" if kind=="首次購買" else "renewal",
                     "coach_id":allowed[coach_name],"course_name":course.strip(),"total_sessions":sessions,"session_hours":session_hours,"total_amount":amount,
                     "purchase_date":str(purchased),"expiry_date":str(expiry),"payment_plan":"full" if plan=="未分期" else "installment",
-                    "installment_count":count,"created_by":me["id"]}))[0]
+                    "installment_count":count,"note":purchase_note.strip() or None,"created_by":me["id"]}))[0]
                 client().table("purchase_payments").insert({"purchase_id":p["id"],"installment_no":1,"amount":paid,"paid_date":str(paid_date),"created_by":me["id"]}).execute()
                 st.success("購買與首期付款紀錄已建立。")
             except Exception as exc: st.error(f"建立失敗：{exc}")
@@ -916,7 +917,7 @@ def member_course_io_page(me):
             "course_name":x["course_name"],"total_sessions":x["total_sessions"],"session_hours":x.get("session_hours",1),
             "total_amount":x["total_amount"],"purchase_date":x["purchase_date"],"expiry_date":x["expiry_date"],
             "payment_plan":x["payment_plan"],"installment_count":x["installment_count"],
-            "paid_amount":paid_map.get(x["id"],0),"paid_date":paid_date_map.get(x["id"],"")})
+            "paid_amount":paid_map.get(x["id"],0),"paid_date":paid_date_map.get(x["id"],""),"note":x.get("note") or ""})
     usages=rows(admin.table("session_usages").select("*").order("usage_date"))
     purchase_map={x["id"]:x for x in purchases}
     usage_rows=[]
@@ -939,7 +940,7 @@ def member_course_io_page(me):
 
     st.divider(); st.subheader("匯入會員課程與銷課表")
     st.caption("請先下載範本。匯入會員課程時 purchase_id 可留空；匯入銷課表時 purchase_id 必須對應系統內的購買紀錄。")
-    course_template=pd.DataFrame(columns=["purchase_id","member_name","purchase_kind","coach_username","course_name","total_sessions","session_hours","total_amount","purchase_date","expiry_date","payment_plan","installment_count","paid_amount","paid_date"])
+    course_template=pd.DataFrame(columns=["purchase_id","member_name","purchase_kind","coach_username","course_name","total_sessions","session_hours","total_amount","purchase_date","expiry_date","payment_plan","installment_count","paid_amount","paid_date","note"])
     usage_template=pd.DataFrame(columns=["purchase_id","usage_date","coach_username","note"])
     st.download_button("下載匯入範本",_excel_bytes({"會員課程":course_template,"銷課表":usage_template}),
         file_name="會員課程與銷課表_匯入範本.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -951,7 +952,7 @@ def member_course_io_page(me):
                 errors.append("至少需要『會員課程』或『銷課表』工作表。")
             if "會員課程" in book.sheet_names:
                 df=pd.read_excel(book,"會員課程").fillna("")
-                required=set(course_template.columns)-{"purchase_id"}
+                required=set(course_template.columns)-{"purchase_id","note"}
                 if not required.issubset(df.columns): errors.append("會員課程欄位不完整。")
                 else:
                     for i,row in df.iterrows():
@@ -967,7 +968,8 @@ def member_course_io_page(me):
                                 "coach_id":username_to_id[username],"purchase_kind":kind,"course_name":str(row["course_name"]).strip(),
                                 "total_sessions":int(row["total_sessions"]),"session_hours":float(row["session_hours"]),"total_amount":float(row["total_amount"]),
                                 "purchase_date":str(purchased),"expiry_date":str(expiry),"payment_plan":plan,"installment_count":int(row["installment_count"]),
-                                "paid_amount":float(row["paid_amount"] or 0),"paid_date":str(pd.to_datetime(row["paid_date"]).date()) if row["paid_date"] else str(purchased)})
+                                "paid_amount":float(row["paid_amount"] or 0),"paid_date":str(pd.to_datetime(row["paid_date"]).date()) if row["paid_date"] else str(purchased),
+                                "note":str(row.get("note","")).strip() or None})
                         except Exception as exc: errors.append(f"會員課程第 {i+2} 列：{exc}")
             if "銷課表" in book.sheet_names:
                 df=pd.read_excel(book,"銷課表").fillna("")
@@ -1066,6 +1068,7 @@ def record_admin_page(me):
             deduction_reason=st.text_input("扣除原因",record.get("deduction_reason") or "")
         elif data_type=="課程購買":
             c1,c2,c3=st.columns(3); sessions=c1.number_input("課程堂數",1,999,int(record["total_sessions"])); amount=c2.number_input("成交總金額",0.0,10000000.0,float(record["total_amount"]),step=100.0,format="%.0f"); expiry=c3.date_input("有效期限",pd.to_datetime(record["expiry_date"]).date())
+            note=st.text_area("備註",record.get("note") or "")
         else:
             c1,c2=st.columns(2); d=c1.date_input("銷課日期",pd.to_datetime(record["usage_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index); note=st.text_area("備註",record.get("note") or "")
         update=st.form_submit_button("儲存修改")
@@ -1084,7 +1087,7 @@ def record_admin_page(me):
                 if deducted_hours>hours: raise ValueError("應扣除時間不可大於活動時數")
                 if deducted_hours>0 and not deduction_reason.strip(): raise ValueError("有扣除時間時必須填寫扣除原因")
                 admin.table("event_supports").update({"entry_date":str(d),"coach_id":record_coach_map[coach],"content":content.strip(),"hours":hours,"deducted_hours":deducted_hours,"deduction_reason":deduction_reason.strip() or None}).eq("id",record["id"]).execute()
-            elif data_type=="課程購買": admin.table("purchases").update({"total_sessions":sessions,"total_amount":amount,"expiry_date":str(expiry)}).eq("id",record["purchase_id"]).execute()
+            elif data_type=="課程購買": admin.table("purchases").update({"total_sessions":sessions,"total_amount":amount,"expiry_date":str(expiry),"note":note.strip() or None}).eq("id",record["purchase_id"]).execute()
             else:
                 old_date,old_coach=record["usage_date"],record["coach_id"]
                 admin.table("session_usages").update({"usage_date":str(d),"coach_id":record_coach_map[coach],"note":note or None}).eq("id",record["id"]).execute()
