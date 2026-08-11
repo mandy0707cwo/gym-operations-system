@@ -338,27 +338,46 @@ def usage_query_tabs(me):
         else:
             usages=rows(client().table("session_usages").select("usage_date,coach_id,deducted_amount").gte("usage_date",str(query_start)).lte("usage_date",str(query_end)))
             usages=[x for x in usages if x.get("coach_id") in operational_ids]
+            trial_hours=rows(client().table("trial_items").select("coach_id,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
+            single_hours=rows(client().table("single_sales").select("coach_id,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
+            event_hours=rows(client().table("event_supports").select("coach_id,hours,deducted_hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
+            trial_hours=[x for x in trial_hours if x.get("coach_id") in operational_ids]
+            single_hours=[x for x in single_hours if x.get("coach_id") in operational_ids]
+            event_hours=[x for x in event_hours if x.get("coach_id") in operational_ids]
             if usage_coach!="全部教練":
                 usage_coach_id=coaches.get(usage_coach,me["id"])
                 usages=[x for x in usages if x.get("coach_id")==usage_coach_id]
+                trial_hours=[x for x in trial_hours if x.get("coach_id")==usage_coach_id]
+                single_hours=[x for x in single_hours if x.get("coach_id")==usage_coach_id]
+                event_hours=[x for x in event_hours if x.get("coach_id")==usage_coach_id]
             total_sessions=len(usages)
             total_amount=sum(float(x["deducted_amount"]) for x in usages)
             average=total_amount/total_sessions if total_sessions else 0
-            a,b,c=st.columns(3)
+            total_execution_hours=(total_sessions+sum(float(x["hours"]) for x in trial_hours)
+                +sum(float(x["hours"]) for x in single_hours)
+                +sum(float(x["hours"])-float(x.get("deducted_hours") or 0) for x in event_hours))
+            a,b,c,d=st.columns(4)
             a.metric("總銷課堂數",f"{total_sessions:,}")
             b.metric("總銷課金額",f"TWD {total_amount:,.0f}")
             c.metric("平均單價",f"TWD {average:,.0f}")
+            d.metric("總執行時數",f"{total_execution_hours:,.2f} 小時")
             by_coach=[]
             for coach_name,coach_id in coaches.items():
                 coach_rows=[x for x in usages if x["coach_id"]==coach_id]
-                if coach_rows:
+                coach_trial_hours=sum(float(x["hours"]) for x in trial_hours if x["coach_id"]==coach_id)
+                coach_single_hours=sum(float(x["hours"]) for x in single_hours if x["coach_id"]==coach_id)
+                coach_event_hours=sum(float(x["hours"])-float(x.get("deducted_hours") or 0) for x in event_hours if x["coach_id"]==coach_id)
+                coach_execution_hours=len(coach_rows)+coach_trial_hours+coach_single_hours+coach_event_hours
+                if coach_rows or coach_execution_hours:
                     coach_amount=sum(float(x["deducted_amount"]) for x in coach_rows)
                     by_coach.append({"教練":coach_name,"銷課堂數":len(coach_rows),"銷課金額":coach_amount,
-                                     "平均單價":coach_amount/len(coach_rows)})
+                                     "平均單價":coach_amount/len(coach_rows) if coach_rows else 0,
+                                     "總執行時數":coach_execution_hours})
             if by_coach:
                 st.dataframe(pd.DataFrame(by_coach),hide_index=True,use_container_width=True,
                     column_config={"銷課金額":st.column_config.NumberColumn(format="TWD %.0f"),
-                                   "平均單價":st.column_config.NumberColumn(format="TWD %.0f")})
+                                   "平均單價":st.column_config.NumberColumn(format="TWD %.0f"),
+                                   "總執行時數":st.column_config.NumberColumn(format="%.2f 小時")})
 
     with tab3:
         today=date.today()
@@ -443,7 +462,9 @@ def dashboard_page(me):
     if start>end: st.error("開始日期不可晚於結束日期。") ; return
     ids=[coaches[x] for x in selected]
     cancellations=rows(client().table("session_cancellations").select("coach_id,cancelled_sessions,cancel_date").gte("cancel_date",str(start)).lte("cancel_date",str(end)))
-    trials=rows(client().table("trial_items").select("coach_id,member_name,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
+    trials=rows(client().table("trial_items").select("coach_id,member_name,hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
+    single_sales=rows(client().table("single_sales").select("coach_id,hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
+    event_supports=rows(client().table("event_supports").select("coach_id,hours,deducted_hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
     purchases=rows(client().table("purchases").select("id,coach_id,purchase_kind,total_sessions,total_amount,purchase_date").gte("purchase_date",str(start)).lte("purchase_date",str(end)))
     usages=rows(client().table("session_usages").select("coach_id,deducted_amount,usage_date").gte("usage_date",str(start)).lte("usage_date",str(end)))
     payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").gte("paid_date",str(start)).lte("paid_date",str(end)))
@@ -464,15 +485,18 @@ def dashboard_page(me):
         renewal_count=sum(1 for x in p if x["purchase_kind"]=="renewal")
         received=sum(float(x["amount"]) for x in payments if payment_purchase_map.get(x["purchase_id"])==cid)
         used_sessions=len(u); used_amount=sum(float(x["deducted_amount"]) for x in u)
+        execution_hours=(used_sessions+sum(float(x["hours"]) for x in trials if x["coach_id"]==cid)
+            +sum(float(x["hours"]) for x in single_sales if x["coach_id"]==cid)
+            +sum(float(x["hours"])-float(x.get("deducted_hours") or 0) for x in event_supports if x["coach_id"]==cid))
         result.append({"教練":names[cid],"銷課堂數":used_sessions,"銷課金額":used_amount,
                        "銷課取消率":cancelled/(used_sessions+cancelled) if used_sessions+cancelled else None,
                        "體驗人次":trial_count,"體驗成交率":first_count/trial_count if trial_count else None,
                        "續約率":renewal_count/len(p) if p else None,"成交堂數":sessions,
                        "成交總金額":amount,"實際預收金額":received,
-                       "平均每堂單價":amount/sessions if sessions else None})
+                       "平均每堂單價":amount/sessions if sessions else None,"總執行時數":execution_hours})
     df=pd.DataFrame(result)
     if df.empty: st.info("沒有可顯示的資料。") ; return
-    totals=df[["成交堂數","成交總金額","實際預收金額","銷課堂數","銷課金額"]].sum()
+    totals=df[["成交堂數","成交總金額","實際預收金額","銷課堂數","銷課金額","總執行時數"]].sum()
     overall_trial_names={str(x.get("member_name") or "").strip().casefold() for x in trials if x["coach_id"] in ids and str(x.get("member_name") or "").strip()}
     total_trial_count=len(overall_trial_names)
     total_first_count=len([x for x in purchases if x["coach_id"] in ids and x["purchase_kind"]=="first"])
@@ -490,23 +514,25 @@ def dashboard_page(me):
     d.metric("體驗人次",f'{total_trial_count:,.0f}')
     e.metric("體驗成交率",f'{overall_trial_conversion:.1%}' if overall_trial_conversion is not None else "—")
     f.metric("續約率",f'{overall_renewal:.1%}' if overall_renewal is not None else "—")
-    a2,b2,c2,d2=st.columns(4)
+    a2,b2,c2,d2,e2=st.columns(5)
     a2.metric("成交堂數",f'{totals["成交堂數"]:,.0f}')
     b2.metric("成交總金額",f'TWD {totals["成交總金額"]:,.0f}')
     c2.metric("實際預收金額",f'TWD {totals["實際預收金額"]:,.0f}')
     d2.metric("平均每堂單價",f'TWD {average_unit:,.0f}' if average_unit is not None else "—")
+    e2.metric("總執行時數",f'{totals["總執行時數"]:,.2f} 小時')
     display_df=df.copy()
     display_df["銷課取消率"]=display_df["銷課取消率"]*100
     display_df["體驗成交率"]=display_df["體驗成交率"]*100
     display_df["續約率"]=display_df["續約率"]*100
-    display_df=display_df[["教練","銷課堂數","銷課金額","銷課取消率","體驗人次","體驗成交率","續約率","成交堂數","成交總金額","實際預收金額","平均每堂單價"]]
-    st.dataframe(display_df,hide_index=True,use_container_width=True,column_config={"銷課取消率":st.column_config.NumberColumn(format="%.1f%%"),"體驗成交率":st.column_config.NumberColumn(format="%.1f%%"),"續約率":st.column_config.NumberColumn(format="%.1f%%"),"成交總金額":st.column_config.NumberColumn(format="TWD %.0f"),"實際預收金額":st.column_config.NumberColumn(format="TWD %.0f"),"銷課金額":st.column_config.NumberColumn(format="TWD %.0f"),"平均每堂單價":st.column_config.NumberColumn(format="TWD %.0f")})
+    display_df=display_df[["教練","總執行時數","銷課堂數","銷課金額","銷課取消率","體驗人次","體驗成交率","續約率","成交堂數","成交總金額","實際預收金額","平均每堂單價"]]
+    st.dataframe(display_df,hide_index=True,use_container_width=True,column_config={"總執行時數":st.column_config.NumberColumn(format="%.2f 小時"),"銷課取消率":st.column_config.NumberColumn(format="%.1f%%"),"體驗成交率":st.column_config.NumberColumn(format="%.1f%%"),"續約率":st.column_config.NumberColumn(format="%.1f%%"),"成交總金額":st.column_config.NumberColumn(format="TWD %.0f"),"實際預收金額":st.column_config.NumberColumn(format="TWD %.0f"),"銷課金額":st.column_config.NumberColumn(format="TWD %.0f"),"平均每堂單價":st.column_config.NumberColumn(format="TWD %.0f")})
     left,right=st.columns(2)
     count_metric=left.selectbox("數量指標",["成交堂數","銷課堂數","體驗人次"],key="dashboard_count_metric")
     amount_metric=right.selectbox("金額類型",["成交總金額","銷課金額"],key="dashboard_amount_metric")
     count_unit="人次" if count_metric=="體驗人次" else "堂數"
     left.plotly_chart(px.bar(df,x="教練",y=count_metric,title=f"{count_metric}比較（{start} 至 {end}）",labels={count_metric:count_unit}),use_container_width=True)
     right.plotly_chart(px.bar(df,x="教練",y=amount_metric,title=f"{amount_metric}比較（{start} 至 {end}）",labels={amount_metric:"TWD"}),use_container_width=True)
+    st.plotly_chart(px.bar(df,x="教練",y="總執行時數",title=f"總執行時數比較（{start} 至 {end}）",labels={"總執行時數":"小時"}),use_container_width=True)
 
 def account_admin_page(me):
     st.header("帳號與權限管理")
