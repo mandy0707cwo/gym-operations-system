@@ -221,43 +221,57 @@ def purchase_page(me):
     if not course_names:
         st.warning("尚未建立課程名稱，請由系統管理員先到「課程名稱管理」新增。")
         return
-    plan=st.selectbox("付款方式",["未分期","分期"],key="purchase_payment_plan")
-    with st.form("purchase"):
+    purchase_revision_key="purchase_form_revision"
+    purchase_revision=st.session_state.get(purchase_revision_key,0)
+    c1,c2=st.columns(2)
+    plan=c1.selectbox("付款方式",["未分期","分期"],index=None,placeholder="請選擇付款方式",key=f"purchase_payment_plan_{purchase_revision}")
+    course_label=c2.selectbox("課程名稱",course_names,index=None,placeholder="請選擇課程",key=f"purchase_course_{purchase_revision}")
+    course=course_options.get(course_label) if course_label else None
+    selected_session_hours=course_hours.get(course) if course else None
+    with st.form(f"purchase_{purchase_revision}",clear_on_submit=True):
         c1,c2,c3=st.columns(3)
         member_name=c1.text_input("會員名稱（需完整一致）")
         kind=c2.selectbox("購買類型",["首次購買","續課"])
-        coach_name=c3.selectbox("指導教練",list(allowed))
-        c1,c2,c3,c4=st.columns(4)
-        course_label=c1.selectbox("課程名稱",course_names)
-        course=course_options[course_label]
-        sessions=c2.number_input("課程堂數",1,999,1)
-        session_hours=c3.number_input("每堂課時數",0.25,24.0,course_hours[course],step=0.25,format="%.2f",disabled=True)
-        amount=c4.number_input("成交總金額",0.0,10000000.0,step=100.0,format="%.0f")
+        coach_name=c3.selectbox("指導教練",list(allowed),index=None,placeholder="請選擇教練")
+        c1,c2,c3=st.columns(3)
+        sessions=c1.number_input("課程堂數",1,999,value=None,placeholder="請輸入堂數")
+        session_hours=c2.number_input("每堂課時數",0.25,24.0,value=selected_session_hours,step=0.25,format="%.2f",placeholder="選擇課程後自動帶入",disabled=True)
+        amount=c3.number_input("成交總金額",0.0,10000000.0,value=None,step=100.0,format="%.0f",placeholder="請輸入金額")
         c1,c2=st.columns(2)
         purchased=c1.date_input("購買日期",date.today())
-        expiry=c2.date_input("有效日期",date.today()+timedelta(days=365))
+        expiry=c2.date_input("有效日期",value=None)
         referral=st.text_input("轉介")
         purchase_note=st.text_area("備註")
         if plan=="分期":
-            count=st.selectbox("總期數",[2,3])
+            count=st.selectbox("總期數",[2,3],index=None,placeholder="請選擇總期數")
             c1,c2,c3=st.columns(3)
             installment_no=c1.number_input("此次為第幾期",value=1,disabled=True)
-            paid=c2.number_input("此次支付金額",0.0,10000000.0,step=100.0,format="%.0f")
-            paid_date=c3.date_input("支付日期",purchased)
-        else:
+            paid=c2.number_input("此次支付金額",0.0,10000000.0,value=None,step=100.0,format="%.0f",placeholder="請輸入支付金額")
+            paid_date=c3.date_input("支付日期",date.today())
+        elif plan=="未分期":
             count=1
             installment_no=1
             paid=amount
             paid_date=purchased
             st.caption("未分期將於建立紀錄時，自動以成交總金額記錄為一次付清。")
+        else:
+            count=installment_no=paid=paid_date=None
         save=st.form_submit_button("建立購買紀錄")
     if save:
         errors=[]
         if not member_name.strip(): errors.append("會員名稱不可空白")
-        if expiry<purchased: errors.append("有效日期不可早於購買日期")
-        if paid<=0: errors.append("此次支付金額須大於 0")
-        if paid>amount: errors.append("此次支付金額不可大於成交總金額")
-        if installment_no!=1: errors.append("新購買紀錄應先登錄第 1 期；後續期款請由付款功能登錄")
+        if coach_name is None: errors.append("請選擇指導教練")
+        if course is None: errors.append("請選擇課程名稱")
+        if sessions is None: errors.append("請輸入課程堂數")
+        if session_hours is None: errors.append("請選擇課程以帶入每堂課時數")
+        if amount is None: errors.append("請輸入成交總金額")
+        if expiry is None: errors.append("請選擇有效日期")
+        elif expiry<purchased: errors.append("有效日期不可早於購買日期")
+        if plan is None: errors.append("請選擇付款方式")
+        if plan=="分期" and count is None: errors.append("請選擇總期數")
+        if paid is None or paid<=0: errors.append("此次支付金額須大於 0")
+        if paid is not None and amount is not None and paid>amount: errors.append("此次支付金額不可大於成交總金額")
+        if installment_no is not None and installment_no!=1: errors.append("新購買紀錄應先登錄第 1 期；後續期款請由付款功能登錄")
         if errors: st.error("；".join(errors))
         else:
             try:
@@ -270,7 +284,8 @@ def purchase_page(me):
                     "purchase_date":str(purchased),"expiry_date":str(expiry),"payment_plan":"full" if plan=="未分期" else "installment",
                     "installment_count":count,"referral":referral.strip() or None,"note":purchase_note.strip() or None,"created_by":me["id"]}))[0]
                 client().table("purchase_payments").insert({"purchase_id":p["id"],"installment_no":1,"amount":paid,"paid_date":str(paid_date),"created_by":me["id"]}).execute()
-                st.success("購買與首期付款紀錄已建立。")
+                st.session_state[purchase_revision_key]=purchase_revision+1
+                st.success("購買與首期付款紀錄已建立。"); st.rerun()
             except Exception as exc: st.error(f"建立失敗：{exc}")
     purchases=rows(client().table("purchase_balances").select("purchase_id,member_name,course_name,coach_id"))
     operational_ids=set(coaches.values())
