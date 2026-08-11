@@ -225,7 +225,7 @@ def purchase_page(me):
         if plan=="分期":
             count=st.selectbox("總期數",[2,3])
             c1,c2,c3=st.columns(3)
-            installment_no=c1.selectbox("此次為第幾期",list(range(1,count+1)))
+            installment_no=c1.number_input("此次為第幾期",value=1,disabled=True)
             paid=c2.number_input("此次支付金額",0.0,10000000.0,step=100.0,format="%.0f")
             paid_date=c3.date_input("支付日期",purchased)
         else:
