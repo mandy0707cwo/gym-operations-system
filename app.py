@@ -13,7 +13,7 @@ from supabase import create_client
 from supabase.lib.client_options import ClientOptions
 
 load_dotenv()
-st.set_page_config(page_title="健身房營運管理", page_icon="🏋️", layout="wide")
+st.set_page_config(page_title="秀傳運醫營運系統", page_icon="🏋️", layout="wide")
 
 LABELS = {
     "operation_date":"日期", "coach_name":"教練", "classes_held":"上課堂數",
@@ -91,7 +91,7 @@ def collapse_sidebar_on_mobile():
 def login():
     if "user" in st.session_state:
         return st.session_state.user
-    st.title("健身房營運管理系統")
+    st.title("秀傳運醫營運系統")
     st.caption("請使用系統管理員建立的帳號與密碼登入")
     with st.form("login"):
         username = st.text_input("帳號")
@@ -287,7 +287,7 @@ def usage_query_tabs():
         summary["amount"]+=float(payment["amount"])
         summary["count"]+=1
 
-    tab1,tab2,tab3=st.tabs(["會員課程查詢","銷課統計","一個月內到期"])
+    tab1,tab2,tab3,tab4=st.tabs(["會員課程查詢","銷課統計","一個月內到期","剩餘三堂（含）"])
     with tab1:
         selected_coach=st.selectbox("成交教練",["全部教練"]+list(coaches),key="member_course_coach_filter")
         filtered_balances=balances if selected_coach=="全部教練" else [
@@ -318,14 +318,17 @@ def usage_query_tabs():
             st.info("目前沒有可查詢的課程資料。")
 
     with tab2:
-        c1,c2=st.columns(2)
+        c1,c2,c3=st.columns(3)
         query_start=c1.date_input("開始日期",date.today().replace(day=1),key="usage_query_start")
         query_end=c2.date_input("結束日期",date.today(),key="usage_query_end")
+        usage_coach=c3.selectbox("授課教練",["全部教練"]+list(coaches),key="usage_stats_coach_filter")
         if query_start>query_end:
             st.error("開始日期不可晚於結束日期。")
         else:
             usages=rows(client().table("session_usages").select("usage_date,coach_id,deducted_amount").gte("usage_date",str(query_start)).lte("usage_date",str(query_end)))
             usages=[x for x in usages if x.get("coach_id") in operational_ids]
+            if usage_coach!="全部教練":
+                usages=[x for x in usages if x.get("coach_id")==coaches[usage_coach]]
             total_sessions=len(usages)
             total_amount=sum(float(x["deducted_amount"]) for x in usages)
             average=total_amount/total_sessions if total_sessions else 0
@@ -360,6 +363,18 @@ def usage_query_tabs():
                 column_config={"剩餘金額":st.column_config.NumberColumn(format="TWD %.0f")})
         else:
             st.info("未來 30 天內沒有即將到期且仍有剩餘堂數的課程。")
+
+    with tab4:
+        low_balances=[x for x in balances if x["status"]=="active" and 0<x["remaining_sessions"]<=3]
+        if low_balances:
+            low_rows=[{"會員名稱":x["member_name"],"課程名稱":x["course_name"],"成交教練":x["coach_name"],
+                       "購買堂數":x["total_sessions"],"已上堂數":x["used_sessions"],
+                       "剩餘堂數":x["remaining_sessions"],"剩餘金額":float(x["remaining_amount"]),
+                       "有效期限":x["expiry_date"]} for x in low_balances]
+            st.dataframe(pd.DataFrame(low_rows),hide_index=True,use_container_width=True,
+                column_config={"剩餘金額":st.column_config.NumberColumn(format="TWD %.0f")})
+        else:
+            st.info("目前沒有剩餘三堂（含）以下的有效課程。")
 
 def usage_page(me):
     st.header("銷課表")
