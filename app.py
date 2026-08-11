@@ -1145,17 +1145,25 @@ def record_admin_page(me):
             st.success("資料已修改。"); st.rerun()
         except Exception as exc: st.error(f"修改失敗：{exc}")
     st.divider()
-    st.subheader("多筆刪除")
-    select_all=st.checkbox("選取目前查詢結果的全部資料",key=f"delete_all_{data_type}")
-    delete_labels=list(labels) if select_all else st.multiselect(
-        "選擇要刪除的紀錄",list(labels),key=f"delete_records_{data_type}"
+    st.subheader("刪除資料")
+    delete_mode=st.radio(
+        "刪除方式",["刪除目前選擇的單筆","選擇多筆刪除"],horizontal=True,
+        key=f"delete_mode_{data_type}"
     )
-    delete_records=[labels[label] for label in delete_labels]
+    if delete_mode=="刪除目前選擇的單筆":
+        delete_records=[record]
+        st.info(f"目前選擇：{selected}")
+    else:
+        select_all=st.checkbox("選取目前查詢結果的全部資料",key=f"delete_all_{data_type}")
+        delete_labels=list(labels) if select_all else st.multiselect(
+            "選擇要刪除的紀錄",list(labels),key=f"delete_records_{data_type}"
+        )
+        delete_records=[labels[label] for label in delete_labels]
     if delete_records:
         st.warning(f"即將刪除 {len(delete_records)} 筆「{data_type}」資料。")
     with st.form("record_delete"):
         confirm=st.checkbox(f"我確認刪除已選取的 {len(delete_records)} 筆資料；此操作無法復原。")
-        delete=st.form_submit_button("刪除選取紀錄",type="primary")
+        delete=st.form_submit_button("刪除目前紀錄" if len(delete_records)==1 else "刪除選取紀錄",type="primary")
     if delete:
         if not delete_records: st.error("請先選擇至少一筆要刪除的資料。")
         elif not confirm: st.error("請先勾選刪除確認。")
