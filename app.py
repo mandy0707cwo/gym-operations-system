@@ -259,20 +259,38 @@ def purchase_page(me):
     purchases=rows(client().table("purchase_balances").select("purchase_id,member_name,course_name,coach_id"))
     operational_ids=set(coaches.values())
     purchases=[x for x in purchases if x.get("coach_id") in operational_ids]
-    installment_ids={x["id"] for x in rows(client().table("purchases").select("id").eq("payment_plan","installment"))}
-    purchases=[x for x in purchases if x["purchase_id"] in installment_ids]
-    lookup={f'{x["member_name"]}｜{x["course_name"]}｜{x["purchase_id"][:8]}':x["purchase_id"] for x in purchases}
+    installment_rows=rows(client().table("purchases").select("id,total_amount,installment_count").eq("payment_plan","installment"))
+    installment_map={x["id"]:x for x in installment_rows}
+    installment_ids=set(installment_map)
+    payment_rows=rows(client().table("purchase_payments").select("purchase_id,installment_no,amount").in_("purchase_id",list(installment_ids))) if installment_ids else []
+    payment_summary={}
+    for payment in payment_rows:
+        summary=payment_summary.setdefault(payment["purchase_id"],{"amount":0.0,"numbers":set()})
+        summary["amount"]+=float(payment["amount"])
+        summary["numbers"].add(int(payment["installment_no"]))
+    lookup={}
+    for purchase in purchases:
+        plan=installment_map.get(purchase["purchase_id"])
+        if not plan:
+            continue
+        paid=payment_summary.get(purchase["purchase_id"],{"amount":0.0,"numbers":set()})
+        remaining_numbers=[n for n in range(1,int(plan["installment_count"])+1) if n not in paid["numbers"]]
+        if paid["amount"]>=float(plan["total_amount"]) or not remaining_numbers:
+            continue
+        lookup[f'{purchase["member_name"]}｜{purchase["course_name"]}｜{purchase["purchase_id"][:8]}']={"id":purchase["purchase_id"],"remaining_numbers":remaining_numbers}
     if lookup:
         st.subheader("登錄後續期款")
         with st.form("payment"):
             label=st.selectbox("購買紀錄",list(lookup))
+            selected_payment=lookup[label]
             c1,c2,c3=st.columns(3)
-            no=c1.selectbox("期次",[1,2,3]); pay_amount=c2.number_input("支付金額",1.0,10000000.0,step=100.0,format="%.0f"); pay_date=c3.date_input("付款日期",date.today())
+            no=c1.selectbox("期次",selected_payment["remaining_numbers"]); pay_amount=c2.number_input("支付金額",1.0,10000000.0,step=100.0,format="%.0f"); pay_date=c3.date_input("付款日期",date.today())
             add=st.form_submit_button("新增付款")
         if add:
             try:
-                client().table("purchase_payments").insert({"purchase_id":lookup[label],"installment_no":no,"amount":pay_amount,"paid_date":str(pay_date),"created_by":me["id"]}).execute()
+                client().table("purchase_payments").insert({"purchase_id":selected_payment["id"],"installment_no":no,"amount":pay_amount,"paid_date":str(pay_date),"created_by":me["id"]}).execute()
                 st.success("付款紀錄已新增。")
+                st.rerun()
             except Exception as exc: st.error(f"新增失敗（請檢查期次是否重複或超出設定）：{exc}")
 
 def usage_query_tabs(me):
