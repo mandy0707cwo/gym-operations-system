@@ -562,19 +562,52 @@ def dashboard_page(me):
     total_cancelled=sum(x["cancelled_sessions"] for x in cancellations if x["coach_id"] in ids)
     overall_cancel_rate=total_cancelled/(totals["銷課堂數"]+total_cancelled) if totals["銷課堂數"]+total_cancelled else None
     average_unit=totals["成交總金額"]/totals["成交堂數"] if totals["成交堂數"] else None
-    a,b,c,d,e,f=st.columns(6)
-    a.metric("銷課堂數",f'{totals["銷課堂數"]:,.0f}')
-    b.metric("銷課金額",f'TWD {totals["銷課金額"]:,.0f}')
-    c.metric("銷課取消率",f'{overall_cancel_rate:.1%}' if overall_cancel_rate is not None else "—")
-    d.metric("體驗人次",f'{total_trial_count:,.0f}')
-    e.metric("體驗成交率",f'{overall_trial_conversion:.1%}' if overall_trial_conversion is not None else "—")
-    f.metric("續約率",f'{overall_renewal:.1%}' if overall_renewal is not None else "—")
-    a2,b2,c2,d2,e2=st.columns(5)
-    a2.metric("成交堂數",f'{totals["成交堂數"]:,.0f}')
-    b2.metric("成交總金額",f'TWD {totals["成交總金額"]:,.0f}')
-    c2.metric("實際預收金額",f'TWD {totals["實際預收金額"]:,.0f}')
-    d2.metric("平均每堂單價",f'TWD {average_unit:,.0f}' if average_unit is not None else "—")
-    e2.metric("總執行時數",f'{totals["總執行時數"]:,.2f} 小時')
+    st.markdown("""
+    <style>
+    div[data-testid="stMetric"] {
+        min-width: 0;
+        padding: 0.75rem 0.7rem;
+    }
+    div[data-testid="stMetricLabel"] {
+        min-height: 2rem;
+    }
+    div[data-testid="stMetricLabel"] p {
+        font-size: clamp(0.78rem, 1.1vw, 0.95rem);
+        line-height: 1.25;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+    div[data-testid="stMetricValue"] > div {
+        font-size: clamp(1.05rem, 1.8vw, 1.65rem);
+        line-height: 1.15;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+    @media (max-width: 768px) {
+        div[data-testid="stMetric"] { padding: 0.55rem 0.45rem; }
+        div[data-testid="stMetricLabel"] p { font-size: 0.8rem; }
+        div[data-testid="stMetricValue"] > div { font-size: 1.15rem; }
+    }
+    </style>
+    """,unsafe_allow_html=True)
+    dashboard_metrics=[
+        ("銷課堂數",f'{totals["銷課堂數"]:,.0f}'),
+        ("銷課金額",f'TWD {totals["銷課金額"]:,.0f}'),
+        ("銷課取消率",f'{overall_cancel_rate:.1%}' if overall_cancel_rate is not None else "—"),
+        ("體驗人次",f'{total_trial_count:,.0f}'),
+        ("體驗成交率",f'{overall_trial_conversion:.1%}' if overall_trial_conversion is not None else "—"),
+        ("續約率",f'{overall_renewal:.1%}' if overall_renewal is not None else "—"),
+        ("成交堂數",f'{totals["成交堂數"]:,.0f}'),
+        ("成交總金額",f'TWD {totals["成交總金額"]:,.0f}'),
+        ("實際預收金額",f'TWD {totals["實際預收金額"]:,.0f}'),
+        ("平均每堂單價",f'TWD {average_unit:,.0f}' if average_unit is not None else "—"),
+        ("總執行時數",f'{totals["總執行時數"]:,.2f} 小時'),
+    ]
+    for metric_start in range(0,len(dashboard_metrics),4):
+        metric_group=dashboard_metrics[metric_start:metric_start+4]
+        metric_columns=st.columns(len(metric_group))
+        for metric_column,(metric_label,metric_value) in zip(metric_columns,metric_group):
+            metric_column.metric(metric_label,metric_value)
     display_df=df.copy()
     display_df["銷課取消率"]=display_df["銷課取消率"]*100
     display_df["體驗成交率"]=display_df["體驗成交率"]*100
