@@ -487,16 +487,18 @@ def usage_page(me):
     active=[x for x in balances if x["status"]=="active"]
     if not active: st.warning("此會員沒有可扣課的有效課程。") ; usage_query_tabs(me) ; return
     lookup={f'{x["course_name"]}｜成交教練：{x["coach_name"]}｜剩 {x["remaining_sessions"]} 堂｜餘額 {x["remaining_amount"]}':x for x in active}
-    with st.form("consume"):
-        label=st.selectbox("選擇課程",list(lookup)); selected=lookup[label]
-        st.info(f'成交教練：{selected["coach_name"]}')
-        c1,c2=st.columns(2); usage_date=c1.date_input("銷課日期",date.today()); coach=c2.selectbox("授課教練",list(allowed))
+    label=st.selectbox("選擇課程",list(lookup),key=f"usage_course_{member_map[member_name]}")
+    selected=lookup[label]
+    with st.form(f'consume_{selected["purchase_id"]}'):
+        c1,c2=st.columns(2)
+        usage_date=c1.date_input("銷課日期",date.today())
+        c2.text_input("授課教練",value=selected["coach_name"],disabled=True)
         note=st.text_input("備註"); submit=st.form_submit_button("確認扣除 1 堂")
     per=Decimal(str(selected["remaining_amount"])) if selected["remaining_sessions"]==1 else (Decimal(str(selected["total_amount"]))/selected["total_sessions"]).quantize(Decimal("0.01"))
     st.caption(f"本次預計扣除：1 堂／TWD {per:,.0f}；最後一堂會自動扣完剩餘金額。")
     if submit:
         try:
-            client().rpc("consume_session",{"p_purchase_id":selected["purchase_id"],"p_usage_date":str(usage_date),"p_coach_id":allowed[coach],"p_note":note}).execute()
+            client().rpc("consume_session",{"p_purchase_id":selected["purchase_id"],"p_usage_date":str(usage_date),"p_coach_id":selected["coach_id"],"p_note":note}).execute()
             st.success("扣課完成。") ; st.rerun()
         except Exception as exc: st.error(f"扣課失敗：{exc}")
     history=rows(client().table("session_usages").select("usage_date,coach_id,session_seq,deducted_amount,note").eq("purchase_id",selected["purchase_id"]).order("session_seq",desc=True))
