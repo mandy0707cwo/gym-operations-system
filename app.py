@@ -149,14 +149,19 @@ def daily_page(me):
                 st.warning(f"尚未建立{content_label}選項，請由系統管理員到「資料管理」新增。")
                 return
             with st.form(form_key,clear_on_submit=True):
-                c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today()); coach_name=c2.selectbox("教練",list(allowed))
+                c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today()); coach_name=c2.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練")
                 member_name=st.text_input("體驗會員姓名") if require_member else None
-                c1,c2=st.columns(2); content=c1.selectbox(content_label,item_names); hours=c2.number_input("時數",0.25,24.0,1.0,step=0.25)
+                c1,c2=st.columns(2); content=c1.selectbox(content_label,item_names,index=None,placeholder=f"請選擇{content_label}"); hours=c2.number_input("時數",0.25,24.0,value=None,step=0.25,placeholder="請輸入時數")
                 note=st.text_input("備註")
                 save=st.form_submit_button("新增紀錄")
             if save:
-                if require_member and not member_name.strip():
-                    st.error("體驗會員姓名不可空白。")
+                errors=[]
+                if require_member and not member_name.strip(): errors.append("體驗會員姓名不可空白")
+                if coach_name is None: errors.append("請選擇教練")
+                if content is None: errors.append(f"請選擇{content_label}")
+                if hours is None: errors.append("請輸入時數")
+                if errors:
+                    st.error("；".join(errors)+"。")
                 else:
                     try:
                         payload={"entry_date":str(entry_date),"content":content,"hours":hours,"note":note.strip() or None,"coach_id":allowed[coach_name],"created_by":me["id"]}
@@ -177,12 +182,14 @@ def daily_page(me):
     standard_entry(tab2,"single_sales","single_sale_form","銷售內容","single_sale")
     with tab3:
         with st.form("event_support_form",clear_on_submit=True):
-            c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today(),key="event_date"); coach_name=c2.selectbox("教練",list(allowed),key="event_coach")
+            c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today(),key="event_date"); coach_name=c2.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練",key="event_coach")
             content=st.text_input("活動內容")
-            c1,c2=st.columns(2); hours=c1.number_input("時數",0.25,24.0,1.0,step=0.25,key="event_hours"); deducted_hours=c2.number_input("應扣除時間",0.0,24.0,0.0,step=0.25)
+            c1,c2=st.columns(2); hours=c1.number_input("時數",0.25,24.0,value=None,step=0.25,placeholder="請輸入時數",key="event_hours"); deducted_hours=c2.number_input("應扣除時間",0.0,24.0,0.0,step=0.25)
             reason=st.text_input("扣除原因"); save=st.form_submit_button("新增紀錄")
         if save:
-            if not content.strip(): st.error("活動內容不可空白。")
+            if coach_name is None: st.error("請選擇教練。")
+            elif not content.strip(): st.error("活動內容不可空白。")
+            elif hours is None: st.error("請輸入時數。")
             elif deducted_hours>hours: st.error("應扣除時間不可大於活動時數。")
             elif deducted_hours>0 and not reason.strip(): st.error("有扣除時間時必須填寫扣除原因。")
             else:
