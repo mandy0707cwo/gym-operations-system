@@ -977,7 +977,15 @@ def member_course_io_page(me):
     if uploaded is not None:
         try:
             book=pd.ExcelFile(uploaded); errors=[]; clean_courses=[]; clean_usages=[]
-            seen_purchase_ids=set(); duplicate_purchase_rows=0
+            # Compare uploaded purchase IDs against both the current database
+            # and earlier valid rows in the same workbook. Blank IDs remain
+            # importable because they represent newly created purchases.
+            seen_purchase_ids={
+                str(code).strip().casefold()
+                for code in purchase_code_map.values()
+                if str(code).strip()
+            }
+            duplicate_purchase_rows=0
             if not any(x in book.sheet_names for x in ("會員課程","銷課表")):
                 errors.append("至少需要『會員課程』或『銷課表』工作表。")
             if "會員課程" in book.sheet_names:
@@ -1024,7 +1032,7 @@ def member_course_io_page(me):
             else:
                 st.success(f"檢查通過：會員課程 {len(clean_courses)} 筆、銷課 {len(clean_usages)} 筆。")
                 if duplicate_purchase_rows:
-                    st.info(f"已略過 purchase_id 重複的會員課程資料 {duplicate_purchase_rows} 筆，只保留每個 purchase_id 的第一筆有效資料。")
+                    st.info(f"已略過 purchase_id 重複的會員課程資料 {duplicate_purchase_rows} 筆（包含資料庫既有資料及本次檔案內重複資料）。")
                 if st.button("確認匯入",type="primary"):
                     for item in clean_courses:
                         existing=rows(admin.table("members").select("id").eq("member_name",item["member_name"]))
