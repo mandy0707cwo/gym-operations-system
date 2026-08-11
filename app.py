@@ -908,9 +908,18 @@ def member_course_io_page(me):
     admin=admin_client()
     profiles=rows(admin.table("profiles").select("id,username,display_name,role"))
     coach_profiles=[x for x in profiles if x["role"] in ("coach","manager")]
-    id_to_username={x["id"]:x.get("username") or x["display_name"] for x in coach_profiles}
     id_to_display_name={x["id"]:x["display_name"] for x in coach_profiles}
-    username_to_id={v:k for k,v in id_to_username.items()}
+    coach_reference_to_id={}
+    ambiguous_coach_references=set()
+    for coach in coach_profiles:
+        for reference in (coach.get("username"),coach.get("display_name")):
+            key=str(reference or "").strip().casefold()
+            if not key:
+                continue
+            if key in coach_reference_to_id and coach_reference_to_id[key]!=coach["id"]:
+                ambiguous_coach_references.add(key)
+            else:
+                coach_reference_to_id[key]=coach["id"]
     members=rows(admin.table("members").select("id,member_name"))
     member_names={x["id"]:x["member_name"] for x in members}
 
@@ -977,15 +986,16 @@ def member_course_io_page(me):
                 else:
                     for i,row in df.iterrows():
                         try:
-                            username=str(row["coach_username"]).strip()
-                            if username not in username_to_id: raise ValueError("找不到教練帳號")
+                            username=str(row["coach_username"]).strip(); coach_key=username.casefold()
+                            if coach_key in ambiguous_coach_references: raise ValueError("教練姓名重複，請改填登入帳號")
+                            if coach_key not in coach_reference_to_id: raise ValueError("找不到教練帳號或姓名")
                             kind=str(row["purchase_kind"]).strip().lower(); plan=str(row["payment_plan"]).strip().lower()
                             if kind not in ("first","renewal"): raise ValueError("purchase_kind 必須為 first 或 renewal")
                             if plan not in ("full","installment"): raise ValueError("payment_plan 必須為 full 或 installment")
                             purchased=pd.to_datetime(row["purchase_date"]).date(); expiry=pd.to_datetime(row["expiry_date"]).date()
                             if expiry<purchased: raise ValueError("有效日期不可早於購買日期")
                             clean_courses.append({"source_id":str(row.get("purchase_id","")).strip(),"member_name":str(row["member_name"]).strip(),
-                                "coach_id":username_to_id[username],"purchase_kind":kind,"course_name":str(row["course_name"]).strip(),
+                                "coach_id":coach_reference_to_id[coach_key],"purchase_kind":kind,"course_name":str(row["course_name"]).strip(),
                                 "total_sessions":int(row["total_sessions"]),"session_hours":float(row["session_hours"]),"total_amount":float(row["total_amount"]),
                                 "purchase_date":str(purchased),"expiry_date":str(expiry),"payment_plan":plan,"installment_count":int(row["installment_count"]),
                                 "paid_amount":float(row["paid_amount"] or 0),"paid_date":str(pd.to_datetime(row["paid_date"]).date()) if row["paid_date"] else str(purchased),
@@ -997,9 +1007,10 @@ def member_course_io_page(me):
                 else:
                     for i,row in df.iterrows():
                         try:
-                            username=str(row["coach_username"]).strip()
-                            if username not in username_to_id: raise ValueError("找不到教練帳號")
-                            clean_usages.append({"purchase_id":str(row["purchase_id"]).strip(),"usage_date":str(pd.to_datetime(row["usage_date"]).date()),"coach_id":username_to_id[username],"note":str(row["note"]).strip() or None})
+                            username=str(row["coach_username"]).strip(); coach_key=username.casefold()
+                            if coach_key in ambiguous_coach_references: raise ValueError("教練姓名重複，請改填登入帳號")
+                            if coach_key not in coach_reference_to_id: raise ValueError("找不到教練帳號或姓名")
+                            clean_usages.append({"purchase_id":str(row["purchase_id"]).strip(),"usage_date":str(pd.to_datetime(row["usage_date"]).date()),"coach_id":coach_reference_to_id[coach_key],"note":str(row["note"]).strip() or None})
                         except Exception as exc: errors.append(f"銷課表第 {i+2} 列：{exc}")
             if errors: st.error("匯入檢查未通過：\n- "+"\n- ".join(errors[:30]))
             else:
