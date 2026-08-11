@@ -977,6 +977,7 @@ def member_course_io_page(me):
     if uploaded is not None:
         try:
             book=pd.ExcelFile(uploaded); errors=[]; clean_courses=[]; clean_usages=[]
+            seen_purchase_ids=set(); duplicate_purchase_rows=0
             if not any(x in book.sheet_names for x in ("會員課程","銷課表")):
                 errors.append("至少需要『會員課程』或『銷課表』工作表。")
             if "會員課程" in book.sheet_names:
@@ -986,6 +987,11 @@ def member_course_io_page(me):
                 else:
                     for i,row in df.iterrows():
                         try:
+                            source_id=str(row.get("purchase_id","")).strip()
+                            source_key=source_id.casefold()
+                            if source_key and source_key in seen_purchase_ids:
+                                duplicate_purchase_rows+=1
+                                continue
                             username=str(row["coach_username"]).strip(); coach_key=username.casefold()
                             if coach_key in ambiguous_coach_references: raise ValueError("教練姓名重複，請改填登入帳號")
                             if coach_key not in coach_reference_to_id: raise ValueError("找不到教練帳號或姓名")
@@ -994,12 +1000,14 @@ def member_course_io_page(me):
                             if plan not in ("full","installment"): raise ValueError("payment_plan 必須為 full 或 installment")
                             purchased=pd.to_datetime(row["purchase_date"]).date(); expiry=pd.to_datetime(row["expiry_date"]).date()
                             if expiry<purchased: raise ValueError("有效日期不可早於購買日期")
-                            clean_courses.append({"source_id":str(row.get("purchase_id","")).strip(),"member_name":str(row["member_name"]).strip(),
+                            clean_courses.append({"source_id":source_id,"member_name":str(row["member_name"]).strip(),
                                 "coach_id":coach_reference_to_id[coach_key],"purchase_kind":kind,"course_name":str(row["course_name"]).strip(),
                                 "total_sessions":int(row["total_sessions"]),"session_hours":float(row["session_hours"]),"total_amount":float(row["total_amount"]),
                                 "purchase_date":str(purchased),"expiry_date":str(expiry),"payment_plan":plan,"installment_count":int(row["installment_count"]),
                                 "paid_amount":float(row["paid_amount"] or 0),"paid_date":str(pd.to_datetime(row["paid_date"]).date()) if row["paid_date"] else str(purchased),
                                 "referral":str(row.get("referral","")).strip() or None,"note":str(row.get("note","")).strip() or None})
+                            if source_key:
+                                seen_purchase_ids.add(source_key)
                         except Exception as exc: errors.append(f"會員課程第 {i+2} 列：{exc}")
             if "銷課表" in book.sheet_names:
                 df=pd.read_excel(book,"銷課表").fillna("")
@@ -1015,6 +1023,8 @@ def member_course_io_page(me):
             if errors: st.error("匯入檢查未通過：\n- "+"\n- ".join(errors[:30]))
             else:
                 st.success(f"檢查通過：會員課程 {len(clean_courses)} 筆、銷課 {len(clean_usages)} 筆。")
+                if duplicate_purchase_rows:
+                    st.info(f"已略過 purchase_id 重複的會員課程資料 {duplicate_purchase_rows} 筆，只保留每個 purchase_id 的第一筆有效資料。")
                 if st.button("確認匯入",type="primary"):
                     for item in clean_courses:
                         existing=rows(admin.table("members").select("id").eq("member_name",item["member_name"]))
