@@ -26,6 +26,7 @@ LABELS = {
     "entry_date":"日期", "content":"內容", "hours":"時數",
     "deducted_hours":"應扣除時間", "deduction_reason":"扣除原因",
     "cancel_date":"取消日期", "cancelled_sessions":"銷課取消堂數", "reason":"取消原因",
+    "note":"備註",
 }
 ROLE_LABELS = {"coach": "教練", "shared_coach": "共用教練帳號", "manager": "主管", "admin": "系統管理員"}
 USERNAME_RE = re.compile(r"^[a-z0-9_]{3,30}$")
@@ -151,24 +152,25 @@ def daily_page(me):
                 c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today()); coach_name=c2.selectbox("教練",list(allowed))
                 member_name=st.text_input("體驗會員姓名") if require_member else None
                 c1,c2=st.columns(2); content=c1.selectbox(content_label,item_names); hours=c2.number_input("時數",0.25,24.0,1.0,step=0.25)
+                note=st.text_input("備註")
                 save=st.form_submit_button("新增紀錄")
             if save:
                 if require_member and not member_name.strip():
                     st.error("體驗會員姓名不可空白。")
                 else:
                     try:
-                        payload={"entry_date":str(entry_date),"content":content,"hours":hours,"coach_id":allowed[coach_name],"created_by":me["id"]}
+                        payload={"entry_date":str(entry_date),"content":content,"hours":hours,"note":note.strip() or None,"coach_id":allowed[coach_name],"created_by":me["id"]}
                         if require_member: payload["member_name"]=member_name.strip()
                         client().table(table_name).insert(payload).execute()
                         st.success("紀錄已新增。"); st.rerun()
                     except Exception as exc: st.error(f"新增失敗：{exc}")
-            select_fields="entry_date,content,hours,coach_id,member_name" if require_member else "entry_date,content,hours,coach_id"
+            select_fields="entry_date,content,hours,note,coach_id,member_name" if require_member else "entry_date,content,hours,note,coach_id"
             data=rows(client().table(table_name).select(select_fields).order("entry_date",desc=True).limit(100))
             data=[x for x in data if x.get("coach_id") in names]
             for x in data:
                 x["coach_name"]=names.get(x.pop("coach_id"),"未知")
                 if require_member: x["trial_member_name"]=x.pop("member_name",None)
-            columns=["entry_date"] + (["trial_member_name"] if require_member else []) + ["content","hours","coach_name"]
+            columns=["entry_date"] + (["trial_member_name"] if require_member else []) + ["content","hours","coach_name","note"]
             show_table(data,columns)
 
     standard_entry(tab1,"trial_items","trial_item_form","體驗內容","trial",require_member=True)
@@ -250,12 +252,14 @@ def purchase_page(me):
                 client().table("purchase_payments").insert({"purchase_id":p["id"],"installment_no":1,"amount":paid,"paid_date":str(paid_date),"created_by":me["id"]}).execute()
                 st.success("購買與首期付款紀錄已建立。")
             except Exception as exc: st.error(f"建立失敗：{exc}")
-    st.subheader("登錄後續期款")
     purchases=rows(client().table("purchase_balances").select("purchase_id,member_name,course_name,coach_id"))
     operational_ids=set(coaches.values())
     purchases=[x for x in purchases if x.get("coach_id") in operational_ids]
+    installment_ids={x["id"] for x in rows(client().table("purchases").select("id").eq("payment_plan","installment"))}
+    purchases=[x for x in purchases if x["purchase_id"] in installment_ids]
     lookup={f'{x["member_name"]}｜{x["course_name"]}｜{x["purchase_id"][:8]}':x["purchase_id"] for x in purchases}
     if lookup:
+        st.subheader("登錄後續期款")
         with st.form("payment"):
             label=st.selectbox("購買紀錄",list(lookup))
             c1,c2,c3=st.columns(3)
@@ -267,7 +271,7 @@ def purchase_page(me):
                 st.success("付款紀錄已新增。")
             except Exception as exc: st.error(f"新增失敗（請檢查期次是否重複或超出設定）：{exc}")
 
-def usage_query_tabs():
+def usage_query_tabs(me):
     st.divider()
     st.subheader("銷課查詢")
     coaches=coach_options()
@@ -289,10 +293,13 @@ def usage_query_tabs():
 
     tab1,tab2,tab3,tab4=st.tabs(["會員課程查詢","銷課統計","一個月內到期","剩餘三堂（含）"])
     with tab1:
-        selected_coach=st.selectbox("成交教練",["全部教練"]+list(coaches),key="member_course_coach_filter")
-        filtered_balances=balances if selected_coach=="全部教練" else [
-            x for x in balances if x.get("coach_id")==coaches[selected_coach]
-        ]
+        can_filter_coach=me["role"] in ("shared_coach","manager","admin")
+        if can_filter_coach:
+            selected_coach=st.selectbox("成交教練",["全部教練"]+list(coaches),key="member_course_coach_filter")
+            filtered_balances=balances if selected_coach=="全部教練" else [x for x in balances if x.get("coach_id")==coaches[selected_coach]]
+        else:
+            st.caption(f'成交教練：{me["display_name"]}')
+            filtered_balances=[x for x in balances if x.get("coach_id")==me["id"]]
         detail=[]
         for item in filtered_balances:
             purchase=purchase_map.get(item["purchase_id"],{})
@@ -321,14 +328,19 @@ def usage_query_tabs():
         c1,c2,c3=st.columns(3)
         query_start=c1.date_input("開始日期",date.today().replace(day=1),key="usage_query_start")
         query_end=c2.date_input("結束日期",date.today(),key="usage_query_end")
-        usage_coach=c3.selectbox("授課教練",["全部教練"]+list(coaches),key="usage_stats_coach_filter")
+        if can_filter_coach:
+            usage_coach=c3.selectbox("授課教練",["全部教練"]+list(coaches),key="usage_stats_coach_filter")
+        else:
+            c3.caption(f'授課教練：{me["display_name"]}')
+            usage_coach=me["display_name"]
         if query_start>query_end:
             st.error("開始日期不可晚於結束日期。")
         else:
             usages=rows(client().table("session_usages").select("usage_date,coach_id,deducted_amount").gte("usage_date",str(query_start)).lte("usage_date",str(query_end)))
             usages=[x for x in usages if x.get("coach_id") in operational_ids]
             if usage_coach!="全部教練":
-                usages=[x for x in usages if x.get("coach_id")==coaches[usage_coach]]
+                usage_coach_id=coaches.get(usage_coach,me["id"])
+                usages=[x for x in usages if x.get("coach_id")==usage_coach_id]
             total_sessions=len(usages)
             total_amount=sum(float(x["deducted_amount"]) for x in usages)
             average=total_amount/total_sessions if total_sessions else 0
@@ -393,15 +405,15 @@ def usage_page(me):
         for x in cancellations: x["coach_name"]=coach_names.get(x.pop("coach_id"),"未知")
         show_table(cancellations,["cancel_date","coach_name","cancelled_sessions","reason"])
     members=rows(client().table("members").select("id,member_name").eq("active",True).order("member_name"))
-    if not members: st.info("請先建立課程購買紀錄。") ; usage_query_tabs() ; return
+    if not members: st.info("請先建立課程購買紀錄。") ; usage_query_tabs(me) ; return
     member_map={x["member_name"]:x["id"] for x in members}
     member_name=st.selectbox("會員名稱",list(member_map),index=None,placeholder="輸入或選擇會員")
-    if not member_name: usage_query_tabs() ; return
+    if not member_name: usage_query_tabs(me) ; return
     balances=rows(client().table("purchase_balances").select("*").eq("member_id",member_map[member_name]).gt("remaining_sessions",0).order("expiry_date"))
     balances=[x for x in balances if x.get("coach_id") in set(coaches.values())]
     show_table(balances,["course_name","coach_name","total_sessions","used_sessions","remaining_sessions","remaining_amount","expiry_date","status"])
     active=[x for x in balances if x["status"]=="active"]
-    if not active: st.warning("此會員沒有可扣課的有效課程。") ; usage_query_tabs() ; return
+    if not active: st.warning("此會員沒有可扣課的有效課程。") ; usage_query_tabs(me) ; return
     lookup={f'{x["course_name"]}｜成交教練：{x["coach_name"]}｜剩 {x["remaining_sessions"]} 堂｜餘額 {x["remaining_amount"]}':x for x in active}
     with st.form("consume"):
         label=st.selectbox("選擇課程",list(lookup)); selected=lookup[label]
@@ -420,7 +432,7 @@ def usage_page(me):
     history=[x for x in history if x.get("coach_id") in names]
     for x in history: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
     st.subheader("扣課紀錄"); show_table(history,["usage_date","coach_name","session_seq","deducted_amount","note"])
-    usage_query_tabs()
+    usage_query_tabs(me)
 
 def dashboard_page(me):
     st.header("主管 Dashboard")
@@ -885,8 +897,8 @@ def member_course_io_page(me):
             "member_name":member_names.get(p.get("member_id"),""),"course_name":p.get("course_name",""),
             "usage_date":x["usage_date"],"coach_username":id_to_display_name.get(x["coach_id"],""),
             "session_seq":x["session_seq"],"deducted_amount":x["deducted_amount"],"note":x.get("note") or ""})
-    trial_rows=rows(admin.table("trial_items").select("entry_date,member_name,content,hours,coach_id,created_at").order("entry_date"))
-    single_sale_rows=rows(admin.table("single_sales").select("entry_date,content,hours,coach_id,created_at").order("entry_date"))
+    trial_rows=rows(admin.table("trial_items").select("entry_date,member_name,content,hours,note,coach_id,created_at").order("entry_date"))
+    single_sale_rows=rows(admin.table("single_sales").select("entry_date,content,hours,note,coach_id,created_at").order("entry_date"))
     event_rows=rows(admin.table("event_supports").select("entry_date,content,hours,deducted_hours,deduction_reason,coach_id,created_at").order("entry_date"))
     for collection in (trial_rows,single_sale_rows,event_rows):
         for item in collection:
@@ -1014,10 +1026,10 @@ def record_admin_page(me):
             reason=st.text_input("取消原因",record.get("reason") or "")
         elif data_type=="體驗項目":
             c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["entry_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
-            member_name=st.text_input("體驗會員姓名",record.get("member_name") or ""); content=st.text_input("體驗內容",record["content"]); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25)
+            member_name=st.text_input("體驗會員姓名",record.get("member_name") or ""); content=st.text_input("體驗內容",record["content"]); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25); note=st.text_input("備註",record.get("note") or "")
         elif data_type=="單堂銷售":
             c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["entry_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
-            content=st.text_input("銷售內容",record["content"]); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25)
+            content=st.text_input("銷售內容",record["content"]); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25); note=st.text_input("備註",record.get("note") or "")
         elif data_type=="活動支援":
             c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["entry_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
             content=st.text_input("活動內容",record["content"])
@@ -1034,10 +1046,10 @@ def record_admin_page(me):
                 admin.table("session_cancellations").update({"cancel_date":str(d),"coach_id":record_coach_map[coach],"cancelled_sessions":cancelled_sessions,"reason":reason.strip() or None}).eq("id",record["id"]).execute()
             elif data_type=="體驗項目":
                 if not member_name.strip() or not content.strip(): raise ValueError("體驗會員姓名及體驗內容不可空白")
-                admin.table("trial_items").update({"entry_date":str(d),"coach_id":record_coach_map[coach],"member_name":member_name.strip(),"content":content.strip(),"hours":hours}).eq("id",record["id"]).execute()
+                admin.table("trial_items").update({"entry_date":str(d),"coach_id":record_coach_map[coach],"member_name":member_name.strip(),"content":content.strip(),"hours":hours,"note":note.strip() or None}).eq("id",record["id"]).execute()
             elif data_type=="單堂銷售":
                 if not content.strip(): raise ValueError("銷售內容不可空白")
-                admin.table("single_sales").update({"entry_date":str(d),"coach_id":record_coach_map[coach],"content":content.strip(),"hours":hours}).eq("id",record["id"]).execute()
+                admin.table("single_sales").update({"entry_date":str(d),"coach_id":record_coach_map[coach],"content":content.strip(),"hours":hours,"note":note.strip() or None}).eq("id",record["id"]).execute()
             elif data_type=="活動支援":
                 if not content.strip(): raise ValueError("活動內容不可空白")
                 if deducted_hours>hours: raise ValueError("應扣除時間不可大於活動時數")

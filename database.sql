@@ -58,6 +58,7 @@ create table public.trial_items (
   member_name text not null check (length(trim(member_name)) > 0),
   content text not null check (length(trim(content)) > 0),
   hours numeric(5,2) not null check (hours > 0),
+  note text,
   coach_id uuid not null references public.profiles(id),
   created_at timestamptz not null default now(), created_by uuid not null references public.profiles(id)
 );
@@ -66,6 +67,7 @@ create table public.single_sales (
   id uuid primary key default gen_random_uuid(), entry_date date not null,
   content text not null check (length(trim(content)) > 0),
   hours numeric(5,2) not null check (hours > 0),
+  note text,
   coach_id uuid not null references public.profiles(id),
   created_at timestamptz not null default now(), created_by uuid not null references public.profiles(id)
 );
