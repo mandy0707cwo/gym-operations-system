@@ -198,8 +198,9 @@ def daily_page(me):
 def purchase_page(me):
     st.header("課程購買")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
-    courses=rows(client().table("course_catalog").select("course_name,session_hours").order("course_name"))
-    course_names=[x["course_name"] for x in courses]
+    courses=rows(client().table("course_catalog").select("course_name,course_type,session_hours").order("course_name"))
+    course_options={f'{x.get("course_type") or "未分類"}｜{x["course_name"]}':x["course_name"] for x in courses}
+    course_names=list(course_options)
     course_hours={x["course_name"]:float(x.get("session_hours") or 1) for x in courses}
     if not course_names:
         st.warning("尚未建立課程名稱，請由系統管理員先到「課程名稱管理」新增。")
@@ -211,7 +212,8 @@ def purchase_page(me):
         kind=c2.selectbox("購買類型",["首次購買","續課"])
         coach_name=c3.selectbox("指導教練",list(allowed))
         c1,c2,c3,c4=st.columns(4)
-        course=c1.selectbox("課程名稱",course_names)
+        course_label=c1.selectbox("課程名稱",course_names)
+        course=course_options[course_label]
         sessions=c2.number_input("課程堂數",1,999,1)
         session_hours=c3.number_input("每堂課時數",0.25,24.0,course_hours[course],step=0.25,format="%.2f",disabled=True)
         amount=c4.number_input("成交總金額",0.0,10000000.0,step=100.0,format="%.0f")
@@ -655,26 +657,27 @@ def course_admin_page(me):
         st.error("尚未設定 SUPABASE_SECRET_KEY。")
         return
     with st.form("add_course",clear_on_submit=True):
-        c1,c2=st.columns(2)
+        c1,c2,c3=st.columns(3)
         course_name=c1.text_input("新增課程名稱").strip()
-        course_hours=c2.number_input("每堂課時數",0.25,24.0,1.0,step=0.25,format="%.2f")
+        course_type=c2.text_input("課程種類").strip()
+        course_hours=c3.number_input("每堂課時數",0.25,24.0,1.0,step=0.25,format="%.2f")
         add_course=st.form_submit_button("新增課程")
     if add_course:
-        if not course_name:
-            st.error("課程名稱不可空白。")
+        if not course_name or not course_type:
+            st.error("課程名稱與課程種類不可空白。")
         else:
             try:
-                admin.table("course_catalog").insert({"course_name":course_name,"session_hours":course_hours}).execute()
+                admin.table("course_catalog").insert({"course_name":course_name,"course_type":course_type,"session_hours":course_hours}).execute()
                 st.success(f"已新增課程：{course_name}")
                 st.rerun()
             except Exception as exc:
                 st.error(f"新增失敗，請確認課程名稱是否重複：{exc}")
-    courses=rows(admin.table("course_catalog").select("id,course_name,session_hours,created_at").order("course_name"))
+    courses=rows(admin.table("course_catalog").select("id,course_name,course_type,session_hours,created_at").order("course_name"))
     if not courses:
         st.info("目前尚未建立課程名稱。")
         return
-    show_table(courses,["course_name","session_hours","created_at"])
-    course_labels={x["course_name"]:x["id"] for x in courses}
+    show_table(courses,["course_type","course_name","session_hours","created_at"])
+    course_labels={f'{x.get("course_type") or "未分類"}｜{x["course_name"]}':x["id"] for x in courses}
     with st.form("delete_course"):
         selected_course=st.selectbox("選擇要刪除的課程",list(course_labels))
         confirm_delete=st.checkbox("我確認刪除此課程名稱；既有會員購買紀錄仍會保留。")

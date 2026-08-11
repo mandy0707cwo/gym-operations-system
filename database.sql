@@ -26,6 +26,7 @@ create table public.members (
 create table public.course_catalog (
   id uuid primary key default gen_random_uuid(),
   course_name text not null unique check (length(trim(course_name)) > 0),
+  course_type text not null default '未分類' check (length(trim(course_type)) > 0),
   session_hours numeric(4,2) not null default 1 check (session_hours > 0),
   created_at timestamptz not null default now()
 );
