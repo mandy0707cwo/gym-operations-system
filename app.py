@@ -22,7 +22,7 @@ LABELS = {
     "trial_member_name":"體驗會員姓名", "single_sale_member_name":"單堂銷售會員姓名",
     "course_name":"課程名稱", "total_sessions":"原始堂數", "session_hours":"每堂課時數",
     "remaining_sessions":"剩餘堂數", "remaining_amount":"剩餘金額",
-    "usage_date":"銷課日期", "session_seq":"第幾堂", "deducted_amount":"扣課金額",
+    "purchase_date":"成交日期", "usage_date":"銷課日期", "session_seq":"第幾堂", "deducted_amount":"扣課金額",
     "entry_date":"日期", "content":"內容", "hours":"時數",
     "deducted_hours":"應扣除時間", "deduction_reason":"扣除原因",
     "cancel_date":"取消日期", "cancelled_sessions":"銷課取消堂數", "reason":"取消原因",
@@ -339,6 +339,9 @@ def usage_query_tabs(me):
         purchases=rows(client().table("purchases").select("id,payment_plan,installment_count,session_hours,purchase_date").in_("id",purchase_ids))
         payments=rows(client().table("purchase_payments").select("purchase_id,installment_no,amount").in_("purchase_id",purchase_ids))
     purchase_map={x["id"]:x for x in purchases}
+    for balance in balances:
+        balance["purchase_date"]=purchase_map.get(balance["purchase_id"],{}).get("purchase_date")
+    balances.sort(key=lambda x:str(x.get("purchase_date") or ""),reverse=True)
     payment_map={}
     for payment in payments:
         summary=payment_map.setdefault(payment["purchase_id"],{"amount":0.0,"count":0})
@@ -447,7 +450,7 @@ def usage_query_tabs(me):
                   and today<=pd.to_datetime(x["expiry_date"]).date()<=deadline]
         st.caption(f"查詢期間：{today} 至 {deadline}")
         if expiring:
-            expiry_rows=[{"會員名稱":x["member_name"],"課程名稱":x["course_name"],"成交教練":x["coach_name"],
+            expiry_rows=[{"成交日期":x.get("purchase_date"),"會員名稱":x["member_name"],"課程名稱":x["course_name"],"成交教練":x["coach_name"],
                           "剩餘堂數":x["remaining_sessions"],"剩餘金額":float(x["remaining_amount"]),
                           "有效期限":x["expiry_date"],"剩餘天數":(pd.to_datetime(x["expiry_date"]).date()-today).days}
                          for x in expiring]
@@ -459,7 +462,7 @@ def usage_query_tabs(me):
     with tab4:
         low_balances=[x for x in balances if x["status"]=="active" and 0<x["remaining_sessions"]<=3]
         if low_balances:
-            low_rows=[{"會員名稱":x["member_name"],"課程名稱":x["course_name"],"成交教練":x["coach_name"],
+            low_rows=[{"成交日期":x.get("purchase_date"),"會員名稱":x["member_name"],"課程名稱":x["course_name"],"成交教練":x["coach_name"],
                        "購買堂數":x["total_sessions"],"已上堂數":x["used_sessions"],
                        "剩餘堂數":x["remaining_sessions"],"剩餘金額":float(x["remaining_amount"]),
                        "有效期限":x["expiry_date"]} for x in low_balances]
@@ -489,9 +492,14 @@ def usage_page(me):
     member_map={x["member_name"]:x["id"] for x in members}
     member_name=st.selectbox("會員名稱",list(member_map),index=None,placeholder="輸入或選擇會員")
     if not member_name: usage_query_tabs(me) ; return
-    balances=rows(client().table("purchase_balances").select("*").eq("member_id",member_map[member_name]).gt("remaining_sessions",0).order("expiry_date"))
+    balances=rows(client().table("purchase_balances").select("*").eq("member_id",member_map[member_name]).gt("remaining_sessions",0))
     balances=[x for x in balances if x.get("coach_id") in set(coaches.values())]
-    show_table(balances,["course_name","coach_name","total_sessions","used_sessions","remaining_sessions","remaining_amount","expiry_date","status"])
+    balance_purchase_ids=[x["purchase_id"] for x in balances]
+    balance_purchase_dates=rows(client().table("purchases").select("id,purchase_date").in_("id",balance_purchase_ids)) if balance_purchase_ids else []
+    balance_purchase_date_map={x["id"]:x.get("purchase_date") for x in balance_purchase_dates}
+    for balance in balances: balance["purchase_date"]=balance_purchase_date_map.get(balance["purchase_id"])
+    balances.sort(key=lambda x:str(x.get("purchase_date") or ""),reverse=True)
+    show_table(balances,["purchase_date","course_name","coach_name","total_sessions","used_sessions","remaining_sessions","remaining_amount","expiry_date","status"])
     active=[x for x in balances if x["status"]=="active"]
     if not active: st.warning("此會員沒有可扣課的有效課程。") ; usage_query_tabs(me) ; return
     lookup={f'{x["course_name"]}｜成交教練：{x["coach_name"]}｜剩 {x["remaining_sessions"]} 堂｜餘額 {x["remaining_amount"]}':x for x in active}
@@ -1167,6 +1175,7 @@ def record_admin_page(me):
         record_purchase_ids=[x["purchase_id"] for x in records]
         record_purchase_dates=rows(admin.table("purchases").select("id,purchase_date").in_("id",record_purchase_ids)) if record_purchase_ids else []
         purchase_date_map={x["id"]:x.get("purchase_date") for x in record_purchase_dates}
+        records.sort(key=lambda x:str(purchase_date_map.get(x["purchase_id"]) or ""),reverse=True)
         labels={f'{purchase_date_map.get(x["purchase_id"],"日期不明")}｜{x["member_name"]}｜{x["course_name"]}｜{x["purchase_id"][:8]}':x for x in records}
     else:
         records=rows(admin.table("session_usages").select("*").order("usage_date",desc=True).limit(500))
