@@ -535,7 +535,12 @@ def usage_query_tabs(me):
 def usage_page(me):
     st.header("銷課表")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
-    st.subheader("新增銷課取消紀錄")
+    st.markdown(
+        '<div style="font-size:1.5rem;font-weight:600;line-height:1.3;margin:0.25rem 0 1rem 0;">'
+        '銷課取消記錄 <span style="font-size:0.75rem;font-weight:400;">（前一日及當日臨時請假者）</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
     with st.form("session_cancellation",clear_on_submit=True):
         c1,c2,c3=st.columns(3); cancel_date=c1.date_input("取消日期",date.today()); cancel_coach=c2.selectbox("教練",list(allowed)); cancel_count=c3.number_input("銷課取消堂數",0,100,0)
         cancel_reason=st.text_input("取消原因"); add_cancel=st.form_submit_button("新增取消紀錄")
