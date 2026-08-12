@@ -471,19 +471,19 @@ def usage_query_tabs(me):
 def usage_page(me):
     st.header("銷課表")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
-    with st.expander("新增銷課取消紀錄",expanded=False):
-        with st.form("session_cancellation",clear_on_submit=True):
-            c1,c2,c3=st.columns(3); cancel_date=c1.date_input("取消日期",date.today()); cancel_coach=c2.selectbox("教練",list(allowed)); cancel_count=c3.number_input("銷課取消堂數",0,100,0)
-            cancel_reason=st.text_input("取消原因"); add_cancel=st.form_submit_button("新增取消紀錄")
-        if add_cancel:
-            try:
-                client().table("session_cancellations").insert({"cancel_date":str(cancel_date),"coach_id":allowed[cancel_coach],"cancelled_sessions":cancel_count,"reason":cancel_reason.strip() or None,"created_by":me["id"]}).execute()
-                st.success("銷課取消紀錄已新增。"); st.rerun()
-            except Exception as exc: st.error(f"新增失敗：{exc}")
-        cancellations=rows(client().table("session_cancellations").select("cancel_date,coach_id,cancelled_sessions,reason").order("cancel_date",desc=True).limit(100))
-        coach_names={v:k for k,v in coaches.items()}; cancellations=[x for x in cancellations if x.get("coach_id") in coach_names]
-        for x in cancellations: x["coach_name"]=coach_names.get(x.pop("coach_id"),"未知")
-        show_table(cancellations,["cancel_date","coach_name","cancelled_sessions","reason"])
+    st.subheader("新增銷課取消紀錄")
+    with st.form("session_cancellation",clear_on_submit=True):
+        c1,c2,c3=st.columns(3); cancel_date=c1.date_input("取消日期",date.today()); cancel_coach=c2.selectbox("教練",list(allowed)); cancel_count=c3.number_input("銷課取消堂數",0,100,0)
+        cancel_reason=st.text_input("取消原因"); add_cancel=st.form_submit_button("新增取消紀錄")
+    if add_cancel:
+        try:
+            client().table("session_cancellations").insert({"cancel_date":str(cancel_date),"coach_id":allowed[cancel_coach],"cancelled_sessions":cancel_count,"reason":cancel_reason.strip() or None,"created_by":me["id"]}).execute()
+            st.success("銷課取消紀錄已新增。"); st.rerun()
+        except Exception as exc: st.error(f"新增失敗：{exc}")
+    cancellations=rows(client().table("session_cancellations").select("cancel_date,coach_id,cancelled_sessions,reason").order("cancel_date",desc=True).limit(100))
+    coach_names={v:k for k,v in coaches.items()}; cancellations=[x for x in cancellations if x.get("coach_id") in coach_names]
+    for x in cancellations: x["coach_name"]=coach_names.get(x.pop("coach_id"),"未知")
+    show_table(cancellations,["cancel_date","coach_name","cancelled_sessions","reason"])
     members=rows(client().table("members").select("id,member_name").eq("active",True).order("member_name"))
     if not members: st.info("請先建立課程購買紀錄。") ; usage_query_tabs(me) ; return
     member_map={x["member_name"]:x["id"] for x in members}
