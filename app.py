@@ -17,7 +17,7 @@ st.set_page_config(page_title="秀傳運醫營運系統", page_icon="🏋️", l
 
 LABELS = {
     "operation_date":"日期", "coach_name":"教練", "classes_held":"上課堂數",
-    "classes_cancelled":"銷課取消堂數", "trial_visits":"體驗人次",
+    "classes_cancelled":"上課取消堂數", "trial_visits":"體驗人次",
     "trial_conversions":"體驗成交人次", "member_name":"會員名稱",
     "trial_member_name":"體驗會員姓名", "single_sale_member_name":"單堂銷售會員姓名",
     "course_name":"課程名稱", "total_sessions":"原始堂數", "session_hours":"每堂課時數",
@@ -25,7 +25,7 @@ LABELS = {
     "purchase_date":"成交日期", "usage_date":"銷課日期", "session_seq":"第幾堂", "deducted_amount":"扣課金額",
     "entry_date":"日期", "content":"內容", "hours":"時數",
     "deducted_hours":"應扣除時間", "deduction_reason":"扣除原因",
-    "cancel_date":"取消日期", "cancelled_sessions":"銷課取消堂數", "reason":"取消原因",
+    "cancel_date":"取消日期", "cancelled_sessions":"上課取消堂數", "reason":"取消原因",
     "project_name":"專案名稱", "person_name":"姓名", "item_name":"操作項目",
     "quantity":"數量", "item_hours":"每次時數", "execution_hours":"執行時數", "unit_price":"價格", "line_total":"總價",
     "referral":"醫生轉介", "note":"備註",
@@ -540,7 +540,7 @@ def usage_page(me):
     with cancel_tab:
         st.markdown('<div style="font-size:1.5rem;font-weight:600;line-height:1.3;margin:0.25rem 0 1rem 0;">上課預約取消 <span style="font-size:0.75rem;font-weight:400;">（前一日及當日臨時請假者）</span></div>',unsafe_allow_html=True)
         with st.form("session_cancellation",clear_on_submit=True):
-            c1,c2,c3=st.columns(3); cancel_date=c1.date_input("取消日期",date.today()); cancel_coach=c2.selectbox("教練",list(allowed)); cancel_count=c3.number_input("銷課取消堂數",0,100,0)
+            c1,c2,c3=st.columns(3); cancel_date=c1.date_input("取消日期",date.today()); cancel_coach=c2.selectbox("教練",list(allowed)); cancel_count=c3.number_input("上課取消堂數",0,100,0)
             cancel_reason=st.text_input("取消原因"); add_cancel=st.form_submit_button("新增取消紀錄")
         if add_cancel:
             try:
@@ -1279,7 +1279,7 @@ def record_admin_page(me):
                 c1,c2,c3=st.columns(3)
                 new_cancel_date=c1.date_input("取消日期",date.today(),key="admin_cancel_date")
                 new_cancel_coach=c2.selectbox("教練",list(coach_map),key="admin_cancel_coach")
-                new_cancel_count=c3.number_input("銷課取消堂數",0,100,0,key="admin_cancel_count")
+                new_cancel_count=c3.number_input("上課取消堂數",0,100,0,key="admin_cancel_count")
                 new_cancel_reason=st.text_input("取消原因",key="admin_cancel_reason")
                 add_cancel=st.form_submit_button("新增紀錄")
             if add_cancel:
@@ -1325,7 +1325,7 @@ def record_admin_page(me):
     with st.form("record_edit"):
         if data_type=="銷課取消紀錄":
             c1,c2,c3=st.columns(3)
-            d=c1.date_input("取消日期",pd.to_datetime(record["cancel_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index); cancelled_sessions=c3.number_input("銷課取消堂數",0,100,int(record["cancelled_sessions"]))
+            d=c1.date_input("取消日期",pd.to_datetime(record["cancel_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index); cancelled_sessions=c3.number_input("上課取消堂數",0,100,int(record["cancelled_sessions"]))
             reason=st.text_input("取消原因",record.get("reason") or "")
         elif data_type=="體驗項目":
             c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["entry_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
