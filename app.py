@@ -240,7 +240,11 @@ def purchase_page(me):
         amount=c3.number_input("成交總金額",0.0,10000000.0,value=None,step=100.0,format="%.0f",placeholder="請輸入金額")
         c1,c2=st.columns(2)
         purchased=c1.date_input("購買日期",date.today())
-        expiry=c2.date_input("有效日期",value=None)
+        try:
+            default_expiry=purchased.replace(year=purchased.year+1)
+        except ValueError:
+            default_expiry=purchased.replace(year=purchased.year+1,day=28)
+        expiry=c2.date_input("有效日期",value=default_expiry)
         referral=st.text_input("醫生轉介")
         purchase_note=st.text_area("備註")
         if plan=="分期":
