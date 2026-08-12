@@ -536,60 +536,60 @@ def usage_query_tabs(me):
 def usage_page(me):
     st.header("銷課表")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
-    st.markdown(
-        '<div style="font-size:1.5rem;font-weight:600;line-height:1.3;margin:0.25rem 0 1rem 0;">'
-        '銷課取消記錄 <span style="font-size:0.75rem;font-weight:400;">（前一日及當日臨時請假者）</span>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-    with st.form("session_cancellation",clear_on_submit=True):
-        c1,c2,c3=st.columns(3); cancel_date=c1.date_input("取消日期",date.today()); cancel_coach=c2.selectbox("教練",list(allowed)); cancel_count=c3.number_input("銷課取消堂數",0,100,0)
-        cancel_reason=st.text_input("取消原因"); add_cancel=st.form_submit_button("新增取消紀錄")
-    if add_cancel:
-        try:
-            client().table("session_cancellations").insert({"cancel_date":str(cancel_date),"coach_id":allowed[cancel_coach],"cancelled_sessions":cancel_count,"reason":cancel_reason.strip() or None,"created_by":me["id"]}).execute()
-            st.success("銷課取消紀錄已新增。"); st.rerun()
-        except Exception as exc: st.error(f"新增失敗：{exc}")
-    cancellations=rows(client().table("session_cancellations").select("cancel_date,coach_id,cancelled_sessions,reason").order("cancel_date",desc=True).limit(100))
-    coach_names={v:k for k,v in coaches.items()}; cancellations=[x for x in cancellations if x.get("coach_id") in coach_names]
-    for x in cancellations: x["coach_name"]=coach_names.get(x.pop("coach_id"),"未知")
-    show_table(cancellations,["cancel_date","coach_name","cancelled_sessions","reason"])
-    members=rows(client().table("members").select("id,member_name").eq("active",True).order("member_name"))
-    if not members: st.info("請先建立課程購買紀錄。") ; usage_query_tabs(me) ; return
-    member_map={x["member_name"]:x["id"] for x in members}
-    member_name=st.selectbox("會員名稱",list(member_map),index=None,placeholder="輸入或選擇會員")
-    if not member_name: usage_query_tabs(me) ; return
-    balances=rows(client().table("purchase_balances").select("*").eq("member_id",member_map[member_name]).gt("remaining_sessions",0))
-    balances=[x for x in balances if x.get("coach_id") in set(coaches.values())]
-    balance_purchase_ids=[x["purchase_id"] for x in balances]
-    balance_purchase_dates=rows(client().table("purchases").select("id,purchase_date").in_("id",balance_purchase_ids)) if balance_purchase_ids else []
-    balance_purchase_date_map={x["id"]:x.get("purchase_date") for x in balance_purchase_dates}
-    for balance in balances: balance["purchase_date"]=balance_purchase_date_map.get(balance["purchase_id"])
-    balances.sort(key=lambda x:str(x.get("purchase_date") or ""),reverse=True)
-    show_table(balances,["purchase_date","course_name","coach_name","total_sessions","used_sessions","remaining_sessions","remaining_amount","expiry_date","status"])
-    active=[x for x in balances if x["status"]=="active"]
-    if not active: st.warning("此會員沒有可扣課的有效課程。") ; usage_query_tabs(me) ; return
-    lookup={f'{x["course_name"]}｜成交教練：{x["coach_name"]}｜剩 {x["remaining_sessions"]} 堂｜餘額 {x["remaining_amount"]}':x for x in active}
-    label=st.selectbox("選擇課程",list(lookup),key=f"usage_course_{member_map[member_name]}")
-    selected=lookup[label]
-    with st.form(f'consume_{selected["purchase_id"]}'):
-        c1,c2=st.columns(2)
-        usage_date=c1.date_input("銷課日期",date.today())
-        c2.text_input("授課教練",value=selected["coach_name"],disabled=True)
-        note=st.text_input("備註"); submit=st.form_submit_button("確認扣除 1 堂")
-    per=Decimal(str(selected["remaining_amount"])) if selected["remaining_sessions"]==1 else (Decimal(str(selected["total_amount"]))/selected["total_sessions"]).quantize(Decimal("0.01"))
-    st.caption(f"本次預計扣除：1 堂／$ {per:,.0f}；最後一堂會自動扣完剩餘金額。")
-    if submit:
-        try:
-            client().rpc("consume_session",{"p_purchase_id":selected["purchase_id"],"p_usage_date":str(usage_date),"p_coach_id":selected["coach_id"],"p_note":note}).execute()
-            st.success("扣課完成。") ; st.rerun()
-        except Exception as exc: st.error(f"扣課失敗：{exc}")
-    history=rows(client().table("session_usages").select("usage_date,coach_id,session_seq,deducted_amount,note").eq("purchase_id",selected["purchase_id"]).order("session_seq",desc=True))
-    names={v:k for k,v in coaches.items()}
-    history=[x for x in history if x.get("coach_id") in names]
-    for x in history: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
-    st.subheader("扣課紀錄"); show_table(history,["usage_date","coach_name","session_seq","deducted_amount","note"])
-    usage_query_tabs(me)
+    cancel_tab,register_tab,query_tab=st.tabs(["上課預約取消","銷課登錄","銷課查詢"])
+    with cancel_tab:
+        st.markdown('<div style="font-size:1.5rem;font-weight:600;line-height:1.3;margin:0.25rem 0 1rem 0;">上課預約取消 <span style="font-size:0.75rem;font-weight:400;">（前一日及當日臨時請假者）</span></div>',unsafe_allow_html=True)
+        with st.form("session_cancellation",clear_on_submit=True):
+            c1,c2,c3=st.columns(3); cancel_date=c1.date_input("取消日期",date.today()); cancel_coach=c2.selectbox("教練",list(allowed)); cancel_count=c3.number_input("銷課取消堂數",0,100,0)
+            cancel_reason=st.text_input("取消原因"); add_cancel=st.form_submit_button("新增取消紀錄")
+        if add_cancel:
+            try:
+                client().table("session_cancellations").insert({"cancel_date":str(cancel_date),"coach_id":allowed[cancel_coach],"cancelled_sessions":cancel_count,"reason":cancel_reason.strip() or None,"created_by":me["id"]}).execute()
+                st.success("銷課取消紀錄已新增。"); st.rerun()
+            except Exception as exc: st.error(f"新增失敗：{exc}")
+        cancellations=rows(client().table("session_cancellations").select("cancel_date,coach_id,cancelled_sessions,reason").order("cancel_date",desc=True).limit(100))
+        coach_names={v:k for k,v in coaches.items()}; cancellations=[x for x in cancellations if x.get("coach_id") in coach_names]
+        for x in cancellations: x["coach_name"]=coach_names.get(x.pop("coach_id"),"未知")
+        show_table(cancellations,["cancel_date","coach_name","cancelled_sessions","reason"])
+    with register_tab:
+        members=rows(client().table("members").select("id,member_name").eq("active",True).order("member_name"))
+        if not members:
+            st.info("請先建立課程購買紀錄。")
+        else:
+            member_map={x["member_name"]:x["id"] for x in members}
+            member_name=st.selectbox("會員名稱",list(member_map),index=None,placeholder="輸入或選擇會員")
+            if member_name:
+                balances=rows(client().table("purchase_balances").select("*").eq("member_id",member_map[member_name]).gt("remaining_sessions",0))
+                balances=[x for x in balances if x.get("coach_id") in set(coaches.values())]
+                balance_purchase_ids=[x["purchase_id"] for x in balances]
+                balance_purchase_dates=rows(client().table("purchases").select("id,purchase_date").in_("id",balance_purchase_ids)) if balance_purchase_ids else []
+                balance_purchase_date_map={x["id"]:x.get("purchase_date") for x in balance_purchase_dates}
+                for balance in balances: balance["purchase_date"]=balance_purchase_date_map.get(balance["purchase_id"])
+                balances.sort(key=lambda x:str(x.get("purchase_date") or ""),reverse=True)
+                show_table(balances,["purchase_date","course_name","coach_name","total_sessions","used_sessions","remaining_sessions","remaining_amount","expiry_date","status"])
+                active=[x for x in balances if x["status"]=="active"]
+                if not active:
+                    st.warning("此會員沒有可扣課的有效課程。")
+                else:
+                    lookup={f'{x["course_name"]}｜成交教練：{x["coach_name"]}｜剩 {x["remaining_sessions"]} 堂｜餘額 {x["remaining_amount"]}':x for x in active}
+                    label=st.selectbox("選擇課程",list(lookup),key=f"usage_course_{member_map[member_name]}")
+                    selected=lookup[label]
+                    with st.form(f'consume_{selected["purchase_id"]}'):
+                        c1,c2=st.columns(2); usage_date=c1.date_input("銷課日期",date.today()); c2.text_input("授課教練",value=selected["coach_name"],disabled=True)
+                        note=st.text_input("備註"); submit=st.form_submit_button("確認扣除 1 堂")
+                    per=Decimal(str(selected["remaining_amount"])) if selected["remaining_sessions"]==1 else (Decimal(str(selected["total_amount"]))/selected["total_sessions"]).quantize(Decimal("0.01"))
+                    st.caption(f"本次預計扣除：1 堂／$ {per:,.0f}；最後一堂會自動扣完剩餘金額。")
+                    if submit:
+                        try:
+                            client().rpc("consume_session",{"p_purchase_id":selected["purchase_id"],"p_usage_date":str(usage_date),"p_coach_id":selected["coach_id"],"p_note":note}).execute()
+                            st.success("扣課完成。"); st.rerun()
+                        except Exception as exc: st.error(f"扣課失敗：{exc}")
+                    history=rows(client().table("session_usages").select("usage_date,coach_id,session_seq,deducted_amount,note").eq("purchase_id",selected["purchase_id"]).order("session_seq",desc=True))
+                    names={v:k for k,v in coaches.items()}; history=[x for x in history if x.get("coach_id") in names]
+                    for x in history: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
+                    st.subheader("扣課紀錄"); show_table(history,["usage_date","coach_name","session_seq","deducted_amount","note"])
+    with query_tab:
+        usage_query_tabs(me)
 
 def dashboard_page(me):
     st.header("主管 Dashboard")
