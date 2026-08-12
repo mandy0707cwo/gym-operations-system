@@ -121,7 +121,8 @@ def profile(user_id):
 
 def coach_options():
     data = rows(client().table("profiles").select("id,display_name,role").eq("active",True).order("display_name"))
-    data = [x for x in data if x.get("role") in ("coach", "manager")]
+    # 所有教練下拉欄位僅顯示權限為 coach 的有效帳號。
+    data = [x for x in data if x.get("role") == "coach"]
     return {x["display_name"]:x["id"] for x in data}
 
 def show_table(data, columns=None):
@@ -1269,7 +1270,8 @@ def _sync_daily_classes(admin, operation_date, coach_id):
 
 def record_admin_page(me):
     admin=admin_client(); coaches=rows(admin.table("profiles").select("id,display_name,role"))
-    coach_map={x["display_name"]:x["id"] for x in coaches if x["role"] in ("coach","manager")}; id_name={v:k for k,v in coach_map.items()}
+    coach_map={x["display_name"]:x["id"] for x in coaches if x["role"]=="coach"}
+    id_name={x["id"]:x["display_name"] for x in coaches}
     data_type=st.selectbox("資料類型",["體驗項目","單堂銷售","活動支援","專案","銷課取消紀錄","課程購買","銷課表"],key="manage_data_type")
     if data_type=="銷課取消紀錄":
         with st.expander("新增銷課取消紀錄",expanded=False):
