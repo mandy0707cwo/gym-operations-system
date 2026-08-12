@@ -16,15 +16,22 @@ create table if not exists public.project_entries (
   project_catalog_id uuid not null references public.project_catalog(id),
   project_name text not null,
   person_name text not null check (length(trim(person_name)) > 0),
+  coach_id uuid references public.profiles(id),
   item_name text not null,
+  item_hours numeric(8,2) check (item_hours > 0),
   quantity numeric(10,2) not null check (quantity > 0),
   unit_price numeric(12,2) not null check (unit_price >= 0),
   created_by uuid not null references public.profiles(id),
   created_at timestamptz not null default now()
 );
 
+-- 既有專案資料表升級：新增教練及項目時數快照。
+alter table public.project_entries add column if not exists coach_id uuid references public.profiles(id);
+alter table public.project_entries add column if not exists item_hours numeric(8,2) check (item_hours > 0);
+
 create index if not exists idx_project_entries_date on public.project_entries(entry_date desc);
 create index if not exists idx_project_entries_catalog on public.project_entries(project_catalog_id);
+create index if not exists idx_project_entries_coach on public.project_entries(coach_id);
 
 alter table public.project_catalog enable row level security;
 alter table public.project_entries enable row level security;
@@ -48,4 +55,3 @@ create policy project_entries_read on public.project_entries
   for select to authenticated using (created_by=auth.uid() or public.is_manager());
 create policy project_entries_insert on public.project_entries
   for insert to authenticated with check (created_by=auth.uid());
-

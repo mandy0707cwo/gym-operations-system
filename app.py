@@ -27,7 +27,7 @@ LABELS = {
     "deducted_hours":"應扣除時間", "deduction_reason":"扣除原因",
     "cancel_date":"取消日期", "cancelled_sessions":"銷課取消堂數", "reason":"取消原因",
     "project_name":"專案名稱", "person_name":"姓名", "item_name":"操作項目",
-    "quantity":"數量", "unit_price":"價格", "line_total":"總價",
+    "quantity":"數量", "item_hours":"每次時數", "execution_hours":"執行時數", "unit_price":"價格", "line_total":"總價",
     "referral":"醫生轉介", "note":"備註",
 }
 ROLE_LABELS = {"coach": "教練", "shared_coach": "共用教練帳號", "manager": "主管", "admin": "系統管理員"}
@@ -239,24 +239,30 @@ def daily_page(me):
             if selected_item:
                 st.caption(f'項目時數：{float(selected_item["hours"]):g} 小時／次｜項目單價：$ {float(selected_item["price"]):,.0f}｜本筆價格：$ {total_price:,.0f}')
             with st.form(form_key,clear_on_submit=True,enter_to_submit=False):
-                c1,c2=st.columns(2)
+                c1,c2,c3=st.columns(3)
                 project_date=c1.date_input("日期",date.today())
                 person_name=c2.text_input("姓名")
+                coach_name=c3.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練")
                 add_project=st.form_submit_button("確認並建立專案紀錄",type="primary",use_container_width=True)
             if add_project:
                 if selected_item is None: st.error("請選擇專案及操作項目。")
                 elif not person_name.strip(): st.error("姓名不可空白。")
+                elif not coach_name: st.error("請選擇教練。")
                 else:
                     try:
                         unit_price=total_price/quantity
                         client().table("project_entries").insert({"entry_date":str(project_date),"project_catalog_id":selected_item["id"],
                             "project_name":selected_item["project_name"],"person_name":person_name.strip(),"item_name":selected_item["item_name"],
+                            "coach_id":allowed[coach_name],"item_hours":float(selected_item["hours"]),
                             "quantity":quantity,"unit_price":unit_price,"created_by":me["id"]}).execute()
                         st.success("專案紀錄已建立。"); st.rerun()
                     except Exception as exc: st.error(f"新增失敗：{exc}")
-            project_rows=rows(client().table("project_entries").select("entry_date,project_name,person_name,item_name,quantity,unit_price").order("entry_date",desc=True).limit(100))
-            for row in project_rows: row["line_total"]=float(row["quantity"])*float(row["unit_price"])
-            show_table(project_rows,["entry_date","project_name","person_name","item_name","quantity","unit_price","line_total"])
+            project_rows=rows(client().table("project_entries").select("entry_date,project_name,person_name,coach_id,item_name,item_hours,quantity,unit_price").order("entry_date",desc=True).limit(100))
+            for row in project_rows:
+                row["coach_name"]=names.get(row.pop("coach_id"),"未知")
+                row["execution_hours"]=float(row.get("item_hours") or 0)*float(row["quantity"])
+                row["line_total"]=float(row["quantity"])*float(row["unit_price"])
+            show_table(project_rows,["entry_date","project_name","person_name","coach_name","item_name","item_hours","quantity","execution_hours","unit_price","line_total"])
 
 def purchase_page(me):
     st.header("課程購買")
@@ -455,21 +461,25 @@ def usage_query_tabs(me):
             trial_hours=rows(client().table("trial_items").select("coach_id,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
             single_hours=rows(client().table("single_sales").select("coach_id,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
             event_hours=rows(client().table("event_supports").select("coach_id,hours,deducted_hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
+            project_hours=rows(client().table("project_entries").select("coach_id,item_hours,quantity,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
             trial_hours=[x for x in trial_hours if x.get("coach_id") in operational_ids]
             single_hours=[x for x in single_hours if x.get("coach_id") in operational_ids]
             event_hours=[x for x in event_hours if x.get("coach_id") in operational_ids]
+            project_hours=[x for x in project_hours if x.get("coach_id") in operational_ids]
             if usage_coach!="全部教練":
                 usage_coach_id=coaches.get(usage_coach,me["id"])
                 usages=[x for x in usages if x.get("coach_id")==usage_coach_id]
                 trial_hours=[x for x in trial_hours if x.get("coach_id")==usage_coach_id]
                 single_hours=[x for x in single_hours if x.get("coach_id")==usage_coach_id]
                 event_hours=[x for x in event_hours if x.get("coach_id")==usage_coach_id]
+                project_hours=[x for x in project_hours if x.get("coach_id")==usage_coach_id]
             total_sessions=len(usages)
             total_amount=sum(float(x["deducted_amount"]) for x in usages)
             average=total_amount/total_sessions if total_sessions else 0
             total_execution_hours=(total_sessions+sum(float(x["hours"]) for x in trial_hours)
                 +sum(float(x["hours"]) for x in single_hours)
-                +sum(float(x["hours"])-float(x.get("deducted_hours") or 0) for x in event_hours))
+                +sum(float(x["hours"])-float(x.get("deducted_hours") or 0) for x in event_hours)
+                +sum(float(x.get("item_hours") or 0)*float(x["quantity"]) for x in project_hours))
             a,b,c,d=st.columns(4)
             a.metric("總銷課堂數",f"{total_sessions:,}")
             b.metric("總銷課金額",f"$ {total_amount:,.0f}")
@@ -481,7 +491,8 @@ def usage_query_tabs(me):
                 coach_trial_hours=sum(float(x["hours"]) for x in trial_hours if x["coach_id"]==coach_id)
                 coach_single_hours=sum(float(x["hours"]) for x in single_hours if x["coach_id"]==coach_id)
                 coach_event_hours=sum(float(x["hours"])-float(x.get("deducted_hours") or 0) for x in event_hours if x["coach_id"]==coach_id)
-                coach_execution_hours=len(coach_rows)+coach_trial_hours+coach_single_hours+coach_event_hours
+                coach_project_hours=sum(float(x.get("item_hours") or 0)*float(x["quantity"]) for x in project_hours if x["coach_id"]==coach_id)
+                coach_execution_hours=len(coach_rows)+coach_trial_hours+coach_single_hours+coach_event_hours+coach_project_hours
                 if coach_rows or coach_execution_hours:
                     coach_amount=sum(float(x["deducted_amount"]) for x in coach_rows)
                     by_coach.append({"教練":coach_name,"銷課堂數":len(coach_rows),"銷課金額":coach_amount,
@@ -586,6 +597,7 @@ def dashboard_page(me):
     trials=rows(client().table("trial_items").select("coach_id,member_name,hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
     single_sales=rows(client().table("single_sales").select("coach_id,hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
     event_supports=rows(client().table("event_supports").select("coach_id,hours,deducted_hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
+    project_entries=rows(client().table("project_entries").select("coach_id,item_hours,quantity,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
     purchases=rows(client().table("purchases").select("id,coach_id,purchase_kind,total_sessions,total_amount,purchase_date").gte("purchase_date",str(start)).lte("purchase_date",str(end)))
     usages=rows(client().table("session_usages").select("coach_id,deducted_amount,usage_date").gte("usage_date",str(start)).lte("usage_date",str(end)))
     payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").gte("paid_date",str(start)).lte("paid_date",str(end)))
@@ -608,7 +620,8 @@ def dashboard_page(me):
         used_sessions=len(u); used_amount=sum(float(x["deducted_amount"]) for x in u)
         execution_hours=(used_sessions+sum(float(x["hours"]) for x in trials if x["coach_id"]==cid)
             +sum(float(x["hours"]) for x in single_sales if x["coach_id"]==cid)
-            +sum(float(x["hours"])-float(x.get("deducted_hours") or 0) for x in event_supports if x["coach_id"]==cid))
+            +sum(float(x["hours"])-float(x.get("deducted_hours") or 0) for x in event_supports if x["coach_id"]==cid)
+            +sum(float(x.get("item_hours") or 0)*float(x["quantity"]) for x in project_entries if x.get("coach_id")==cid))
         result.append({"教練":names[cid],"銷課堂數":used_sessions,"銷課金額":used_amount,
                        "銷課取消率":cancelled/(used_sessions+cancelled) if used_sessions+cancelled else None,
                        "體驗人次":trial_count,"體驗成交率":first_count/trial_count if trial_count else None,
