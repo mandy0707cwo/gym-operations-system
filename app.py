@@ -26,6 +26,8 @@ LABELS = {
     "entry_date":"日期", "content":"內容", "hours":"時數",
     "deducted_hours":"應扣除時間", "deduction_reason":"扣除原因",
     "cancel_date":"取消日期", "cancelled_sessions":"銷課取消堂數", "reason":"取消原因",
+    "project_name":"專案名稱", "person_name":"姓名", "item_name":"操作項目",
+    "quantity":"數量", "unit_price":"價格", "line_total":"總價",
     "referral":"醫生轉介", "note":"備註",
 }
 ROLE_LABELS = {"coach": "教練", "shared_coach": "共用教練帳號", "manager": "主管", "admin": "系統管理員"}
@@ -130,7 +132,7 @@ def show_table(data, columns=None):
     if columns:
         df = df[[c for c in columns if c in df.columns]]
     display_df=df.rename(columns=LABELS)
-    money_columns={LABELS.get(x,x) for x in ("total_amount","remaining_amount","deducted_amount","amount")}
+    money_columns={LABELS.get(x,x) for x in ("total_amount","remaining_amount","deducted_amount","amount","unit_price","line_total","price")}
     money_config={x:st.column_config.NumberColumn(format="$ %.0f") for x in money_columns if x in display_df.columns}
     st.dataframe(display_df, use_container_width=True, hide_index=True, column_config=money_config)
 
@@ -139,7 +141,7 @@ def daily_page(me):
     coaches = coach_options()
     allowed = coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
     names={v:k for k,v in coaches.items()}
-    tab1,tab2,tab3=st.tabs(["體驗項目","單堂銷售","活動支援"])
+    tab1,tab2,tab3,tab4=st.tabs(["體驗項目","單堂銷售","活動支援","專案"])
 
     def standard_entry(tab, table_name, form_key, content_label, catalog_type, member_label=None):
         with tab:
@@ -211,6 +213,46 @@ def daily_page(me):
         data=[x for x in data if x.get("coach_id") in names]
         for x in data: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
         show_table(data,["entry_date","content","coach_name","hours","deducted_hours","deduction_reason"])
+
+    with tab4:
+        try:
+            catalog=rows(client().table("project_catalog").select("id,project_name,item_name,hours,price").order("project_name").order("item_name"))
+        except Exception:
+            st.warning("專案資料表尚未建立，請系統管理員先執行 migration_project_management.sql。")
+            catalog=[]
+        if not catalog:
+            st.warning("尚未建立專案項目，請由系統管理員到「資料管理 → 專案管理」新增。")
+        else:
+            project_names=sorted({x["project_name"] for x in catalog})
+            project_name=st.selectbox("專案名稱",project_names,index=None,placeholder="請選擇專案",key="project_entry_project")
+            project_items=[x for x in catalog if x["project_name"]==project_name]
+            item_labels={f'{x["item_name"]}｜{float(x["hours"]):g} 小時｜$ {float(x["price"]):,.0f}':x for x in project_items}
+            item_label=st.selectbox("操作項目",list(item_labels),index=None,placeholder="請選擇操作項目",key="project_entry_item")
+            selected_item=item_labels.get(item_label)
+            form_key=f'project_entry_{selected_item["id"] if selected_item else "empty"}'
+            with st.form(form_key,clear_on_submit=True,enter_to_submit=False):
+                c1,c2=st.columns(2)
+                project_date=c1.date_input("日期",date.today())
+                person_name=c2.text_input("姓名")
+                c1,c2=st.columns(2)
+                quantity=c1.number_input("數量",0.01,100000.0,value=1.0,step=1.0)
+                unit_price=c2.number_input("價格",0.0,10000000.0,value=float(selected_item["price"]) if selected_item else 0.0,step=100.0,format="%.0f")
+                if selected_item:
+                    st.caption(f'項目時數：{float(selected_item["hours"]):g} 小時｜預計總價：$ {quantity*unit_price:,.0f}')
+                add_project=st.form_submit_button("確認並建立專案紀錄",type="primary",use_container_width=True)
+            if add_project:
+                if selected_item is None: st.error("請選擇專案及操作項目。")
+                elif not person_name.strip(): st.error("姓名不可空白。")
+                else:
+                    try:
+                        client().table("project_entries").insert({"entry_date":str(project_date),"project_catalog_id":selected_item["id"],
+                            "project_name":selected_item["project_name"],"person_name":person_name.strip(),"item_name":selected_item["item_name"],
+                            "quantity":quantity,"unit_price":unit_price,"created_by":me["id"]}).execute()
+                        st.success("專案紀錄已建立。"); st.rerun()
+                    except Exception as exc: st.error(f"新增失敗：{exc}")
+            project_rows=rows(client().table("project_entries").select("entry_date,project_name,person_name,item_name,quantity,unit_price").order("entry_date",desc=True).limit(100))
+            for row in project_rows: row["line_total"]=float(row["quantity"])*float(row["unit_price"])
+            show_table(project_rows,["entry_date","project_name","person_name","item_name","quantity","unit_price","line_total"])
 
 def purchase_page(me):
     st.header("課程購買")
@@ -857,6 +899,63 @@ def operation_item_admin_page(me, item_type, title):
             except Exception as exc:
                 st.error(f"刪除失敗：{exc}")
 
+def project_admin_page(me):
+    st.subheader("專案管理")
+    if me["role"]!="admin": st.warning("此功能僅限系統管理員使用。"); return
+    admin=admin_client()
+    try:
+        existing_projects=rows(admin.table("project_catalog").select("id").limit(1))
+    except Exception:
+        st.error("專案資料表尚未建立，請先在 Supabase 執行 migration_project_management.sql。")
+        return
+    with st.form("add_project_catalog",clear_on_submit=True,enter_to_submit=False):
+        c1,c2=st.columns(2)
+        project_name=c1.text_input("專案名稱").strip()
+        item_name=c2.text_input("操作項目").strip()
+        c1,c2=st.columns(2)
+        hours=c1.number_input("時數",0.25,10000.0,1.0,step=0.25)
+        price=c2.number_input("價格",0.0,10000000.0,0.0,step=100.0,format="%.0f")
+        add_project_item=st.form_submit_button("新增專案項目",type="primary",use_container_width=True)
+    if add_project_item:
+        if not project_name or not item_name: st.error("專案名稱及操作項目不可空白。")
+        else:
+            try:
+                admin.table("project_catalog").insert({"project_name":project_name,"item_name":item_name,"hours":hours,"price":price}).execute()
+                st.success("專案項目已新增。"); st.rerun()
+            except Exception as exc: st.error(f"新增失敗，請確認專案與項目組合是否重複：{exc}")
+    items=rows(admin.table("project_catalog").select("id,project_name,item_name,hours,price,created_at").order("project_name").order("item_name"))
+    if not items: st.info("目前尚未建立專案項目。"); return
+    show_table(items,["project_name","item_name","hours","price","created_at"])
+    item_map={f'{x["project_name"]}｜{x["item_name"]}':x for x in items}
+    selected=st.selectbox("選擇要修改的專案項目",list(item_map),key="project_catalog_edit_select")
+    current=item_map[selected]
+    with st.form("edit_project_catalog",enter_to_submit=False):
+        c1,c2=st.columns(2)
+        edited_project=c1.text_input("修改後專案名稱",current["project_name"]).strip()
+        edited_item=c2.text_input("修改後操作項目",current["item_name"]).strip()
+        c1,c2=st.columns(2)
+        edited_hours=c1.number_input("修改後時數",0.25,10000.0,float(current["hours"]),step=0.25)
+        edited_price=c2.number_input("修改後價格",0.0,10000000.0,float(current["price"]),step=100.0,format="%.0f")
+        update_project_item=st.form_submit_button("儲存修改")
+    if update_project_item:
+        if not edited_project or not edited_item: st.error("專案名稱及操作項目不可空白。")
+        else:
+            try:
+                admin.table("project_catalog").update({"project_name":edited_project,"item_name":edited_item,"hours":edited_hours,"price":edited_price}).eq("id",current["id"]).execute()
+                st.success("專案項目已修改；歷史單據內容不受影響。"); st.rerun()
+            except Exception as exc: st.error(f"修改失敗：{exc}")
+    with st.form("delete_project_catalog",enter_to_submit=False):
+        delete_label=st.selectbox("選擇要刪除的專案項目",list(item_map),key="project_catalog_delete_select")
+        confirm=st.checkbox("我確認刪除此選項；已有歷史單據時系統會阻止刪除。")
+        delete_project_item=st.form_submit_button("刪除專案項目")
+    if delete_project_item:
+        if not confirm: st.error("請先勾選刪除確認。")
+        else:
+            try:
+                admin.table("project_catalog").delete().eq("id",item_map[delete_label]["id"]).execute()
+                st.success("專案項目已刪除。"); st.rerun()
+            except Exception as exc: st.error(f"刪除失敗；可能已有歷史單據使用此項目：{exc}")
+
 def _excel_bytes(sheet_frames):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter", datetime_format="yyyy-mm-dd") as writer:
@@ -1288,12 +1387,13 @@ def data_management_page(me):
     st.header("資料管理")
     if me["role"]!="admin": st.warning("此頁僅限系統管理員使用。"); return
     if admin_client() is None: st.error("尚未設定 SUPABASE_SECRET_KEY。"); return
-    tab1,tab2,tab3,tab4,tab5=st.tabs(["課程名稱管理","體驗項目管理","單堂銷售管理","資料匯入／匯出","新增／修改／刪除"])
+    tab1,tab2,tab3,tab4,tab5,tab6=st.tabs(["課程名稱管理","體驗項目管理","單堂銷售管理","專案管理","資料匯入／匯出","新增／修改／刪除"])
     with tab1: course_admin_page(me)
     with tab2: operation_item_admin_page(me,"trial","體驗項目管理")
     with tab3: operation_item_admin_page(me,"single_sale","單堂銷售管理")
-    with tab4: member_course_io_page(me)
-    with tab5: record_admin_page(me)
+    with tab4: project_admin_page(me)
+    with tab5: member_course_io_page(me)
+    with tab6: record_admin_page(me)
 
 user=login(); me=profile(user.id)
 with st.sidebar:
