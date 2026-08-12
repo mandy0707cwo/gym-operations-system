@@ -230,21 +230,25 @@ def daily_page(me):
             item_label=st.selectbox("操作項目",list(item_labels),index=None,placeholder="請選擇操作項目",key="project_entry_item")
             selected_item=item_labels.get(item_label)
             form_key=f'project_entry_{selected_item["id"] if selected_item else "empty"}'
+            c1,c2=st.columns(2)
+            quantity=c1.number_input("數量",0.01,100000.0,value=1.0,step=1.0,key=f'{form_key}_quantity')
+            suggested_total=(float(selected_item["price"])*quantity) if selected_item else 0.0
+            price_key=f'{form_key}_total_{quantity:g}'
+            total_price=c2.number_input("價格",0.0,1000000000.0,value=suggested_total,step=100.0,format="%.0f",key=price_key,
+                help="預設為操作項目單價 × 數量，仍可自行修改。")
+            if selected_item:
+                st.caption(f'項目時數：{float(selected_item["hours"]):g} 小時／次｜項目單價：$ {float(selected_item["price"]):,.0f}｜本筆價格：$ {total_price:,.0f}')
             with st.form(form_key,clear_on_submit=True,enter_to_submit=False):
                 c1,c2=st.columns(2)
                 project_date=c1.date_input("日期",date.today())
                 person_name=c2.text_input("姓名")
-                c1,c2=st.columns(2)
-                quantity=c1.number_input("數量",0.01,100000.0,value=1.0,step=1.0)
-                unit_price=c2.number_input("價格",0.0,10000000.0,value=float(selected_item["price"]) if selected_item else 0.0,step=100.0,format="%.0f")
-                if selected_item:
-                    st.caption(f'項目時數：{float(selected_item["hours"]):g} 小時｜預計總價：$ {quantity*unit_price:,.0f}')
                 add_project=st.form_submit_button("確認並建立專案紀錄",type="primary",use_container_width=True)
             if add_project:
                 if selected_item is None: st.error("請選擇專案及操作項目。")
                 elif not person_name.strip(): st.error("姓名不可空白。")
                 else:
                     try:
+                        unit_price=total_price/quantity
                         client().table("project_entries").insert({"entry_date":str(project_date),"project_catalog_id":selected_item["id"],
                             "project_name":selected_item["project_name"],"person_name":person_name.strip(),"item_name":selected_item["item_name"],
                             "quantity":quantity,"unit_price":unit_price,"created_by":me["id"]}).execute()
