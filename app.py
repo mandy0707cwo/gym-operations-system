@@ -1157,17 +1157,18 @@ def member_course_io_page(me):
     usage_rows=[]
     for x in usages:
         p=purchase_map.get(x["purchase_id"],{})
-        usage_rows.append({"usage_id":x["id"],"purchase_id":purchase_code_map.get(x["purchase_id"],""),
+        usage_rows.append({"purchase_id":purchase_code_map.get(x["purchase_id"],""),"usage_id":x["id"],
             "member_name":member_names.get(p.get("member_id"),""),"course_name":p.get("course_name",""),
             "usage_date":x["usage_date"],"coach_username":id_to_display_name.get(x["coach_id"],""),
             "session_seq":x["session_seq"],"deducted_amount":x["deducted_amount"],"note":x.get("note") or ""})
+    usage_export_columns=["purchase_id","usage_id","member_name","course_name","usage_date","coach_username","session_seq","deducted_amount","note"]
     trial_rows=rows(admin.table("trial_items").select("entry_date,member_name,content,hours,note,coach_id,created_at").order("entry_date"))
     single_sale_rows=rows(admin.table("single_sales").select("entry_date,member_name,content,hours,note,coach_id,created_at").order("entry_date"))
     event_rows=rows(admin.table("event_supports").select("entry_date,content,hours,deducted_hours,deduction_reason,coach_id,created_at").order("entry_date"))
     for collection in (trial_rows,single_sale_rows,event_rows):
         for item in collection:
             item["coach_username"]=id_to_display_name.get(item.pop("coach_id"),"")
-    report=_excel_bytes({"課程購買":pd.DataFrame(course_rows),"銷課表":pd.DataFrame(usage_rows),
+    report=_excel_bytes({"課程購買":pd.DataFrame(course_rows),"銷課表":pd.DataFrame(usage_rows,columns=usage_export_columns),
         "體驗項目":pd.DataFrame(trial_rows),"單堂銷售":pd.DataFrame(single_sale_rows),"活動支援":pd.DataFrame(event_rows)})
     st.download_button("下載資料匯出報表",report,file_name=f"健身房資料匯出報表_{date.today()}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
