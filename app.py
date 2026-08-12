@@ -131,7 +131,7 @@ def show_table(data, columns=None):
         df = df[[c for c in columns if c in df.columns]]
     display_df=df.rename(columns=LABELS)
     money_columns={LABELS.get(x,x) for x in ("total_amount","remaining_amount","deducted_amount","amount")}
-    money_config={x:st.column_config.NumberColumn(format="TWD %.0f") for x in money_columns if x in display_df.columns}
+    money_config={x:st.column_config.NumberColumn(format="$ %.0f") for x in money_columns if x in display_df.columns}
     st.dataframe(display_df, use_container_width=True, hide_index=True, column_config=money_config)
 
 def daily_page(me):
@@ -369,9 +369,9 @@ def usage_query_tabs(me):
             if payment["amount"] >= total_amount:
                 payment_status="已付清"
             elif purchase.get("payment_plan")=="installment":
-                payment_status=f'已付 {payment["count"]}/{purchase.get("installment_count", "-")} 期，TWD {payment["amount"]:,.0f}'
+                payment_status=f'已付 {payment["count"]}/{purchase.get("installment_count", "-")} 期，$ {payment["amount"]:,.0f}'
             else:
-                payment_status=f'尚欠 TWD {total_amount-payment["amount"]:,.0f}'
+                payment_status=f'尚欠 $ {total_amount-payment["amount"]:,.0f}'
             detail.append({
                 "成交日期":purchase.get("purchase_date"),"會員名稱":item["member_name"],"課程名稱":item["course_name"],"成交教練":item["coach_name"],
                 "購買堂數":item["total_sessions"],"每堂課時數":float(purchase.get("session_hours") or 1),"成交金額":total_amount,"已上堂數":item["used_sessions"],
@@ -380,8 +380,8 @@ def usage_query_tabs(me):
             })
         if detail:
             st.dataframe(pd.DataFrame(detail),hide_index=True,use_container_width=True,
-                column_config={"成交金額":st.column_config.NumberColumn(format="TWD %.0f"),
-                               "剩餘金額":st.column_config.NumberColumn(format="TWD %.0f")})
+                column_config={"成交金額":st.column_config.NumberColumn(format="$ %.0f"),
+                               "剩餘金額":st.column_config.NumberColumn(format="$ %.0f")})
         else:
             st.info("目前沒有可查詢的課程資料。")
 
@@ -419,8 +419,8 @@ def usage_query_tabs(me):
                 +sum(float(x["hours"])-float(x.get("deducted_hours") or 0) for x in event_hours))
             a,b,c,d=st.columns(4)
             a.metric("總銷課堂數",f"{total_sessions:,}")
-            b.metric("總銷課金額",f"TWD {total_amount:,.0f}")
-            c.metric("平均單價",f"TWD {average:,.0f}")
+            b.metric("總銷課金額",f"$ {total_amount:,.0f}")
+            c.metric("平均單價",f"$ {average:,.0f}")
             d.metric("總執行時數",f"{total_execution_hours:,.2f} 小時")
             by_coach=[]
             for coach_name,coach_id in coaches.items():
@@ -436,8 +436,8 @@ def usage_query_tabs(me):
                                      "總執行時數":coach_execution_hours})
             if by_coach:
                 st.dataframe(pd.DataFrame(by_coach),hide_index=True,use_container_width=True,
-                    column_config={"銷課金額":st.column_config.NumberColumn(format="TWD %.0f"),
-                                   "平均單價":st.column_config.NumberColumn(format="TWD %.0f"),
+                    column_config={"銷課金額":st.column_config.NumberColumn(format="$ %.0f"),
+                                   "平均單價":st.column_config.NumberColumn(format="$ %.0f"),
                                    "總執行時數":st.column_config.NumberColumn(format="%.2f 小時")})
 
     with tab3:
@@ -452,7 +452,7 @@ def usage_query_tabs(me):
                           "有效期限":x["expiry_date"],"剩餘天數":(pd.to_datetime(x["expiry_date"]).date()-today).days}
                          for x in expiring]
             st.dataframe(pd.DataFrame(expiry_rows),hide_index=True,use_container_width=True,
-                column_config={"剩餘金額":st.column_config.NumberColumn(format="TWD %.0f")})
+                column_config={"剩餘金額":st.column_config.NumberColumn(format="$ %.0f")})
         else:
             st.info("未來 30 天內沒有即將到期且仍有剩餘堂數的課程。")
 
@@ -464,7 +464,7 @@ def usage_query_tabs(me):
                        "剩餘堂數":x["remaining_sessions"],"剩餘金額":float(x["remaining_amount"]),
                        "有效期限":x["expiry_date"]} for x in low_balances]
             st.dataframe(pd.DataFrame(low_rows),hide_index=True,use_container_width=True,
-                column_config={"剩餘金額":st.column_config.NumberColumn(format="TWD %.0f")})
+                column_config={"剩餘金額":st.column_config.NumberColumn(format="$ %.0f")})
         else:
             st.info("目前沒有剩餘三堂（含）以下的有效課程。")
 
@@ -503,7 +503,7 @@ def usage_page(me):
         c2.text_input("授課教練",value=selected["coach_name"],disabled=True)
         note=st.text_input("備註"); submit=st.form_submit_button("確認扣除 1 堂")
     per=Decimal(str(selected["remaining_amount"])) if selected["remaining_sessions"]==1 else (Decimal(str(selected["total_amount"]))/selected["total_sessions"]).quantize(Decimal("0.01"))
-    st.caption(f"本次預計扣除：1 堂／TWD {per:,.0f}；最後一堂會自動扣完剩餘金額。")
+    st.caption(f"本次預計扣除：1 堂／$ {per:,.0f}；最後一堂會自動扣完剩餘金額。")
     if submit:
         try:
             client().rpc("consume_session",{"p_purchase_id":selected["purchase_id"],"p_usage_date":str(usage_date),"p_coach_id":selected["coach_id"],"p_note":note}).execute()
@@ -600,15 +600,15 @@ def dashboard_page(me):
     """,unsafe_allow_html=True)
     dashboard_metrics=[
         ("銷課堂數",f'{totals["銷課堂數"]:,.0f}'),
-        ("銷課金額",f'TWD {totals["銷課金額"]:,.0f}'),
+        ("銷課金額",f'$ {totals["銷課金額"]:,.0f}'),
         ("銷課取消率",f'{overall_cancel_rate:.1%}' if overall_cancel_rate is not None else "—"),
         ("體驗人次",f'{total_trial_count:,.0f}'),
         ("體驗成交率",f'{overall_trial_conversion:.1%}' if overall_trial_conversion is not None else "—"),
         ("續約率",f'{overall_renewal:.1%}' if overall_renewal is not None else "—"),
         ("成交堂數",f'{totals["成交堂數"]:,.0f}'),
-        ("成交總金額",f'TWD {totals["成交總金額"]:,.0f}'),
-        ("實際預收金額",f'TWD {totals["實際預收金額"]:,.0f}'),
-        ("平均每堂單價",f'TWD {average_unit:,.0f}' if average_unit is not None else "—"),
+        ("成交總金額",f'$ {totals["成交總金額"]:,.0f}'),
+        ("實際預收金額",f'$ {totals["實際預收金額"]:,.0f}'),
+        ("平均每堂單價",f'$ {average_unit:,.0f}' if average_unit is not None else "—"),
         ("總執行時數",f'{totals["總執行時數"]:,.2f} 小時'),
     ]
     for metric_start in range(0,len(dashboard_metrics),4):
@@ -621,13 +621,13 @@ def dashboard_page(me):
     display_df["體驗成交率"]=display_df["體驗成交率"]*100
     display_df["續約率"]=display_df["續約率"]*100
     display_df=display_df[["教練","總執行時數","銷課堂數","銷課金額","銷課取消率","體驗人次","體驗成交率","續約率","成交堂數","成交總金額","實際預收金額","平均每堂單價"]]
-    st.dataframe(display_df,hide_index=True,use_container_width=True,column_config={"總執行時數":st.column_config.NumberColumn(format="%.2f 小時"),"銷課取消率":st.column_config.NumberColumn(format="%.1f%%"),"體驗成交率":st.column_config.NumberColumn(format="%.1f%%"),"續約率":st.column_config.NumberColumn(format="%.1f%%"),"成交總金額":st.column_config.NumberColumn(format="TWD %.0f"),"實際預收金額":st.column_config.NumberColumn(format="TWD %.0f"),"銷課金額":st.column_config.NumberColumn(format="TWD %.0f"),"平均每堂單價":st.column_config.NumberColumn(format="TWD %.0f")})
+    st.dataframe(display_df,hide_index=True,use_container_width=True,column_config={"總執行時數":st.column_config.NumberColumn(format="%.2f 小時"),"銷課取消率":st.column_config.NumberColumn(format="%.1f%%"),"體驗成交率":st.column_config.NumberColumn(format="%.1f%%"),"續約率":st.column_config.NumberColumn(format="%.1f%%"),"成交總金額":st.column_config.NumberColumn(format="$ %.0f"),"實際預收金額":st.column_config.NumberColumn(format="$ %.0f"),"銷課金額":st.column_config.NumberColumn(format="$ %.0f"),"平均每堂單價":st.column_config.NumberColumn(format="$ %.0f")})
     left,right=st.columns(2)
     count_metric=left.selectbox("數量指標",["成交堂數","銷課堂數","體驗人次"],key="dashboard_count_metric")
     amount_metric=right.selectbox("金額類型",["成交總金額","銷課金額"],key="dashboard_amount_metric")
     count_unit="人次" if count_metric=="體驗人次" else "堂數"
     left.plotly_chart(px.bar(df,x="教練",y=count_metric,title=f"{count_metric}比較（{start} 至 {end}）",labels={count_metric:count_unit}),use_container_width=True)
-    right.plotly_chart(px.bar(df,x="教練",y=amount_metric,title=f"{amount_metric}比較（{start} 至 {end}）",labels={amount_metric:"TWD"}),use_container_width=True)
+    right.plotly_chart(px.bar(df,x="教練",y=amount_metric,title=f"{amount_metric}比較（{start} 至 {end}）",labels={amount_metric:"$"}),use_container_width=True)
     st.plotly_chart(px.bar(df,x="教練",y="總執行時數",title=f"總執行時數比較（{start} 至 {end}）",labels={"總執行時數":"小時"}),use_container_width=True)
 
 def account_admin_page(me):
@@ -1164,10 +1164,16 @@ def record_admin_page(me):
         labels={f'{x["entry_date"]}｜{x["content"]}｜{id_name.get(x["coach_id"],"未知")}｜{x["id"][:8]}':x for x in records}
     elif data_type=="課程購買":
         records=rows(admin.table("purchase_balances").select("*").order("expiry_date",desc=True).limit(500))
-        labels={f'{x["member_name"]}｜{x["course_name"]}｜{x["purchase_id"][:8]}':x for x in records}
+        record_purchase_ids=[x["purchase_id"] for x in records]
+        record_purchase_dates=rows(admin.table("purchases").select("id,purchase_date").in_("id",record_purchase_ids)) if record_purchase_ids else []
+        purchase_date_map={x["id"]:x.get("purchase_date") for x in record_purchase_dates}
+        labels={f'{purchase_date_map.get(x["purchase_id"],"日期不明")}｜{x["member_name"]}｜{x["course_name"]}｜{x["purchase_id"][:8]}':x for x in records}
     else:
         records=rows(admin.table("session_usages").select("*").order("usage_date",desc=True).limit(500))
-        labels={f'{x["usage_date"]}｜{id_name.get(x["coach_id"],"未知")}｜第{x["session_seq"]}堂｜{x["id"][:8]}':x for x in records}
+        usage_purchase_ids=list({x["purchase_id"] for x in records})
+        usage_members=rows(admin.table("purchase_balances").select("purchase_id,member_name").in_("purchase_id",usage_purchase_ids)) if usage_purchase_ids else []
+        usage_member_map={x["purchase_id"]:x.get("member_name") or "會員不明" for x in usage_members}
+        labels={f'{x["usage_date"]}｜{usage_member_map.get(x["purchase_id"],"會員不明")}｜{id_name.get(x["coach_id"],"未知")}｜第{x["session_seq"]}堂｜{x["id"][:8]}':x for x in records}
     if not labels: st.info("目前沒有可管理的資料。"); return
     selected=st.selectbox("選擇紀錄",list(labels)); record=labels[selected]
     record_coach_map=dict(coach_map)
