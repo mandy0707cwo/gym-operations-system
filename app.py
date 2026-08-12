@@ -239,10 +239,10 @@ def daily_page(me):
             if selected_item:
                 st.caption(f'項目時數：{float(selected_item["hours"]):g} 小時／次｜項目單價：$ {float(selected_item["price"]):,.0f}｜本筆價格：$ {total_price:,.0f}')
             with st.form(form_key,clear_on_submit=True,enter_to_submit=False):
-                c1,c2,c3=st.columns(3)
+                c1,c2=st.columns(2)
                 project_date=c1.date_input("日期",date.today())
                 person_name=c2.text_input("姓名")
-                coach_name=c3.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練")
+                coach_name=st.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練",key=f'{form_key}_coach')
                 add_project=st.form_submit_button("確認並建立專案紀錄",type="primary",use_container_width=True)
             if add_project:
                 if selected_item is None: st.error("請選擇專案及操作項目。")
