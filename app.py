@@ -26,7 +26,7 @@ LABELS = {
     "entry_date":"日期", "content":"內容", "hours":"時數",
     "deducted_hours":"應扣除時間", "deduction_reason":"扣除原因",
     "cancel_date":"取消日期", "cancelled_sessions":"銷課取消堂數", "reason":"取消原因",
-    "referral":"轉介", "note":"備註",
+    "referral":"醫生轉介", "note":"備註",
 }
 ROLE_LABELS = {"coach": "教練", "shared_coach": "共用教練帳號", "manager": "主管", "admin": "系統管理員"}
 USERNAME_RE = re.compile(r"^[a-z0-9_]{3,30}$")
@@ -153,12 +153,13 @@ def daily_page(me):
             revision=st.session_state.get(revision_key,0)
             content=st.selectbox(content_label,item_names,index=None,placeholder=f"請選擇{content_label}",key=f"{form_key}_content_{revision}")
             default_hours=item_hours.get(content) if content else None
-            with st.form(f"{form_key}_{revision}",clear_on_submit=True):
+            with st.form(f"{form_key}_{revision}",clear_on_submit=True,enter_to_submit=False):
                 c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today()); coach_name=c2.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練")
                 member_name=st.text_input(member_label) if member_label else None
                 hours=st.number_input("時數",0.25,24.0,value=default_hours,step=0.25,placeholder="選擇內容後自動帶入",disabled=True)
                 note=st.text_input("備註")
-                save=st.form_submit_button("新增紀錄")
+                record_name="體驗項目" if catalog_type=="trial" else "單堂銷售"
+                save=st.form_submit_button(f"確認並建立{record_name}紀錄",type="primary",use_container_width=True)
             if save:
                 errors=[]
                 if member_label and not member_name.strip(): errors.append(f"{member_label}不可空白")
@@ -190,11 +191,11 @@ def daily_page(me):
     standard_entry(tab1,"trial_items","trial_item_form","體驗內容","trial",member_label="體驗會員姓名")
     standard_entry(tab2,"single_sales","single_sale_form","銷售內容","single_sale",member_label="單堂銷售會員姓名")
     with tab3:
-        with st.form("event_support_form",clear_on_submit=True):
+        with st.form("event_support_form",clear_on_submit=True,enter_to_submit=False):
             c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today(),key="event_date"); coach_name=c2.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練",key="event_coach")
             content=st.text_input("活動內容")
             c1,c2=st.columns(2); hours=c1.number_input("時數",0.25,24.0,value=None,step=0.25,placeholder="請輸入時數",key="event_hours"); deducted_hours=c2.number_input("應扣除時間",0.0,24.0,0.0,step=0.25)
-            reason=st.text_input("扣除原因"); save=st.form_submit_button("新增紀錄")
+            reason=st.text_input("扣除原因"); save=st.form_submit_button("確認並建立活動支援紀錄",type="primary",use_container_width=True)
         if save:
             if coach_name is None: st.error("請選擇教練。")
             elif not content.strip(): st.error("活動內容不可空白。")
@@ -228,7 +229,7 @@ def purchase_page(me):
     course_label=c2.selectbox("課程名稱",course_names,index=None,placeholder="請選擇課程",key=f"purchase_course_{purchase_revision}")
     course=course_options.get(course_label) if course_label else None
     selected_session_hours=course_hours.get(course) if course else None
-    with st.form(f"purchase_{purchase_revision}",clear_on_submit=True):
+    with st.form(f"purchase_{purchase_revision}",clear_on_submit=True,enter_to_submit=False):
         c1,c2,c3=st.columns(3)
         member_name=c1.text_input("會員名稱（需完整一致）")
         kind=c2.selectbox("購買類型",["首次購買","續課"])
@@ -240,7 +241,7 @@ def purchase_page(me):
         c1,c2=st.columns(2)
         purchased=c1.date_input("購買日期",date.today())
         expiry=c2.date_input("有效日期",value=None)
-        referral=st.text_input("轉介")
+        referral=st.text_input("醫生轉介")
         purchase_note=st.text_area("備註")
         if plan=="分期":
             count=st.selectbox("總期數",[2,3],index=None,placeholder="請選擇總期數")
@@ -256,7 +257,7 @@ def purchase_page(me):
             st.caption("未分期將於建立紀錄時，自動以成交總金額記錄為一次付清。")
         else:
             count=installment_no=paid=paid_date=None
-        save=st.form_submit_button("建立購買紀錄")
+        save=st.form_submit_button("確認並建立購買紀錄",type="primary",use_container_width=True)
     if save:
         errors=[]
         if not member_name.strip(): errors.append("會員名稱不可空白")
@@ -1186,7 +1187,7 @@ def record_admin_page(me):
             deduction_reason=st.text_input("扣除原因",record.get("deduction_reason") or "")
         elif data_type=="課程購買":
             c1,c2,c3=st.columns(3); sessions=c1.number_input("課程堂數",1,999,int(record["total_sessions"])); amount=c2.number_input("成交總金額",0.0,10000000.0,float(record["total_amount"]),step=100.0,format="%.0f"); expiry=c3.date_input("有效期限",pd.to_datetime(record["expiry_date"]).date())
-            referral=st.text_input("轉介",record.get("referral") or "")
+            referral=st.text_input("醫生轉介",record.get("referral") or "")
             note=st.text_area("備註",record.get("note") or "")
         else:
             c1,c2=st.columns(2); d=c1.date_input("銷課日期",pd.to_datetime(record["usage_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index); note=st.text_area("備註",record.get("note") or "")
