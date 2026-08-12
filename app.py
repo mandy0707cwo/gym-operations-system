@@ -1264,7 +1264,7 @@ def _sync_daily_classes(admin, operation_date, coach_id):
 def record_admin_page(me):
     admin=admin_client(); coaches=rows(admin.table("profiles").select("id,display_name,role"))
     coach_map={x["display_name"]:x["id"] for x in coaches if x["role"] in ("coach","manager")}; id_name={v:k for k,v in coach_map.items()}
-    data_type=st.selectbox("資料類型",["體驗項目","單堂銷售","活動支援","銷課取消紀錄","課程購買","銷課表"],key="manage_data_type")
+    data_type=st.selectbox("資料類型",["體驗項目","單堂銷售","活動支援","專案","銷課取消紀錄","課程購買","銷課表"],key="manage_data_type")
     if data_type=="銷課取消紀錄":
         with st.expander("新增銷課取消紀錄",expanded=False):
             with st.form("admin_add_session_cancellation",clear_on_submit=True):
@@ -1290,6 +1290,9 @@ def record_admin_page(me):
     elif data_type=="活動支援":
         records=rows(admin.table("event_supports").select("*").order("entry_date",desc=True).limit(500))
         labels={f'{x["entry_date"]}｜{x["content"]}｜{id_name.get(x["coach_id"],"未知")}｜{x["id"][:8]}':x for x in records}
+    elif data_type=="專案":
+        records=rows(admin.table("project_entries").select("*").order("entry_date",desc=True).limit(500))
+        labels={f'{x["entry_date"]}｜{x["project_name"]}｜{x["person_name"]}｜{id_name.get(x.get("coach_id"),"未知")}｜{x["id"][:8]}':x for x in records}
     elif data_type=="課程購買":
         records=rows(admin.table("purchase_balances").select("*").order("expiry_date",desc=True).limit(500))
         record_purchase_ids=[x["purchase_id"] for x in records]
@@ -1306,7 +1309,7 @@ def record_admin_page(me):
     if not labels: st.info("目前沒有可管理的資料。"); return
     selected=st.selectbox("選擇紀錄",list(labels)); record=labels[selected]
     record_coach_map=dict(coach_map)
-    if data_type in ("體驗項目","單堂銷售","活動支援","銷課取消紀錄","銷課表") and record.get("coach_id") not in record_coach_map.values():
+    if data_type in ("體驗項目","單堂銷售","活動支援","專案","銷課取消紀錄","銷課表") and record.get("coach_id") not in record_coach_map.values():
         historical_name=id_name.get(record.get("coach_id"),f'歷史帳號 {str(record.get("coach_id",""))[:8]}')
         record_coach_map[f'{historical_name}（歷史資料）']=record.get("coach_id")
     coach_names=list(record_coach_map)
@@ -1327,6 +1330,17 @@ def record_admin_page(me):
             content=st.text_input("活動內容",record["content"])
             c1,c2=st.columns(2); hours=c1.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25); deducted_hours=c2.number_input("應扣除時間",0.0,24.0,float(record["deducted_hours"]),step=0.25)
             deduction_reason=st.text_input("扣除原因",record.get("deduction_reason") or "")
+        elif data_type=="專案":
+            project_catalog=rows(admin.table("project_catalog").select("id,project_name,item_name,hours,price").order("project_name").order("item_name"))
+            project_catalog_map={f'{x["project_name"]}｜{x["item_name"]}｜{float(x["hours"]):g} 小時｜$ {float(x["price"]):,.0f}':x for x in project_catalog}
+            project_catalog_labels=list(project_catalog_map)
+            current_catalog_index=next((i for i,label in enumerate(project_catalog_labels) if project_catalog_map[label]["id"]==record.get("project_catalog_id")),0)
+            selected_project_item=st.selectbox("專案及操作項目",project_catalog_labels,index=current_catalog_index)
+            c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["entry_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
+            person_name=st.text_input("姓名",record.get("person_name") or "")
+            c1,c2=st.columns(2)
+            quantity=c1.number_input("數量",0.01,100000.0,float(record["quantity"]),step=1.0)
+            total_price=c2.number_input("價格",0.0,1000000000.0,float(record["quantity"])*float(record["unit_price"]),step=100.0,format="%.0f",help="此處為本筆總價。")
         elif data_type=="課程購買":
             c1,c2,c3=st.columns(3); sessions=c1.number_input("課程堂數",1,999,int(record["total_sessions"])); amount=c2.number_input("成交總金額",0.0,10000000.0,float(record["total_amount"]),step=100.0,format="%.0f"); expiry=c3.date_input("有效期限",pd.to_datetime(record["expiry_date"]).date())
             referral=st.text_input("醫生轉介",record.get("referral") or "")
@@ -1349,6 +1363,13 @@ def record_admin_page(me):
                 if deducted_hours>hours: raise ValueError("應扣除時間不可大於活動時數")
                 if deducted_hours>0 and not deduction_reason.strip(): raise ValueError("有扣除時間時必須填寫扣除原因")
                 admin.table("event_supports").update({"entry_date":str(d),"coach_id":record_coach_map[coach],"content":content.strip(),"hours":hours,"deducted_hours":deducted_hours,"deduction_reason":deduction_reason.strip() or None}).eq("id",record["id"]).execute()
+            elif data_type=="專案":
+                if not person_name.strip(): raise ValueError("姓名不可空白")
+                catalog_item=project_catalog_map[selected_project_item]
+                admin.table("project_entries").update({"entry_date":str(d),"project_catalog_id":catalog_item["id"],
+                    "project_name":catalog_item["project_name"],"person_name":person_name.strip(),"coach_id":record_coach_map[coach],
+                    "item_name":catalog_item["item_name"],"item_hours":float(catalog_item["hours"]),"quantity":quantity,
+                    "unit_price":total_price/quantity}).eq("id",record["id"]).execute()
             elif data_type=="課程購買": admin.table("purchases").update({"total_sessions":sessions,"total_amount":amount,"expiry_date":str(expiry),"referral":referral.strip() or None,"note":note.strip() or None}).eq("id",record["purchase_id"]).execute()
             else:
                 old_date,old_coach=record["usage_date"],record["coach_id"]
@@ -1386,6 +1407,7 @@ def record_admin_page(me):
                 elif data_type=="體驗項目": admin.table("trial_items").delete().in_("id",record_ids).execute()
                 elif data_type=="單堂銷售": admin.table("single_sales").delete().in_("id",record_ids).execute()
                 elif data_type=="活動支援": admin.table("event_supports").delete().in_("id",record_ids).execute()
+                elif data_type=="專案": admin.table("project_entries").delete().in_("id",record_ids).execute()
                 elif data_type=="課程購買":
                     purchase_ids=list({item["purchase_id"] for item in delete_records})
                     affected=rows(admin.table("session_usages").select("usage_date,coach_id").in_("purchase_id",purchase_ids))
@@ -1404,7 +1426,7 @@ def data_management_page(me):
     st.header("資料管理")
     if me["role"]!="admin": st.warning("此頁僅限系統管理員使用。"); return
     if admin_client() is None: st.error("尚未設定 SUPABASE_SECRET_KEY。"); return
-    tab1,tab2,tab3,tab4,tab5,tab6=st.tabs(["課程名稱管理","體驗項目管理","單堂銷售管理","專案管理","資料匯入／匯出","新增／修改／刪除"])
+    tab1,tab2,tab3,tab4,tab5,tab6=st.tabs(["課程名稱管理","體驗項目管理","單堂銷售管理","專案管理","資料匯入／匯出","修改／刪除"])
     with tab1: course_admin_page(me)
     with tab2: operation_item_admin_page(me,"trial","體驗項目管理")
     with tab3: operation_item_admin_page(me,"single_sale","單堂銷售管理")
