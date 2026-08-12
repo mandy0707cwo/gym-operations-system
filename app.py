@@ -336,7 +336,7 @@ def usage_query_tabs(me):
     purchases=[]
     payments=[]
     if purchase_ids:
-        purchases=rows(client().table("purchases").select("id,payment_plan,installment_count,session_hours").in_("id",purchase_ids))
+        purchases=rows(client().table("purchases").select("id,payment_plan,installment_count,session_hours,purchase_date").in_("id",purchase_ids))
         payments=rows(client().table("purchase_payments").select("purchase_id,installment_no,amount").in_("purchase_id",purchase_ids))
     purchase_map={x["id"]:x for x in purchases}
     payment_map={}
@@ -349,11 +349,18 @@ def usage_query_tabs(me):
     with tab1:
         can_filter_coach=me["role"] in ("shared_coach","manager","admin")
         if can_filter_coach:
-            selected_coach=st.selectbox("成交教練",["全部教練"]+list(coaches),key="member_course_coach_filter")
+            filter_col1,filter_col2=st.columns(2)
+            selected_coach=filter_col1.selectbox("成交教練",["全部教練"]+list(coaches),key="member_course_coach_filter")
+            member_keyword=filter_col2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="member_course_name_filter").strip()
             filtered_balances=balances if selected_coach=="全部教練" else [x for x in balances if x.get("coach_id")==coaches[selected_coach]]
         else:
-            st.caption(f'成交教練：{me["display_name"]}')
+            filter_col1,filter_col2=st.columns(2)
+            filter_col1.caption(f'成交教練：{me["display_name"]}')
+            member_keyword=filter_col2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="member_course_name_filter").strip()
             filtered_balances=[x for x in balances if x.get("coach_id")==me["id"]]
+        if member_keyword:
+            normalized_keyword=member_keyword.casefold()
+            filtered_balances=[x for x in filtered_balances if normalized_keyword in str(x.get("member_name") or "").casefold()]
         detail=[]
         for item in filtered_balances:
             purchase=purchase_map.get(item["purchase_id"],{})
@@ -366,9 +373,9 @@ def usage_query_tabs(me):
             else:
                 payment_status=f'尚欠 TWD {total_amount-payment["amount"]:,.0f}'
             detail.append({
-                "會員名稱":item["member_name"],"課程名稱":item["course_name"],"成交教練":item["coach_name"],
+                "成交日期":purchase.get("purchase_date"),"會員名稱":item["member_name"],"課程名稱":item["course_name"],"成交教練":item["coach_name"],
                 "購買堂數":item["total_sessions"],"每堂課時數":float(purchase.get("session_hours") or 1),"成交金額":total_amount,"已上堂數":item["used_sessions"],
-                "剩餘堂數":item["remaining_sessions"],"剩餘金額":float(item["remaining_amount"]),
+                "剩餘堂數":item["remaining_sessions"],"課程結束":"是" if float(item["remaining_sessions"])<=0 else "否","剩餘金額":float(item["remaining_amount"]),
                 "有效期限":item["expiry_date"],"分期支付狀況":payment_status,
             })
         if detail:
