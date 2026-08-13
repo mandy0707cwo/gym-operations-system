@@ -1274,7 +1274,15 @@ def record_admin_page(me):
     admin=admin_client(); coaches=rows(admin.table("profiles").select("id,display_name,role"))
     coach_map={x["display_name"]:x["id"] for x in coaches if x["role"]=="coach"}
     id_name={x["id"]:x["display_name"] for x in coaches}
-    data_type=st.selectbox("資料類型",["體驗項目","單堂銷售","活動支援","專案","銷課取消紀錄","課程購買","銷課表"],key="manage_data_type")
+    data_types=["體驗項目","單堂銷售","活動支援","專案","銷課取消紀錄","課程購買","銷課表"]
+    st.markdown("#### 資料類型")
+    data_type=st.segmented_control(
+        "資料類型分頁",data_types,default="體驗項目",
+        key="manage_data_type",label_visibility="collapsed"
+    )
+    if data_type is None:
+        data_type="體驗項目"
+    st.divider()
     if data_type=="銷課取消紀錄":
         with st.expander("新增銷課取消紀錄",expanded=False):
             with st.form("admin_add_session_cancellation",clear_on_submit=True):
@@ -1316,6 +1324,39 @@ def record_admin_page(me):
         usage_members=rows(admin.table("purchase_balances").select("purchase_id,member_name").in_("purchase_id",usage_purchase_ids)) if usage_purchase_ids else []
         usage_member_map={x["purchase_id"]:x.get("member_name") or "會員不明" for x in usage_members}
         labels={f'{x["usage_date"]}｜{usage_member_map.get(x["purchase_id"],"會員不明")}｜{id_name.get(x["coach_id"],"未知")}｜第{x["session_seq"]}堂｜{x["id"][:8]}':x for x in records}
+
+    st.markdown("#### 搜尋紀錄")
+    search_col1,search_col2=st.columns(2)
+    coach_search=search_col1.selectbox(
+        "教練搜尋",["全部教練"]+list(coach_map),
+        key=f"record_coach_search_{data_type}"
+    )
+    member_search=""
+    if data_type in ("體驗項目","單堂銷售","課程購買","銷課表"):
+        member_search=search_col2.text_input(
+            "會員名稱搜尋",placeholder="可輸入完整或部分姓名",
+            key=f"record_member_search_{data_type}"
+        ).strip().casefold()
+    else:
+        search_col2.caption("此資料類型沒有會員名稱欄位。")
+
+    selected_search_coach_id=coach_map.get(coach_search)
+    filtered_labels={}
+    for label,item in labels.items():
+        if selected_search_coach_id and item.get("coach_id")!=selected_search_coach_id:
+            continue
+        if member_search:
+            if data_type in ("體驗項目","單堂銷售"):
+                item_member=str(item.get("member_name") or "")
+            elif data_type=="課程購買":
+                item_member=str(item.get("member_name") or "")
+            else:
+                item_member=str(usage_member_map.get(item.get("purchase_id"),""))
+            if member_search not in item_member.strip().casefold():
+                continue
+        filtered_labels[label]=item
+    labels=filtered_labels
+    st.caption(f"符合搜尋條件：{len(labels)} 筆")
     if not labels: st.info("目前沒有可管理的資料。"); return
     selected=st.selectbox("選擇紀錄",list(labels)); record=labels[selected]
     record_coach_map=dict(coach_map)
