@@ -1469,6 +1469,13 @@ def financial_report_page(me):
             return
         selected_coach_id=coaches.get(selected_coach)
         selected_member_id=member_id_map.get(selected_member)
+        detail_tabs=st.tabs(["銷課總表","預收餘額明細","預收餘額總"])
+        with detail_tabs[0]:
+            sales_tax_mode=st.radio("銷課金額顯示方式",["含稅","未稅"],horizontal=True,key="finance_sales_tax_mode")
+        with detail_tabs[1]:
+            detail_tax_mode=st.radio("預收明細金額顯示方式",["含稅","未稅"],horizontal=True,key="finance_member_detail_tax_mode")
+        with detail_tabs[2]:
+            total_tax_mode=st.radio("預收總額顯示方式",["含稅","未稅"],horizontal=True,key="finance_member_total_tax_mode")
 
         # 銷課總表依銷課日期查詢，教練條件採授課教練。
         usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,deducted_amount").gte("usage_date",str(start)).lte("usage_date",str(end)).order("usage_date",desc=True))
@@ -1478,13 +1485,12 @@ def financial_report_page(me):
         usage_purchase_map={x["id"]:x for x in usage_purchases}
         if selected_member_id: usages=[x for x in usages if usage_purchase_map.get(x["purchase_id"],{}).get("member_id")==selected_member_id]
         sales_rows=[]
+        sales_amount_column=f"{sales_tax_mode}金額"
         for usage in usages:
             purchase=usage_purchase_map.get(usage["purchase_id"],{})
-            gross=_tax_display_amount(usage["deducted_amount"],"含稅")
-            net=_tax_display_amount(usage["deducted_amount"],"未稅")
             sales_rows.append({"日期":usage["usage_date"],"會員名稱":member_name_map.get(purchase.get("member_id"),""),
-                "未稅金額":net,"課程項目":purchase.get("course_name",""),"含稅金額":gross})
-        sales_df=pd.DataFrame(sales_rows,columns=["日期","會員名稱","未稅金額","課程項目","含稅金額"])
+                sales_amount_column:_tax_display_amount(usage["deducted_amount"],sales_tax_mode),"課程項目":purchase.get("course_name","")})
+        sales_df=pd.DataFrame(sales_rows,columns=["日期","會員名稱",sales_amount_column,"課程項目"])
 
         # 預收明細依購買日期查詢，教練條件採成交教練；銷課金額累計至查詢截止日。
         purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_amount,purchase_date").gte("purchase_date",str(start)).lte("purchase_date",str(end)).order("purchase_date",desc=True))
@@ -1495,31 +1501,29 @@ def financial_report_page(me):
         used_amount_map={}
         for usage in balance_usages:
             used_amount_map[usage["purchase_id"]]=used_amount_map.get(usage["purchase_id"],0)+float(usage["deducted_amount"])
-        tax_mode=st.radio("預收金額顯示方式",["含稅","未稅"],horizontal=True,key="finance_member_tax_mode")
         balance_rows=[]
         for purchase in purchases:
             prepaid=float(purchase["total_amount"]); used=min(used_amount_map.get(purchase["id"],0),prepaid); remaining=max(prepaid-used,0)
             balance_rows.append({"日期":purchase["purchase_date"],"會員名稱":member_name_map.get(purchase["member_id"],""),
-                "預收金額":_tax_display_amount(prepaid,tax_mode),"銷課金額":_tax_display_amount(used,tax_mode),
-                "剩餘金額":_tax_display_amount(remaining,tax_mode)})
+                "預收金額":_tax_display_amount(prepaid,detail_tax_mode),"銷課金額":_tax_display_amount(used,detail_tax_mode),
+                "剩餘金額":_tax_display_amount(remaining,detail_tax_mode),"_含稅預收":prepaid,"_含稅銷課":used,"_含稅剩餘":remaining})
         balance_df=pd.DataFrame(balance_rows,columns=["日期","會員名稱","預收金額","銷課金額","剩餘金額"])
-        totals_df=pd.DataFrame([{"預收金額總計":int(balance_df["預收金額"].sum()) if not balance_df.empty else 0,
-            "銷課金額總計":int(balance_df["銷課金額"].sum()) if not balance_df.empty else 0,
-            "剩餘金額總計":int(balance_df["剩餘金額"].sum()) if not balance_df.empty else 0}])
+        totals_df=pd.DataFrame([{"預收金額總計":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode),
+            "銷課金額總計":_tax_display_amount(sum(x["_含稅銷課"] for x in balance_rows),total_tax_mode),
+            "剩餘金額總計":_tax_display_amount(sum(x["_含稅剩餘"] for x in balance_rows),total_tax_mode)}])
 
-        detail_tabs=st.tabs(["銷課總表","預收餘額明細","預收餘額總"])
         money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","預收金額","銷課金額","剩餘金額","預收金額總計","銷課金額總計","剩餘金額總計"]}
         with detail_tabs[0]:
-            st.caption("日期依銷課日期；教練篩選依授課教練。未稅金額按含稅金額 ÷ 1.05 四捨五入至整數。")
+            st.caption(f"日期依銷課日期；教練篩選依授課教練。目前顯示：{sales_tax_mode}金額。未稅金額按含稅金額 ÷ 1.05 四捨五入至整數。")
             st.dataframe(sales_df,hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[1]:
-            st.caption(f"日期依課程購買日期；教練篩選依成交教練；銷課累計至 {end}。目前顯示：{tax_mode}金額。")
+            st.caption(f"日期依課程購買日期；教練篩選依成交教練；銷課累計至 {end}。目前顯示：{detail_tax_mode}金額。")
             st.dataframe(balance_df,hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[2]:
-            st.caption(f"目前顯示：{tax_mode}金額。")
+            st.caption(f"目前顯示：{total_tax_mode}金額。")
             st.dataframe(totals_df,hide_index=True,use_container_width=True,column_config=money_config)
         export_data=_excel_bytes({"銷課總表":sales_df,"預收餘額明細":balance_df,"預收餘額總":totals_df})
-        st.download_button("匯出會員財務報表",export_data,file_name=f"會員財務報表_{start}_{end}_{tax_mode}.xlsx",
+        st.download_button("匯出會員財務報表",export_data,file_name=f"會員財務報表_{start}_{end}_銷課{sales_tax_mode}_明細{detail_tax_mode}_總額{total_tax_mode}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
     for placeholder_tab in report_tabs[1:]:
         with placeholder_tab: st.info("此分頁將依後續需求建置。")
