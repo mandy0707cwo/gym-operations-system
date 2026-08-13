@@ -1591,9 +1591,9 @@ def financial_report_page(me):
                 operation_hours=trial_hours+single_hours+project_hours
                 row={"教練":coach_name_map.get(cid,"未知"),**course_values,"銷課時數小計":usage_hours,
                     "體驗項目":trial_hours,"單堂銷售":single_hours,"專案":project_hours,
-                    "每日營運時數小計":operation_hours,"時數小計加總":usage_hours+operation_hours}
+                    "每日營運時數小計":operation_hours,"時數總計":usage_hours+operation_hours}
                 execution_rows.append(row)
-            execution_columns=["教練"]+course_names+["銷課時數小計","體驗項目","單堂銷售","專案","每日營運時數小計","時數小計加總"]
+            execution_columns=["教練"]+course_names+["銷課時數小計","體驗項目","單堂銷售","專案","每日營運時數小計","時數總計"]
             execution_df=pd.DataFrame(execution_rows,columns=execution_columns)
 
             repurchases=rows(client().table("purchases").select("member_id,coach_id,course_name,purchase_kind,purchase_date").gte("purchase_date",str(coach_start)).lte("purchase_date",str(coach_end)).order("purchase_date",desc=True))
@@ -1616,7 +1616,12 @@ def financial_report_page(me):
             with coach_detail_tabs[0]:
                 st.caption("銷課時數會依每項課程名稱分欄顯示；銷課時數小計為各課程時數合計。")
                 if selected_member_id: st.caption("會員篩選僅適用可辨識會員的銷課、體驗及單堂銷售；專案因無會員欄位，篩選後不列入。")
-                st.dataframe(execution_df,hide_index=True,use_container_width=True,column_config={name:st.column_config.NumberColumn(format="%.2f 小時") for name in execution_columns if name!="教練"})
+                subtotal_columns=["銷課時數小計","每日營運時數小計"]
+                execution_styler=(execution_df.style
+                    .format({name:"{:.2f}" for name in execution_columns if name!="教練"})
+                    .set_properties(subset=subtotal_columns,**{"background-color":"#FFF3CD","font-weight":"bold"})
+                    .set_properties(subset=["時數總計"],**{"background-color":"#D1E7DD","font-weight":"bold"}))
+                st.dataframe(execution_styler,hide_index=True,use_container_width=True)
             with coach_detail_tabs[1]:
                 st.caption("回購率＝續課購買次數 ÷ 購買次數；統計範圍依課程購買日期。")
                 st.dataframe(repurchase_df,hide_index=True,use_container_width=True,column_config={"回購率":st.column_config.NumberColumn(format="%.1f%%")})
