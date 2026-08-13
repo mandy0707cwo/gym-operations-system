@@ -1500,26 +1500,35 @@ def financial_report_page(me):
         if selected_member_id: purchases=[x for x in purchases if x.get("member_id")==selected_member_id]
         purchase_ids=[x["id"] for x in purchases]
         balance_usages=rows(client().table("session_usages").select("purchase_id,deducted_amount,usage_date").in_("purchase_id",purchase_ids).lte("usage_date",str(end))) if purchase_ids else []
+        balance_payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").in_("purchase_id",purchase_ids).lte("paid_date",str(end))) if purchase_ids else []
         used_amount_map={}
         for usage in balance_usages:
             used_amount_map[usage["purchase_id"]]=used_amount_map.get(usage["purchase_id"],0)+float(usage["deducted_amount"])
+        received_amount_map={}
+        for payment in balance_payments:
+            received_amount_map[payment["purchase_id"]]=received_amount_map.get(payment["purchase_id"],0)+float(payment["amount"])
         balance_rows=[]
         for purchase in purchases:
-            prepaid=float(purchase["total_amount"]); used=min(used_amount_map.get(purchase["id"],0),prepaid); remaining=max(prepaid-used,0)
+            contracted=float(purchase["total_amount"])
+            prepaid=min(received_amount_map.get(purchase["id"],0),contracted)
+            used=min(used_amount_map.get(purchase["id"],0),contracted)
+            remaining=prepaid-used
             balance_rows.append({"日期":purchase["purchase_date"],"會員名稱":member_name_map.get(purchase["member_id"],""),
-                "預收金額":_tax_display_amount(prepaid,detail_tax_mode),"銷課金額":_tax_display_amount(used,detail_tax_mode),
-                "剩餘金額":_tax_display_amount(remaining,detail_tax_mode),"_含稅預收":prepaid,"_含稅銷課":used,"_含稅剩餘":remaining})
-        balance_df=pd.DataFrame(balance_rows,columns=["日期","會員名稱","預收金額","銷課金額","剩餘金額"])
-        totals_df=pd.DataFrame([{"預收金額總計":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode),
+                "成交總金額":_tax_display_amount(contracted,detail_tax_mode),"預收金額":_tax_display_amount(prepaid,detail_tax_mode),
+                "銷課金額":_tax_display_amount(used,detail_tax_mode),"剩餘金額":_tax_display_amount(remaining,detail_tax_mode),
+                "_含稅成交":contracted,"_含稅預收":prepaid,"_含稅銷課":used,"_含稅剩餘":remaining})
+        balance_df=pd.DataFrame(balance_rows,columns=["日期","會員名稱","成交總金額","預收金額","銷課金額","剩餘金額"])
+        totals_df=pd.DataFrame([{"成交總金額總計":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
+            "預收金額總計":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode),
             "銷課金額總計":_tax_display_amount(sum(x["_含稅銷課"] for x in balance_rows),total_tax_mode),
             "剩餘金額總計":_tax_display_amount(sum(x["_含稅剩餘"] for x in balance_rows),total_tax_mode)}])
 
-        money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","預收金額","銷課金額","剩餘金額","預收金額總計","銷課金額總計","剩餘金額總計"]}
+        money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","成交總金額","預收金額","銷課金額","剩餘金額","成交總金額總計","預收金額總計","銷課金額總計","剩餘金額總計"]}
         with detail_tabs[0]:
             st.caption(f"日期依銷課日期；教練篩選依授課教練。目前顯示：{sales_tax_mode}金額。未稅金額按含稅金額 ÷ 1.05 四捨五入至整數。")
             st.dataframe(sales_df,hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[1]:
-            st.caption(f"日期依課程購買日期；教練篩選依成交教練；銷課累計至 {end}。目前顯示：{detail_tax_mode}金額。")
+            st.caption(f"日期依課程購買日期；教練篩選依成交教練；預收為截至 {end} 的實際收款，銷課亦累計至該日。剩餘金額＝預收金額－銷課金額。目前顯示：{detail_tax_mode}金額。")
             st.dataframe(balance_df,hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[2]:
             st.caption(f"目前顯示：{total_tax_mode}金額。")
