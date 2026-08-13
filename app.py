@@ -1617,8 +1617,8 @@ def financial_report_page(me):
                 subtotal_columns=["銷課時數小計","每日營運時數小計"]
                 execution_styler=(execution_df.style
                     .format({name:"{:.2f}" for name in execution_columns if name!="教練"})
-                    .set_properties(subset=subtotal_columns,**{"background-color":"#F2F2F2","font-weight":"bold"})
-                    .set_properties(subset=["時數總計"],**{"background-color":"#F2F2F2","font-weight":"bold"}))
+                    .set_properties(subset=subtotal_columns,**{"background-color":"#F2F2F2","color":"#000000","font-weight":"bold"})
+                    .set_properties(subset=["時數總計"],**{"background-color":"#F2F2F2","color":"#000000","font-weight":"bold"}))
                 st.dataframe(execution_styler,hide_index=True,use_container_width=True)
             with coach_detail_tabs[1]:
                 st.caption("購買次數依所選期間內的課程購買紀錄計算。")
