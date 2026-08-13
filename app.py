@@ -363,22 +363,31 @@ def purchase_page(me):
         if not plan:
             continue
         paid=payment_summary.get(purchase["purchase_id"],{"amount":0.0,"numbers":set()})
-        remaining_numbers=[n for n in range(1,int(plan["installment_count"])+1) if n not in paid["numbers"]]
-        if paid["amount"]>=float(plan["total_amount"]) or not remaining_numbers:
+        if paid["amount"]>=float(plan["total_amount"]):
             continue
         unpaid_amount=max(float(plan["total_amount"])-paid["amount"],0)
         lookup[f'{purchase["member_name"]}｜{purchase["course_name"]}｜{int(plan["installment_count"])} 期｜未付 $ {unpaid_amount:,.0f}']={
-            "id":purchase["purchase_id"],"remaining_numbers":remaining_numbers,"unpaid_amount":unpaid_amount}
+            "id":purchase["purchase_id"],"paid_numbers":paid["numbers"],"unpaid_amount":unpaid_amount}
     if lookup:
         st.subheader("登錄後續期款")
         with st.form("payment"):
             label=st.selectbox("購買紀錄",list(lookup))
             selected_payment=lookup[label]
             c1,c2,c3=st.columns(3)
-            no=c1.selectbox("期次",selected_payment["remaining_numbers"]); pay_amount=c2.number_input("支付金額",1.0,10000000.0,step=100.0,format="%.0f"); pay_date=c3.date_input("付款日期",date.today())
+            installment_choice=c1.selectbox("期次",["第 2 期","第 3 期","其它"])
+            pay_amount=c2.number_input("支付金額",1.0,10000000.0,step=100.0,format="%.0f")
+            pay_date=c3.date_input("付款日期",date.today())
+            if installment_choice=="其它":
+                no=st.number_input("其它期次",4,99,value=4,step=1,help="請輸入第 4 期至第 99 期。")
+            else:
+                no=2 if installment_choice=="第 2 期" else 3
             add=st.form_submit_button("新增付款")
         if add:
             try:
+                if int(no) in selected_payment["paid_numbers"]:
+                    raise ValueError(f"第 {int(no)} 期已登錄，不可重複")
+                if float(pay_amount)>float(selected_payment["unpaid_amount"]):
+                    raise ValueError("支付金額不可超過未付金額")
                 client().table("purchase_payments").insert({"purchase_id":selected_payment["id"],"installment_no":no,"amount":pay_amount,"paid_date":str(pay_date),"created_by":me["id"]}).execute()
                 st.success("付款紀錄已新增。")
                 st.rerun()

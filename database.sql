@@ -117,7 +117,7 @@ create table public.purchases (
 create table public.purchase_payments (
   id uuid primary key default gen_random_uuid(),
   purchase_id uuid not null references public.purchases(id) on delete cascade,
-  installment_no smallint not null check (installment_no between 1 and 3),
+  installment_no smallint not null check (installment_no between 1 and 99),
   amount numeric(12,2) not null check (amount > 0),
   paid_date date not null,
   created_at timestamptz not null default now(),
@@ -130,9 +130,6 @@ returns trigger language plpgsql set search_path=public as $$
 declare v_purchase public.purchases%rowtype; v_paid numeric(12,2);
 begin
   select * into v_purchase from public.purchases where id=new.purchase_id for update;
-  if new.installment_no > v_purchase.installment_count then
-    raise exception '付款期次超過購買設定的總期數';
-  end if;
   select coalesce(sum(amount),0) into v_paid from public.purchase_payments
     where purchase_id=new.purchase_id and id<>new.id;
   if v_paid + new.amount > v_purchase.total_amount then
