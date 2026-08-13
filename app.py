@@ -1619,8 +1619,8 @@ def financial_report_page(me):
                 subtotal_columns=["銷課時數小計","每日營運時數小計"]
                 execution_styler=(execution_df.style
                     .format({name:"{:.2f}" for name in execution_columns if name!="教練"})
-                    .set_properties(subset=subtotal_columns,**{"background-color":"#FFF3CD","font-weight":"bold"})
-                    .set_properties(subset=["時數總計"],**{"background-color":"#D1E7DD","font-weight":"bold"}))
+                    .set_properties(subset=subtotal_columns,**{"background-color":"#F2F2F2","font-weight":"bold"})
+                    .set_properties(subset=["時數總計"],**{"background-color":"#F2F2F2","font-weight":"bold"}))
                 st.dataframe(execution_styler,hide_index=True,use_container_width=True)
             with coach_detail_tabs[1]:
                 st.caption("回購率＝續課購買次數 ÷ 購買次數；統計範圍依課程購買日期。")
