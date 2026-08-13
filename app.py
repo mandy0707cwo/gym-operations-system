@@ -1602,16 +1602,14 @@ def financial_report_page(me):
             repurchase_groups={}
             for purchase in repurchases:
                 key=(purchase.get("coach_id"),purchase.get("member_id"),purchase.get("course_name") or "")
-                group=repurchase_groups.setdefault(key,{"購買次數":0,"續課次數":0})
+                group=repurchase_groups.setdefault(key,{"購買次數":0})
                 group["購買次數"]+=1
-                if purchase.get("purchase_kind")=="renewal": group["續課次數"]+=1
             repurchase_rows=[]
             for (cid,mid,course_name),group in repurchase_groups.items():
-                count=group["購買次數"]
                 repurchase_rows.append({"教練":coach_name_map.get(cid,"未知"),"會員名稱":member_name_map.get(mid,"未知"),"課程名稱":course_name,
-                    "購買次數":count,"回購率":group["續課次數"]/count*100 if count else 0})
+                    "購買次數":group["購買次數"]})
             repurchase_rows.sort(key=lambda x:(x["教練"],x["會員名稱"],x["課程名稱"]))
-            repurchase_df=pd.DataFrame(repurchase_rows,columns=["教練","會員名稱","課程名稱","購買次數","回購率"])
+            repurchase_df=pd.DataFrame(repurchase_rows,columns=["教練","會員名稱","課程名稱","購買次數"])
 
             with coach_detail_tabs[0]:
                 st.caption("銷課時數會依每項課程名稱分欄顯示；銷課時數小計為各課程時數合計。")
@@ -1623,8 +1621,8 @@ def financial_report_page(me):
                     .set_properties(subset=["時數總計"],**{"background-color":"#F2F2F2","font-weight":"bold"}))
                 st.dataframe(execution_styler,hide_index=True,use_container_width=True)
             with coach_detail_tabs[1]:
-                st.caption("回購率＝續課購買次數 ÷ 購買次數；統計範圍依課程購買日期。")
-                st.dataframe(repurchase_df,hide_index=True,use_container_width=True,column_config={"回購率":st.column_config.NumberColumn(format="%.1f%%")})
+                st.caption("購買次數依所選期間內的課程購買紀錄計算。")
+                st.dataframe(repurchase_df,hide_index=True,use_container_width=True)
             coach_export=_excel_bytes({"教練執課時數總表":execution_df,"會員回購":repurchase_df})
             st.download_button("匯出教練財務報表",coach_export,file_name=f"教練財務報表_{coach_start}_{coach_end}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
