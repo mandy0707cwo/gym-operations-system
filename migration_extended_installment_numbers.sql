@@ -1,4 +1,4 @@
--- 允許後續期款登錄第 2、3 期及其它自訂期次（第 4–99 期）。
+-- 允許後續期款固定登錄第 2 期或第 3 期。
 -- 保留同一購買紀錄不可重複期次，以及累計付款不可超過成交總金額的檢核。
 
 alter table public.purchase_payments
@@ -6,7 +6,7 @@ alter table public.purchase_payments
 
 alter table public.purchase_payments
   add constraint purchase_payments_installment_no_check
-  check (installment_no between 1 and 99);
+  check (installment_no between 1 and 3);
 
 create or replace function public.validate_purchase_payment()
 returns trigger language plpgsql set search_path=public as $$

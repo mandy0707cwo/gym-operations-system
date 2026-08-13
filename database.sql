@@ -117,7 +117,7 @@ create table public.purchases (
 create table public.purchase_payments (
   id uuid primary key default gen_random_uuid(),
   purchase_id uuid not null references public.purchases(id) on delete cascade,
-  installment_no smallint not null check (installment_no between 1 and 99),
+  installment_no smallint not null check (installment_no between 1 and 3),
   amount numeric(12,2) not null check (amount > 0),
   paid_date date not null,
   created_at timestamptz not null default now(),

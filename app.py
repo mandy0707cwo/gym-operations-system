@@ -374,13 +374,10 @@ def purchase_page(me):
             label=st.selectbox("購買紀錄",list(lookup))
             selected_payment=lookup[label]
             c1,c2,c3=st.columns(3)
-            installment_choice=c1.selectbox("期次",["第 2 期","第 3 期","其它"])
+            installment_choice=c1.selectbox("期次",["第 2 期","第 3 期"])
             pay_amount=c2.number_input("支付金額",1.0,10000000.0,step=100.0,format="%.0f")
             pay_date=c3.date_input("付款日期",date.today())
-            if installment_choice=="其它":
-                no=st.number_input("其它期次",4,99,value=4,step=1,help="請輸入第 4 期至第 99 期。")
-            else:
-                no=2 if installment_choice=="第 2 期" else 3
+            no=2 if installment_choice=="第 2 期" else 3
             add=st.form_submit_button("新增付款")
         if add:
             try:
