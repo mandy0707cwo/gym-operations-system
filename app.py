@@ -2,7 +2,7 @@ import os
 import re
 from io import BytesIO
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 import pandas as pd
 import plotly.express as px
@@ -1442,6 +1442,88 @@ def data_management_page(me):
     with tab5: member_course_io_page(me)
     with tab6: record_admin_page(me)
 
+def _tax_display_amount(amount, tax_mode):
+    value=Decimal(str(amount or 0))
+    if tax_mode=="未稅": value=value/Decimal("1.05")
+    return int(value.quantize(Decimal("1"),rounding=ROUND_HALF_UP))
+
+def financial_report_page(me):
+    st.header("財務報表")
+    if me["role"]!="admin":
+        st.warning("此頁僅限系統管理員使用。")
+        return
+    report_tabs=st.tabs(["會員報表","第二分頁（待建置）","第三分頁（待建置）","第四分頁（待建置）","第五分頁（待建置）"])
+    with report_tabs[0]:
+        st.subheader("會員報表")
+        members=rows(client().table("members").select("id,member_name").order("member_name"))
+        member_name_map={x["id"]:x["member_name"] for x in members}
+        member_id_map={x["member_name"]:x["id"] for x in members}
+        coaches=coach_options(); coach_name_map={v:k for k,v in coaches.items()}
+        c1,c2,c3,c4=st.columns(4)
+        start=c1.date_input("開始日期",date.today().replace(day=1),key="finance_member_start")
+        end=c2.date_input("結束日期",date.today(),key="finance_member_end")
+        selected_coach=c3.selectbox("教練",["全部教練"]+list(coaches),key="finance_member_coach")
+        selected_member=c4.selectbox("會員名稱",["全部會員"]+list(member_id_map),key="finance_member_name")
+        if start>end:
+            st.error("開始日期不可晚於結束日期。")
+            return
+        selected_coach_id=coaches.get(selected_coach)
+        selected_member_id=member_id_map.get(selected_member)
+
+        # 銷課總表依銷課日期查詢，教練條件採授課教練。
+        usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,deducted_amount").gte("usage_date",str(start)).lte("usage_date",str(end)).order("usage_date",desc=True))
+        if selected_coach_id: usages=[x for x in usages if x.get("coach_id")==selected_coach_id]
+        usage_purchase_ids=list({x["purchase_id"] for x in usages})
+        usage_purchases=rows(client().table("purchases").select("id,member_id,course_name").in_("id",usage_purchase_ids)) if usage_purchase_ids else []
+        usage_purchase_map={x["id"]:x for x in usage_purchases}
+        if selected_member_id: usages=[x for x in usages if usage_purchase_map.get(x["purchase_id"],{}).get("member_id")==selected_member_id]
+        sales_rows=[]
+        for usage in usages:
+            purchase=usage_purchase_map.get(usage["purchase_id"],{})
+            gross=_tax_display_amount(usage["deducted_amount"],"含稅")
+            net=_tax_display_amount(usage["deducted_amount"],"未稅")
+            sales_rows.append({"日期":usage["usage_date"],"會員名稱":member_name_map.get(purchase.get("member_id"),""),
+                "未稅金額":net,"課程項目":purchase.get("course_name",""),"含稅金額":gross})
+        sales_df=pd.DataFrame(sales_rows,columns=["日期","會員名稱","未稅金額","課程項目","含稅金額"])
+
+        # 預收明細依購買日期查詢，教練條件採成交教練；銷課金額累計至查詢截止日。
+        purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_amount,purchase_date").gte("purchase_date",str(start)).lte("purchase_date",str(end)).order("purchase_date",desc=True))
+        if selected_coach_id: purchases=[x for x in purchases if x.get("coach_id")==selected_coach_id]
+        if selected_member_id: purchases=[x for x in purchases if x.get("member_id")==selected_member_id]
+        purchase_ids=[x["id"] for x in purchases]
+        balance_usages=rows(client().table("session_usages").select("purchase_id,deducted_amount,usage_date").in_("purchase_id",purchase_ids).lte("usage_date",str(end))) if purchase_ids else []
+        used_amount_map={}
+        for usage in balance_usages:
+            used_amount_map[usage["purchase_id"]]=used_amount_map.get(usage["purchase_id"],0)+float(usage["deducted_amount"])
+        tax_mode=st.radio("預收金額顯示方式",["含稅","未稅"],horizontal=True,key="finance_member_tax_mode")
+        balance_rows=[]
+        for purchase in purchases:
+            prepaid=float(purchase["total_amount"]); used=min(used_amount_map.get(purchase["id"],0),prepaid); remaining=max(prepaid-used,0)
+            balance_rows.append({"日期":purchase["purchase_date"],"會員名稱":member_name_map.get(purchase["member_id"],""),
+                "預收金額":_tax_display_amount(prepaid,tax_mode),"銷課金額":_tax_display_amount(used,tax_mode),
+                "剩餘金額":_tax_display_amount(remaining,tax_mode)})
+        balance_df=pd.DataFrame(balance_rows,columns=["日期","會員名稱","預收金額","銷課金額","剩餘金額"])
+        totals_df=pd.DataFrame([{"預收金額總計":int(balance_df["預收金額"].sum()) if not balance_df.empty else 0,
+            "銷課金額總計":int(balance_df["銷課金額"].sum()) if not balance_df.empty else 0,
+            "剩餘金額總計":int(balance_df["剩餘金額"].sum()) if not balance_df.empty else 0}])
+
+        detail_tabs=st.tabs(["銷課總表","預收餘額明細","預收餘額總"])
+        money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","預收金額","銷課金額","剩餘金額","預收金額總計","銷課金額總計","剩餘金額總計"]}
+        with detail_tabs[0]:
+            st.caption("日期依銷課日期；教練篩選依授課教練。未稅金額按含稅金額 ÷ 1.05 四捨五入至整數。")
+            st.dataframe(sales_df,hide_index=True,use_container_width=True,column_config=money_config)
+        with detail_tabs[1]:
+            st.caption(f"日期依課程購買日期；教練篩選依成交教練；銷課累計至 {end}。目前顯示：{tax_mode}金額。")
+            st.dataframe(balance_df,hide_index=True,use_container_width=True,column_config=money_config)
+        with detail_tabs[2]:
+            st.caption(f"目前顯示：{tax_mode}金額。")
+            st.dataframe(totals_df,hide_index=True,use_container_width=True,column_config=money_config)
+        export_data=_excel_bytes({"銷課總表":sales_df,"預收餘額明細":balance_df,"預收餘額總":totals_df})
+        st.download_button("匯出會員財務報表",export_data,file_name=f"會員財務報表_{start}_{end}_{tax_mode}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+    for placeholder_tab in report_tabs[1:]:
+        with placeholder_tab: st.info("此分頁將依後續需求建置。")
+
 user=login(); me=profile(user.id)
 with st.sidebar:
     st.title("🏋️ 營運管理")
@@ -1449,7 +1531,7 @@ with st.sidebar:
     pages=["每日營運","課程購買","銷課表"]
     if me["role"] in ("manager","admin"): pages.append("主管 Dashboard")
     if me["role"] == "admin":
-        pages.extend(["帳號與權限管理", "資料管理"])
+        pages.extend(["財務報表", "帳號與權限管理", "資料管理"])
     page=st.radio("功能",pages)
     if st.button("登出"):
         client().auth.sign_out(); st.session_state.clear(); st.rerun()
@@ -1457,6 +1539,6 @@ with st.sidebar:
 collapse_sidebar_on_mobile()
 
 try:
-    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
+    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")
