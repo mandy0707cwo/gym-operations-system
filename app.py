@@ -1454,7 +1454,7 @@ def financial_report_page(me):
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
         return
-    report_tabs=st.tabs(["會員報表","第二分頁（待建置）","第三分頁（待建置）","第四分頁（待建置）","第五分頁（待建置）"])
+    report_tabs=st.tabs(["會員報表","教練報表","其它分析報表","第四分頁（待建置）","第五分頁（待建置）"])
     with report_tabs[0]:
         st.subheader("會員報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
@@ -1536,7 +1536,136 @@ def financial_report_page(me):
         export_data=_excel_bytes({"銷課總表":sales_df,"預收餘額明細":balance_df,"預收餘額總":totals_df})
         st.download_button("匯出會員財務報表",export_data,file_name=f"會員財務報表_{start}_{end}_銷課{sales_tax_mode}_明細{detail_tax_mode}_總額{total_tax_mode}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
-    for placeholder_tab in report_tabs[1:]:
+
+    with report_tabs[1]:
+        st.subheader("教練報表")
+        members=rows(client().table("members").select("id,member_name").order("member_name"))
+        member_name_map={x["id"]:x["member_name"] for x in members}
+        member_id_map={x["member_name"]:x["id"] for x in members}
+        coaches=coach_options(); coach_name_map={v:k for k,v in coaches.items()}
+        c1,c2,c3,c4=st.columns(4)
+        coach_start=c1.date_input("開始日期",date.today().replace(day=1),key="finance_coach_start")
+        coach_end=c2.date_input("結束日期",date.today(),key="finance_coach_end")
+        coach_filter=c3.selectbox("教練",["全部教練"]+list(coaches),key="finance_coach_filter")
+        coach_member_filter=c4.selectbox("會員名稱",["全部會員"]+list(member_id_map),key="finance_coach_member")
+        if coach_start>coach_end:
+            st.error("開始日期不可晚於結束日期。")
+        else:
+            selected_coach_id=coaches.get(coach_filter)
+            selected_member_id=member_id_map.get(coach_member_filter)
+            coach_ids=[selected_coach_id] if selected_coach_id else list(coach_name_map)
+            coach_detail_tabs=st.tabs(["教練執課時數總表","會員回購"])
+
+            usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id").gte("usage_date",str(coach_start)).lte("usage_date",str(coach_end)))
+            if selected_coach_id: usages=[x for x in usages if x.get("coach_id")==selected_coach_id]
+            usage_purchase_ids=list({x["purchase_id"] for x in usages})
+            usage_purchases=rows(client().table("purchases").select("id,member_id,course_name,session_hours").in_("id",usage_purchase_ids)) if usage_purchase_ids else []
+            usage_purchase_map={x["id"]:x for x in usage_purchases}
+            if selected_member_id:
+                usages=[x for x in usages if usage_purchase_map.get(x["purchase_id"],{}).get("member_id")==selected_member_id]
+
+            course_names=sorted({usage_purchase_map.get(x["purchase_id"],{}).get("course_name","") for x in usages if usage_purchase_map.get(x["purchase_id"],{}).get("course_name")})
+            course_hours_by_coach={cid:{name:0.0 for name in course_names} for cid in coach_ids}
+            for usage in usages:
+                purchase=usage_purchase_map.get(usage["purchase_id"],{})
+                cid=usage.get("coach_id"); course_name=purchase.get("course_name")
+                if cid in course_hours_by_coach and course_name:
+                    course_hours_by_coach[cid][course_name]+=float(purchase.get("session_hours") or 1)
+
+            trial_items=rows(client().table("trial_items").select("coach_id,member_name,hours,entry_date").gte("entry_date",str(coach_start)).lte("entry_date",str(coach_end)))
+            single_sales=rows(client().table("single_sales").select("coach_id,member_name,hours,entry_date").gte("entry_date",str(coach_start)).lte("entry_date",str(coach_end)))
+            project_entries=rows(client().table("project_entries").select("coach_id,item_hours,quantity,entry_date").gte("entry_date",str(coach_start)).lte("entry_date",str(coach_end)))
+            if selected_member_id:
+                wanted_name=member_name_map.get(selected_member_id,"").strip().casefold()
+                trial_items=[x for x in trial_items if str(x.get("member_name") or "").strip().casefold()==wanted_name]
+                single_sales=[x for x in single_sales if str(x.get("member_name") or "").strip().casefold()==wanted_name]
+                project_entries=[]
+
+            execution_rows=[]
+            for cid in coach_ids:
+                course_values=course_hours_by_coach.get(cid,{})
+                usage_hours=sum(course_values.values())
+                trial_hours=sum(float(x.get("hours") or 0) for x in trial_items if x.get("coach_id")==cid)
+                single_hours=sum(float(x.get("hours") or 0) for x in single_sales if x.get("coach_id")==cid)
+                project_hours=sum(float(x.get("item_hours") or 0)*float(x.get("quantity") or 0) for x in project_entries if x.get("coach_id")==cid)
+                operation_hours=trial_hours+single_hours+project_hours
+                row={"教練":coach_name_map.get(cid,"未知"),**course_values,"銷課時數小計":usage_hours,
+                    "體驗項目":trial_hours,"單堂銷售":single_hours,"專案":project_hours,
+                    "每日營運時數小計":operation_hours,"時數小計加總":usage_hours+operation_hours}
+                execution_rows.append(row)
+            execution_columns=["教練"]+course_names+["銷課時數小計","體驗項目","單堂銷售","專案","每日營運時數小計","時數小計加總"]
+            execution_df=pd.DataFrame(execution_rows,columns=execution_columns)
+
+            repurchases=rows(client().table("purchases").select("member_id,coach_id,course_name,purchase_kind,purchase_date").gte("purchase_date",str(coach_start)).lte("purchase_date",str(coach_end)).order("purchase_date",desc=True))
+            if selected_coach_id: repurchases=[x for x in repurchases if x.get("coach_id")==selected_coach_id]
+            if selected_member_id: repurchases=[x for x in repurchases if x.get("member_id")==selected_member_id]
+            repurchase_groups={}
+            for purchase in repurchases:
+                key=(purchase.get("coach_id"),purchase.get("member_id"),purchase.get("course_name") or "")
+                group=repurchase_groups.setdefault(key,{"購買次數":0,"續課次數":0})
+                group["購買次數"]+=1
+                if purchase.get("purchase_kind")=="renewal": group["續課次數"]+=1
+            repurchase_rows=[]
+            for (cid,mid,course_name),group in repurchase_groups.items():
+                count=group["購買次數"]
+                repurchase_rows.append({"教練":coach_name_map.get(cid,"未知"),"會員名稱":member_name_map.get(mid,"未知"),"課程名稱":course_name,
+                    "購買次數":count,"回購率":group["續課次數"]/count*100 if count else 0})
+            repurchase_rows.sort(key=lambda x:(x["教練"],x["會員名稱"],x["課程名稱"]))
+            repurchase_df=pd.DataFrame(repurchase_rows,columns=["教練","會員名稱","課程名稱","購買次數","回購率"])
+
+            with coach_detail_tabs[0]:
+                st.caption("銷課時數會依每項課程名稱分欄顯示；銷課時數小計為各課程時數合計。")
+                if selected_member_id: st.caption("會員篩選僅適用可辨識會員的銷課、體驗及單堂銷售；專案因無會員欄位，篩選後不列入。")
+                st.dataframe(execution_df,hide_index=True,use_container_width=True,column_config={name:st.column_config.NumberColumn(format="%.2f 小時") for name in execution_columns if name!="教練"})
+            with coach_detail_tabs[1]:
+                st.caption("回購率＝續課購買次數 ÷ 購買次數；統計範圍依課程購買日期。")
+                st.dataframe(repurchase_df,hide_index=True,use_container_width=True,column_config={"回購率":st.column_config.NumberColumn(format="%.1f%%")})
+            coach_export=_excel_bytes({"教練執課時數總表":execution_df,"會員回購":repurchase_df})
+            st.download_button("匯出教練財務報表",coach_export,file_name=f"教練財務報表_{coach_start}_{coach_end}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+
+    with report_tabs[2]:
+        st.subheader("其它分析報表")
+        members=rows(client().table("members").select("id,member_name").order("member_name"))
+        member_name_map={x["id"]:x["member_name"] for x in members}
+        member_id_map={x["member_name"]:x["id"] for x in members}
+        coaches=coach_options()
+        c1,c2,c3,c4=st.columns(4)
+        other_start=c1.date_input("開始日期",date.today().replace(day=1),key="finance_other_start")
+        other_end=c2.date_input("結束日期",date.today(),key="finance_other_end")
+        other_coach=c3.selectbox("教練",["全部教練"]+list(coaches),key="finance_other_coach")
+        other_member=c4.selectbox("會員名稱",["全部會員"]+list(member_id_map),key="finance_other_member")
+        other_tabs=st.tabs(["醫生轉介","第二分頁（待建置）","第三分頁（待建置）"])
+        if other_start>other_end:
+            st.error("開始日期不可晚於結束日期。")
+        else:
+            referral_purchases=rows(client().table("purchases").select("member_id,coach_id,purchase_kind,total_amount,purchase_date,referral").gte("purchase_date",str(other_start)).lte("purchase_date",str(other_end)).order("purchase_date",desc=True))
+            selected_other_coach_id=coaches.get(other_coach)
+            selected_other_member_id=member_id_map.get(other_member)
+            if selected_other_coach_id: referral_purchases=[x for x in referral_purchases if x.get("coach_id")==selected_other_coach_id]
+            if selected_other_member_id: referral_purchases=[x for x in referral_purchases if x.get("member_id")==selected_other_member_id]
+            referral_groups={}
+            for purchase in referral_purchases:
+                referral=str(purchase.get("referral") or "").strip()
+                if not referral: continue
+                key=(referral,purchase.get("member_id"))
+                group=referral_groups.setdefault(key,{"首購":0,"續約":0,"成交總金額":0.0})
+                if purchase.get("purchase_kind")=="first": group["首購"]+=1
+                elif purchase.get("purchase_kind")=="renewal": group["續約"]+=1
+                group["成交總金額"]+=float(purchase.get("total_amount") or 0)
+            referral_rows=[{"醫生轉介":referral,"會員名稱":member_name_map.get(mid,"未知"),**values} for (referral,mid),values in referral_groups.items()]
+            referral_rows.sort(key=lambda x:(x["醫生轉介"],x["會員名稱"]))
+            referral_df=pd.DataFrame(referral_rows,columns=["醫生轉介","會員名稱","首購","續約","成交總金額"])
+            with other_tabs[0]:
+                st.caption("日期依課程購買日期；成交總金額為含稅金額。首購與續約欄位為購買筆數。")
+                st.dataframe(referral_df,hide_index=True,use_container_width=True,column_config={"成交總金額":st.column_config.NumberColumn(format="$ %.0f")})
+            for other_placeholder in other_tabs[1:]:
+                with other_placeholder: st.info("此分頁將依後續需求建置。")
+            other_export=_excel_bytes({"醫生轉介":referral_df})
+            st.download_button("匯出其它分析報表",other_export,file_name=f"其它分析報表_{other_start}_{other_end}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+
+    for placeholder_tab in report_tabs[3:]:
         with placeholder_tab: st.info("此分頁將依後續需求建置。")
 
 user=login(); me=profile(user.id)
