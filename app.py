@@ -1518,7 +1518,7 @@ def financial_report_page(me):
             return
         selected_coach_id=coaches.get(selected_coach)
         selected_member_id=member_id_map.get(selected_member)
-        detail_tabs=st.tabs(["銷課總表","預收餘額明細","預收餘額總"])
+        detail_tabs=st.tabs(["銷課總表","預收餘額明細","預收餘額總表"])
         with detail_tabs[0]:
             sales_tax_mode=st.radio("銷課金額顯示方式",["未稅","含稅"],horizontal=True,key="finance_sales_tax_mode")
         with detail_tabs[1]:
@@ -1541,11 +1541,14 @@ def financial_report_page(me):
                 sales_amount_column:_tax_display_amount(usage["deducted_amount"],sales_tax_mode),"課程項目":purchase.get("course_name","")})
         sales_df=pd.DataFrame(sales_rows,columns=["日期","會員名稱",sales_amount_column,"課程項目"])
 
-        # 預收明細依購買日期查詢，教練條件採成交教練；銷課金額累計至查詢截止日。
-        purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_amount,purchase_date").gte("purchase_date",str(start)).lte("purchase_date",str(end)).order("purchase_date",desc=True))
+        # 預收明細以付款日期判斷是否列入，包含查詢期間收到的分期款。
+        period_payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").gte("paid_date",str(start)).lte("paid_date",str(end)).order("paid_date",desc=True))
+        period_purchase_ids=list({x["purchase_id"] for x in period_payments})
+        purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_amount,purchase_date").in_("id",period_purchase_ids)) if period_purchase_ids else []
         if selected_coach_id: purchases=[x for x in purchases if x.get("coach_id")==selected_coach_id]
         if selected_member_id: purchases=[x for x in purchases if x.get("member_id")==selected_member_id]
         purchase_ids=[x["id"] for x in purchases]
+        period_payments=[x for x in period_payments if x["purchase_id"] in set(purchase_ids)]
         balance_usages=rows(client().table("session_usages").select("purchase_id,deducted_amount,usage_date").in_("purchase_id",purchase_ids).lte("usage_date",str(end))) if purchase_ids else []
         balance_payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").in_("purchase_id",purchase_ids).lte("paid_date",str(end))) if purchase_ids else []
         used_amount_map={}
@@ -1554,16 +1557,25 @@ def financial_report_page(me):
         received_amount_map={}
         for payment in balance_payments:
             received_amount_map[payment["purchase_id"]]=received_amount_map.get(payment["purchase_id"],0)+float(payment["amount"])
+        period_received_map={}
+        period_payment_date_map={}
+        for payment in period_payments:
+            purchase_id=payment["purchase_id"]
+            period_received_map[purchase_id]=period_received_map.get(purchase_id,0)+float(payment["amount"])
+            period_payment_date_map[purchase_id]=max(str(payment["paid_date"]),period_payment_date_map.get(purchase_id,""))
         balance_rows=[]
         for purchase in purchases:
             contracted=float(purchase["total_amount"])
-            prepaid=min(received_amount_map.get(purchase["id"],0),contracted)
+            period_prepaid=period_received_map.get(purchase["id"],0)
+            cumulative_prepaid=min(received_amount_map.get(purchase["id"],0),contracted)
             used=min(used_amount_map.get(purchase["id"],0),contracted)
-            remaining=prepaid-used
-            balance_rows.append({"日期":purchase["purchase_date"],"會員名稱":member_name_map.get(purchase["member_id"],""),
-                "成交總金額":_tax_display_amount(contracted,detail_tax_mode),"預收金額":_tax_display_amount(prepaid,detail_tax_mode),
+            remaining=cumulative_prepaid-used
+            purchase_in_period=str(start)<=str(purchase["purchase_date"])<=str(end)
+            balance_rows.append({"日期":period_payment_date_map.get(purchase["id"]),"會員名稱":member_name_map.get(purchase["member_id"],""),
+                "成交總金額":_tax_display_amount(contracted,detail_tax_mode) if purchase_in_period else None,"預收金額":_tax_display_amount(period_prepaid,detail_tax_mode),
                 "銷課金額":_tax_display_amount(used,detail_tax_mode),"剩餘金額":_tax_display_amount(remaining,detail_tax_mode),
-                "_含稅成交":contracted,"_含稅預收":prepaid,"_含稅銷課":used,"_含稅剩餘":remaining})
+                "_含稅成交":contracted if purchase_in_period else 0,"_含稅預收":period_prepaid,"_含稅銷課":used,"_含稅剩餘":remaining})
+        balance_rows.sort(key=lambda x:str(x.get("日期") or ""),reverse=True)
         balance_df=pd.DataFrame(balance_rows,columns=["日期","會員名稱","成交總金額","預收金額","銷課金額","剩餘金額"])
         totals_df=pd.DataFrame([{"成交總金額總計":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
             "預收金額總計":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode),
@@ -1575,12 +1587,12 @@ def financial_report_page(me):
             st.caption(f"日期依銷課日期；教練篩選依授課教練。目前顯示：{sales_tax_mode}金額。未稅金額按含稅金額 ÷ 1.05 四捨五入至整數。")
             st.dataframe(sales_df,hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[1]:
-            st.caption(f"日期依課程購買日期；教練篩選依成交教練；預收為截至 {end} 的實際收款，銷課亦累計至該日。剩餘金額＝預收金額－銷課金額。目前顯示：{detail_tax_mode}金額。")
+            st.caption(f"日期依查詢期間內最後一筆付款日期；只要期間內有實際收款即列入，包含分期款。非本期間成交者，成交總金額留白。預收金額為期間收款；銷課與剩餘金額累計至 {end}。目前顯示：{detail_tax_mode}金額。")
             st.dataframe(balance_df,hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[2]:
-            st.caption(f"目前顯示：{total_tax_mode}金額。")
+            st.caption(f"預收金額總計為查詢期間實際收款；成交總金額總計只計算本期間成交資料。銷課與剩餘金額為列入會員課程截至 {end} 的累計數。目前顯示：{total_tax_mode}金額。")
             st.dataframe(totals_df,hide_index=True,use_container_width=True,column_config=money_config)
-        export_data=_excel_bytes({"銷課總表":sales_df,"預收餘額明細":balance_df,"預收餘額總":totals_df})
+        export_data=_excel_bytes({"銷課總表":sales_df,"預收餘額明細":balance_df,"預收餘額總表":totals_df})
         st.download_button("匯出會員財務報表",export_data,file_name=f"會員財務報表_{start}_{end}_銷課{sales_tax_mode}_明細{detail_tax_mode}_總額{total_tax_mode}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
