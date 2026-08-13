@@ -366,7 +366,9 @@ def purchase_page(me):
         remaining_numbers=[n for n in range(1,int(plan["installment_count"])+1) if n not in paid["numbers"]]
         if paid["amount"]>=float(plan["total_amount"]) or not remaining_numbers:
             continue
-        lookup[f'{purchase["member_name"]}｜{purchase["course_name"]}｜{purchase["purchase_id"][:8]}']={"id":purchase["purchase_id"],"remaining_numbers":remaining_numbers}
+        unpaid_amount=max(float(plan["total_amount"])-paid["amount"],0)
+        lookup[f'{purchase["member_name"]}｜{purchase["course_name"]}｜{int(plan["installment_count"])} 期｜未付 $ {unpaid_amount:,.0f}']={
+            "id":purchase["purchase_id"],"remaining_numbers":remaining_numbers,"unpaid_amount":unpaid_amount}
     if lookup:
         st.subheader("登錄後續期款")
         with st.form("payment"):
