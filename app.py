@@ -1473,11 +1473,11 @@ def financial_report_page(me):
         selected_member_id=member_id_map.get(selected_member)
         detail_tabs=st.tabs(["銷課總表","預收餘額明細","預收餘額總"])
         with detail_tabs[0]:
-            sales_tax_mode=st.radio("銷課金額顯示方式",["含稅","未稅"],horizontal=True,key="finance_sales_tax_mode")
+            sales_tax_mode=st.radio("銷課金額顯示方式",["未稅","含稅"],horizontal=True,key="finance_sales_tax_mode")
         with detail_tabs[1]:
-            detail_tax_mode=st.radio("預收明細金額顯示方式",["含稅","未稅"],horizontal=True,key="finance_member_detail_tax_mode")
+            detail_tax_mode=st.radio("預收明細金額顯示方式",["未稅","含稅"],horizontal=True,key="finance_member_detail_tax_mode")
         with detail_tabs[2]:
-            total_tax_mode=st.radio("預收總額顯示方式",["含稅","未稅"],horizontal=True,key="finance_member_total_tax_mode")
+            total_tax_mode=st.radio("預收總額顯示方式",["未稅","含稅"],horizontal=True,key="finance_member_total_tax_mode")
 
         # 銷課總表依銷課日期查詢，教練條件採授課教練。
         usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,deducted_amount").gte("usage_date",str(start)).lte("usage_date",str(end)).order("usage_date",desc=True))
