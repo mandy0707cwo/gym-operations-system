@@ -951,7 +951,7 @@ def project_admin_page(me):
         st.error("專案主檔尚未建立，請先在 Supabase 執行 migration_project_v1_1_0.sql。")
         return
 
-    project_tab,item_tab=st.tabs(["專案設定","操作項目管理"])
+    project_tab,deposit_tab,item_tab=st.tabs(["專案設定","新增儲值／沖銷","操作項目管理"])
     with project_tab:
         st.caption("已儲值專案必須輸入實際儲值金額；未儲值專案採事後請款。")
         funding_label=st.radio("專案類型",["已儲值","未儲值"],horizontal=True,key="add_project_funding_type")
@@ -971,11 +971,15 @@ def project_admin_page(me):
             elif funding_label=="已儲值" and stored_amount<=0: st.error("已儲值專案的儲值金額必須大於零。")
             else:
                 try:
-                    admin.table("projects").insert({"project_name":new_project_name,
+                    created_project=rows(admin.table("projects").insert({"project_name":new_project_name,
                         "funding_type":"stored" if funding_label=="已儲值" else "unfunded",
                         "stored_date":str(stored_date) if funding_label=="已儲值" else None,
                         "stored_amount":stored_amount if funding_label=="已儲值" else 0,
-                        "active":True,"created_by":me["id"]}).execute()
+                        "active":True,"created_by":me["id"]}).execute())
+                    if funding_label=="已儲值" and created_project:
+                        admin.table("project_deposits").insert({"project_id":created_project[0]["id"],
+                            "deposit_date":str(stored_date),"amount":stored_amount,"transaction_type":"opening",
+                            "note":"建立專案時的期初儲值","created_by":me["id"]}).execute()
                     st.success("專案已新增。"); st.rerun()
                 except Exception as exc: st.error(f"新增失敗，請確認專案名稱是否重複：{exc}")
 
@@ -1015,13 +1019,72 @@ def project_admin_page(me):
                             used=rows(admin.table("project_funding_balances").select("used_amount").eq("project_id",current["id"]).limit(1))
                             used_amount=float(used[0]["used_amount"]) if used else 0
                             if amount<used_amount: raise ValueError(f"儲值金額不可小於已使用金額 $ {used_amount:,.0f}")
+                            if current["funding_type"]=="stored" and amount!=float(current.get("stored_amount") or 0):
+                                raise ValueError("既有儲值金額請至「新增儲值／沖銷」分頁處理，不可直接覆蓋。")
                         admin.table("projects").update({"project_name":edited_name,"funding_type":funding_type,
                             "stored_date":str(edited_stored_date) if funding_type=="stored" else None,
                             "stored_amount":amount,"active":edited_active,
                             "updated_at":pd.Timestamp.now(tz="UTC").isoformat()}).eq("id",current["id"]).execute()
                         admin.table("project_catalog").update({"project_name":edited_name}).eq("project_id",current["id"]).execute()
+                        if current["funding_type"]=="unfunded" and funding_type=="stored":
+                            admin.table("project_deposits").insert({"project_id":current["id"],
+                                "deposit_date":str(edited_stored_date),"amount":amount,"transaction_type":"opening",
+                                "note":"專案轉為已儲值","created_by":me["id"]}).execute()
                         st.success("專案設定已修改。"); st.rerun()
                     except Exception as exc: st.error(f"修改失敗：{exc}")
+
+    with deposit_tab:
+        stored_projects=[x for x in projects if x.get("funding_type")=="stored" and x.get("active")]
+        if not stored_projects:
+            st.info("目前沒有已啟用的儲值專案。")
+        else:
+            stored_project_map={x["project_name"]:x for x in stored_projects}
+            st.caption("後續收到儲值款時新增一筆紀錄；輸入錯誤請使用沖銷，不直接刪除歷史。")
+            with st.form("add_project_deposit_form",clear_on_submit=True,enter_to_submit=False):
+                deposit_project_name=st.selectbox("專案名稱",list(stored_project_map),index=None,placeholder="請選擇專案")
+                c1,c2=st.columns(2)
+                deposit_date=c1.date_input("儲值日期",value=None,format="YYYY-MM-DD")
+                deposit_amount=c2.number_input("儲值金額",0.0,1000000000.0,0.0,step=100.0,format="%.0f")
+                deposit_note=st.text_input("備註").strip()
+                add_deposit=st.form_submit_button("新增儲值紀錄",type="primary",use_container_width=True)
+            if add_deposit:
+                if not deposit_project_name: st.error("請選擇專案。")
+                elif deposit_date is None: st.error("請填寫儲值日期。")
+                elif deposit_amount<=0: st.error("儲值金額必須大於零。")
+                else:
+                    try:
+                        admin.rpc("add_project_deposit",{"p_project_id":stored_project_map[deposit_project_name]["id"],
+                            "p_deposit_date":str(deposit_date),"p_amount":deposit_amount,"p_note":deposit_note or None}).execute()
+                        st.success("儲值紀錄已新增，累計儲值及剩餘金額已更新。"); st.rerun()
+                    except Exception as exc: st.error(f"新增儲值失敗：{exc}")
+
+            deposits=rows(admin.table("project_deposits").select("id,project_id,deposit_date,amount,transaction_type,reversed_deposit_id,note,created_at")
+                .order("deposit_date",desc=True).order("created_at",desc=True).limit(500))
+            project_names_by_id={x["id"]:x["project_name"] for x in projects}
+            reversed_ids={x.get("reversed_deposit_id") for x in deposits if x.get("reversed_deposit_id")}
+            deposit_display=[{"儲值日期":x["deposit_date"],"專案名稱":project_names_by_id.get(x["project_id"],"未知"),
+                "類型":{"opening":"期初儲值","deposit":"後續儲值","reversal":"沖銷"}.get(x["transaction_type"],x["transaction_type"]),
+                "金額":float(x["amount"]),"備註":x.get("note") or ""} for x in deposits]
+            st.dataframe(pd.DataFrame(deposit_display),hide_index=True,use_container_width=True,
+                column_config={"金額":st.column_config.NumberColumn(format="$ %.0f")})
+
+            reversible=[x for x in deposits if float(x.get("amount") or 0)>0 and x["id"] not in reversed_ids]
+            if reversible:
+                reversal_map={f'{x["deposit_date"]}｜{project_names_by_id.get(x["project_id"],"未知")}｜$ {float(x["amount"]):,.0f}｜{x["id"][:8]}':x for x in reversible}
+                with st.form("reverse_project_deposit_form",enter_to_submit=False):
+                    reversal_label=st.selectbox("選擇要沖銷的儲值紀錄",list(reversal_map),index=None,placeholder="請選擇紀錄")
+                    reversal_note=st.text_input("沖銷原因").strip()
+                    reversal_confirm=st.checkbox("我確認建立等額負數沖銷紀錄；原始紀錄將保留。")
+                    reverse_deposit=st.form_submit_button("建立沖銷紀錄")
+                if reverse_deposit:
+                    if not reversal_label: st.error("請選擇要沖銷的紀錄。")
+                    elif not reversal_note: st.error("請填寫沖銷原因。")
+                    elif not reversal_confirm: st.error("請先勾選確認。")
+                    else:
+                        try:
+                            admin.rpc("reverse_project_deposit",{"p_deposit_id":reversal_map[reversal_label]["id"],"p_note":reversal_note}).execute()
+                            st.success("沖銷紀錄已建立，原始儲值紀錄仍完整保留。"); st.rerun()
+                        except Exception as exc: st.error(f"沖銷失敗：{exc}")
 
     with item_tab:
         active_projects=[x for x in projects if x.get("active")]
@@ -1871,6 +1934,13 @@ def financial_report_page(me):
 
                 stored_projects=[x for x in report_projects if x["funding_type"]=="stored" and (not selected_project_id or x["id"]==selected_project_id)]
                 stored_ids=[x["id"] for x in stored_projects]
+                deposit_records=rows(client().table("project_deposits").select("project_id,deposit_date,amount,transaction_type,note")
+                    .in_("project_id",stored_ids).gte("deposit_date",str(project_start)).lte("deposit_date",str(project_end))
+                    .order("deposit_date",desc=True)) if stored_ids else []
+                deposit_df=pd.DataFrame([{"儲值日期":x["deposit_date"],"專案名稱":project_by_id.get(x["project_id"],{}).get("project_name","未知"),
+                    "類型":{"opening":"期初儲值","deposit":"後續儲值","reversal":"沖銷"}.get(x["transaction_type"],x["transaction_type"]),
+                    "儲值金額":round(float(x.get("amount") or 0)),"備註":x.get("note") or ""} for x in deposit_records],
+                    columns=["儲值日期","專案名稱","類型","儲值金額","備註"])
                 cumulative=rows(client().table("project_entries").select("project_id,line_amount,entry_date").in_("project_id",stored_ids).lte("entry_date",str(project_end))) if stored_ids else []
                 used_by_project={}
                 for x in cumulative:
@@ -1885,13 +1955,15 @@ def financial_report_page(me):
                 project_report_tabs=st.tabs(["已儲值","未儲值"])
                 project_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["金額","儲值金額","已使用金額","剩餘金額"]}
                 with project_report_tabs[0]:
+                    st.markdown("#### 儲值明細")
+                    st.dataframe(deposit_df,hide_index=True,use_container_width=True,column_config=project_money_config)
                     st.markdown("#### 使用明細")
                     st.dataframe(stored_detail_df,hide_index=True,use_container_width=True,column_config=project_money_config)
                     st.markdown(f"#### 儲值狀況（累計至 {project_end}）")
                     st.dataframe(funding_df,hide_index=True,use_container_width=True,column_config=project_money_config)
                 with project_report_tabs[1]:
                     st.dataframe(unfunded_detail_df,hide_index=True,use_container_width=True,column_config=project_money_config)
-                project_export=_excel_bytes({"已儲值使用明細":stored_detail_df,"儲值狀況":funding_df,"未儲值使用明細":unfunded_detail_df})
+                project_export=_excel_bytes({"儲值明細":deposit_df,"已儲值使用明細":stored_detail_df,"儲值狀況":funding_df,"未儲值使用明細":unfunded_detail_df})
                 st.download_button("匯出專案財務報表",project_export,file_name=f"專案財務報表_{project_start}_{project_end}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 

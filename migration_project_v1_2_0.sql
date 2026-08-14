@@ -1,5 +1,4 @@
--- v1.2.0：專案新增儲值日期。
--- 既有已儲值專案不自行假設日期；管理員下次修改時必須補登正確日期。
+select 'v1.2.0' as migration_version;
 
 alter table public.projects
   add column if not exists stored_date date;
