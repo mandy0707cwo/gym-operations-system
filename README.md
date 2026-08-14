@@ -47,6 +47,17 @@ SUPABASE_SECRET_KEY = "YOUR_SUPABASE_SECRET_KEY"
 
 4. Deploy。完成後即可用 HTTPS 網址多人登入。
 
+### v1.1.0 專案功能更新
+
+既有系統請在 Supabase SQL Editor 執行 `migration_project_v1_1_0.sql`，再等待 Streamlit 重新部署。
+
+- 專案用於非會員的特定案件，與會員課程分開。
+- 新增專案時可選擇「已儲值」或「未儲值」；已儲值必須輸入實際儲值金額。
+- 專案建立後，再管理該專案的操作項目、時數與價格。
+- 每日營運專案依操作項目與數量計算金額；已儲值專案餘額不足時不允許建立紀錄。
+- 財務報表第四分頁提供已儲值使用明細、儲值狀況及未儲值使用明細。
+- 既有專案會先保留為未儲值。請將「黃柏文」改為已儲值並輸入實際儲值金額；系統不會自行假設該金額。
+
 `SUPABASE_SECRET_KEY` 只用於主管從 App 寄送教練邀請，必須存放於 Streamlit Secrets，絕不可提交到 GitHub。可使用新版 `sb_secret_...`；舊專案則使用 `service_role` key。
 
 ## 權限與資料邏輯
