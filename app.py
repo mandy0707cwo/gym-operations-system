@@ -1975,11 +1975,8 @@ def financial_report_page(me):
 
     with report_tabs[4]:
         st.subheader("每月報表")
-        current_month=date.today().replace(day=1)
-        month_options=[date(year,month,1) for year in range(2020,date.today().year+3) for month in range(1,13)]
-        selected_month=st.selectbox("報表月份",month_options,index=month_options.index(current_month),
-            format_func=lambda value:f"{value.year}/{value.month}",key="monthly_report_month")
-        month_start=selected_month
+        selected_month=st.date_input("報表月份",date.today().replace(day=1),key="monthly_report_month")
+        month_start=selected_month.replace(day=1)
         month_end=(pd.Timestamp(month_start)+pd.offsets.MonthEnd(1)).date()
         st.caption(f"報表期間：{month_start} 至 {month_end}；明細日期依月初至月底排列。體驗及單堂銷售採輸入的未稅金額；專案及銷課以含稅金額 ÷ 1.05 計算未稅。")
 
