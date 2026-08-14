@@ -28,11 +28,6 @@ LABELS = {
     "cancel_date":"取消日期", "cancelled_sessions":"上課取消堂數", "reason":"取消原因",
     "project_name":"專案名稱", "person_name":"姓名", "item_name":"操作項目",
     "quantity":"數量", "item_hours":"每次時數", "execution_hours":"執行時數", "unit_price":"價格", "line_total":"總價",
-    "payment_method":"付款方式", "billing_status":"請款狀態", "received_amount":"實收金額",
-    "billed_date":"請款日期", "balance":"儲值餘額", "transaction_date":"交易日期",
-    "transaction_type":"交易類型", "amount":"金額",
-    "unpaid_amount":"未收金額",
-    "allow_wallet":"允許專案儲值", "allow_postpaid":"允許事後請款", "active":"狀態",
     "referral":"醫生轉介", "note":"備註",
 }
 ROLE_LABELS = {"coach": "教練", "shared_coach": "共用教練帳號", "manager": "主管", "admin": "系統管理員"}
@@ -138,7 +133,7 @@ def show_table(data, columns=None):
     if columns:
         df = df[[c for c in columns if c in df.columns]]
     display_df=df.rename(columns=LABELS)
-    money_columns={LABELS.get(x,x) for x in ("total_amount","remaining_amount","deducted_amount","amount","unit_price","line_total","price","balance","received_amount","unpaid_amount")}
+    money_columns={LABELS.get(x,x) for x in ("total_amount","remaining_amount","deducted_amount","amount","unit_price","line_total","price")}
     money_config={x:st.column_config.NumberColumn(format="$ %.0f") for x in money_columns if x in display_df.columns}
     st.dataframe(display_df, use_container_width=True, hide_index=True, column_config=money_config)
 
@@ -229,14 +224,6 @@ def daily_page(me):
         if not catalog:
             st.warning("尚未建立專案項目，請由系統管理員到「資料管理 → 專案管理」新增。")
         else:
-            members=rows(client().table("members").select("id,member_name").eq("active",True).order("member_name"))
-            member_map={x["member_name"]:x["id"] for x in members}
-            try:
-                project_members=rows(client().rpc("get_project_members",{}))
-            except Exception:
-                project_members=[]
-            wallet_member_map={x["member_name"]:x["member_id"] for x in project_members if x.get("allow_wallet")}
-            postpaid_member_map={x["member_name"]:x["member_id"] for x in project_members if x.get("allow_postpaid")}
             project_names=sorted({x["project_name"] for x in catalog})
             project_name=st.selectbox("專案名稱",project_names,index=None,placeholder="請選擇專案",key="project_entry_project")
             project_items=[x for x in catalog if x["project_name"]==project_name]
@@ -252,37 +239,31 @@ def daily_page(me):
                 help="預設為操作項目單價 × 數量，仍可自行修改。")
             if selected_item:
                 st.caption(f'項目時數：{float(selected_item["hours"]):g} 小時／次｜項目單價：$ {float(selected_item["price"]):,.0f}｜本筆價格：$ {total_price:,.0f}')
-            payment_label=st.radio("付款方式",["儲值扣款","事後請款"],horizontal=True,key=f'{form_key}_payment')
-            available_member_map=wallet_member_map if payment_label=="儲值扣款" else postpaid_member_map
-            if not available_member_map:
-                st.info(f"目前沒有可使用{payment_label}的專案會員，請由系統管理員到「資料管理 → 專案款項管理 → 專案會員資格」新增。")
             with st.form(form_key,clear_on_submit=True,enter_to_submit=False):
                 c1,c2=st.columns(2)
                 project_date=c1.date_input("日期",date.today())
-                member_name=c2.selectbox("會員名稱",list(available_member_map),index=None,placeholder="請選擇會員")
+                person_name=c2.text_input("姓名")
                 coach_name=st.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練",key=f'{form_key}_coach')
-                note=st.text_input("備註")
                 add_project=st.form_submit_button("確認並建立專案紀錄",type="primary",use_container_width=True)
             if add_project:
                 if selected_item is None: st.error("請選擇專案及操作項目。")
-                elif not member_name: st.error("請選擇會員。")
+                elif not person_name.strip(): st.error("姓名不可空白。")
                 elif not coach_name: st.error("請選擇教練。")
                 else:
                     try:
-                        client().rpc("create_project_entry",{"p_entry_date":str(project_date),"p_catalog_id":selected_item["id"],
-                            "p_member_id":available_member_map[member_name],"p_person_name":member_name,"p_coach_id":allowed[coach_name],
-                            "p_quantity":quantity,"p_total_amount":total_price,
-                            "p_payment_method":"wallet" if payment_label=="儲值扣款" else "postpaid","p_note":note.strip() or None}).execute()
+                        unit_price=total_price/quantity
+                        client().table("project_entries").insert({"entry_date":str(project_date),"project_catalog_id":selected_item["id"],
+                            "project_name":selected_item["project_name"],"person_name":person_name.strip(),"item_name":selected_item["item_name"],
+                            "coach_id":allowed[coach_name],"item_hours":float(selected_item["hours"]),
+                            "quantity":quantity,"unit_price":unit_price,"created_by":me["id"]}).execute()
                         st.success("專案紀錄已建立。"); st.rerun()
                     except Exception as exc: st.error(f"新增失敗：{exc}")
-            project_rows=rows(client().table("project_entries").select("entry_date,project_name,person_name,coach_id,item_name,item_hours,quantity,unit_price,total_amount,payment_method,billing_status,received_amount").order("entry_date",desc=True).limit(100))
+            project_rows=rows(client().table("project_entries").select("entry_date,project_name,person_name,coach_id,item_name,item_hours,quantity,unit_price").order("entry_date",desc=True).limit(100))
             for row in project_rows:
                 row["coach_name"]=names.get(row.pop("coach_id"),"未知")
                 row["execution_hours"]=float(row.get("item_hours") or 0)*float(row["quantity"])
-                row["line_total"]=float(row.get("total_amount") or 0)
-                row["payment_method"]={"wallet":"儲值扣款","postpaid":"事後請款"}.get(row.get("payment_method"),row.get("payment_method"))
-                row["billing_status"]={"unbilled":"待請款","billed":"已請款","partial":"部分收款","paid":"已收款","cancelled":"已取消"}.get(row.get("billing_status"),row.get("billing_status"))
-            show_table(project_rows,["entry_date","project_name","person_name","coach_name","item_name","item_hours","quantity","execution_hours","unit_price","line_total","payment_method","billing_status","received_amount"])
+                row["line_total"]=float(row["quantity"])*float(row["unit_price"])
+            show_table(project_rows,["entry_date","project_name","person_name","coach_name","item_name","item_hours","quantity","execution_hours","unit_price","line_total"])
 
 def purchase_page(me):
     st.header("課程購買")
@@ -1006,132 +987,6 @@ def project_admin_page(me):
                 st.success("專案項目已刪除。"); st.rerun()
             except Exception as exc: st.error(f"刪除失敗；可能已有歷史單據使用此項目：{exc}")
 
-def project_money_admin_page(me):
-    st.subheader("專案儲值／請款管理")
-    if me["role"]!="admin": st.warning("此功能僅限系統管理員使用。"); return
-    admin=admin_client()
-    members=rows(admin.table("members").select("id,member_name").eq("active",True).order("member_name"))
-    member_map={x["member_name"]:x["id"] for x in members}
-    member_tab,wallet_tab,billing_tab,history_tab=st.tabs(["專案會員資格","專案儲值","事後請款","交易紀錄"])
-    with member_tab:
-        try:
-            memberships=rows(admin.table("project_members").select("member_id,allow_wallet,allow_postpaid,active,note,created_at").order("created_at",desc=True))
-        except Exception:
-            st.error("尚未建立專案會員資料表，請重新執行 migration_project_wallet_billing.sql。"); return
-        member_id_name={v:k for k,v in member_map.items()}
-        for x in memberships:
-            x["member_name"]=member_id_name.get(x["member_id"],"未知")
-            x["allow_wallet"]="是" if x["allow_wallet"] else "否"
-            x["allow_postpaid"]="是" if x["allow_postpaid"] else "否"
-            x["active"]="啟用" if x["active"] else "停用"
-        show_table(memberships,["member_name","allow_wallet","allow_postpaid","active","note","created_at"])
-        st.markdown("#### 建立純專案會員")
-        st.caption("不需要先購買課程；建立後不會產生課程堂數、購買金額或銷課紀錄。")
-        with st.form("create_project_only_member",clear_on_submit=True,enter_to_submit=False):
-            new_project_member_name=st.text_input("新會員姓名")
-            c1,c2=st.columns(2)
-            new_allow_wallet=c1.checkbox("允許專案儲值扣款",key="new_project_allow_wallet")
-            new_allow_postpaid=c2.checkbox("允許專案事後請款",key="new_project_allow_postpaid")
-            new_project_member_note=st.text_input("資格備註",key="new_project_member_note")
-            create_project_only_member=st.form_submit_button("建立純專案會員",type="primary",use_container_width=True)
-        if create_project_only_member:
-            if not new_project_member_name.strip(): st.error("請輸入會員姓名。")
-            elif not new_allow_wallet and not new_allow_postpaid: st.error("至少選擇一種付款方式。")
-            else:
-                try:
-                    client().rpc("create_project_member",{"p_member_name":new_project_member_name.strip(),
-                        "p_allow_wallet":new_allow_wallet,"p_allow_postpaid":new_allow_postpaid,
-                        "p_note":new_project_member_note.strip() or None}).execute()
-                    st.success("純專案會員及專案資格已建立。"); st.rerun()
-                except Exception as exc: st.error(f"建立失敗：{exc}")
-        st.markdown("#### 既有會員資格設定")
-        with st.form("project_member_access",clear_on_submit=True,enter_to_submit=False):
-            access_member=st.selectbox("會員名稱",list(member_map),index=None,placeholder="請選擇會員")
-            c1,c2=st.columns(2)
-            allow_wallet=c1.checkbox("允許專案儲值扣款")
-            allow_postpaid=c2.checkbox("允許專案事後請款")
-            access_note=st.text_input("資格備註")
-            save_access=st.form_submit_button("由系統管理員新增／更新專案會員資格",type="primary",use_container_width=True)
-        if save_access:
-            if not access_member: st.error("請選擇會員。")
-            elif not allow_wallet and not allow_postpaid: st.error("至少選擇一種付款方式。")
-            else:
-                try:
-                    admin.table("project_members").upsert({"member_id":member_map[access_member],"allow_wallet":allow_wallet,
-                        "allow_postpaid":allow_postpaid,"active":True,"note":access_note.strip() or None,
-                        "created_by":me["id"],"updated_at":pd.Timestamp.now(tz="UTC").isoformat()},on_conflict="member_id").execute()
-                    st.success("專案會員資格已儲存。"); st.rerun()
-                except Exception as exc: st.error(f"資格設定失敗：{exc}")
-    with wallet_tab:
-        try:
-            balances=rows(admin.table("project_wallet_balances").select("member_id,member_name,balance").order("member_name"))
-        except Exception:
-            st.error("尚未建立專案儲值資料表，請先執行 migration_project_wallet_billing.sql。"); return
-        topup_rows=rows(admin.table("project_wallet_transactions").select("member_id").eq("transaction_type","topup"))
-        enabled_member_ids={x["member_id"] for x in topup_rows}
-        balances=[x for x in balances if x["member_id"] in enabled_member_ids]
-        show_table(balances,["member_name","balance"])
-        with st.form("project_wallet_topup",clear_on_submit=True,enter_to_submit=False):
-            c1,c2,c3=st.columns(3)
-            topup_member=c1.selectbox("會員名稱",list(member_map),index=None,placeholder="請選擇會員")
-            topup_date=c2.date_input("儲值日期",date.today())
-            topup_amount=c3.number_input("儲值金額",0.0,1000000000.0,0.0,step=100.0,format="%.0f")
-            topup_note=st.text_input("備註")
-            add_topup=st.form_submit_button("由系統管理員新增專案儲值",type="primary",use_container_width=True)
-        if add_topup:
-            if not topup_member: st.error("請選擇會員。")
-            elif topup_amount<=0: st.error("儲值金額必須大於零。")
-            else:
-                try:
-                    eligible=rows(admin.table("project_members").select("allow_wallet,active").eq("member_id",member_map[topup_member]).limit(1))
-                    if not eligible or not eligible[0].get("active") or not eligible[0].get("allow_wallet"):
-                        raise ValueError("請先在「專案會員資格」允許此會員使用專案儲值扣款")
-                    admin.table("project_wallet_transactions").insert({"member_id":member_map[topup_member],"transaction_date":str(topup_date),
-                        "transaction_type":"topup","amount":topup_amount,"note":topup_note.strip() or None,"created_by":me["id"]}).execute()
-                    st.success("儲值紀錄已建立。"); st.rerun()
-                except Exception as exc: st.error(f"儲值失敗：{exc}")
-    with billing_tab:
-        entries=rows(admin.table("project_entries").select("id,entry_date,person_name,project_name,item_name,quantity,unit_price,total_amount,billing_status,received_amount")
-            .eq("payment_method","postpaid").neq("billing_status","cancelled").order("entry_date",desc=True).limit(500))
-        for x in entries:
-            x["line_total"]=float(x.get("total_amount") or 0)
-            x["unpaid_amount"]=x["line_total"]-float(x.get("received_amount") or 0)
-        open_entries=[x for x in entries if x["unpaid_amount"]>0.005]
-        show_table(open_entries,["entry_date","person_name","project_name","item_name","line_total","received_amount","unpaid_amount","billing_status"])
-        entry_map={f'{x["entry_date"]}｜{x["person_name"]}｜{x["project_name"]}／{x["item_name"]}｜未收 $ {x["unpaid_amount"]:,.0f}':x for x in open_entries}
-        if entry_map:
-            selected_label=st.selectbox("選擇待收款紀錄",list(entry_map))
-            selected_entry=entry_map[selected_label]
-            if selected_entry.get("billing_status")=="unbilled":
-                with st.form("project_mark_billed",enter_to_submit=False):
-                    mark_billed_date=st.date_input("請款日期",date.today())
-                    mark_billed=st.form_submit_button("標記為已請款",use_container_width=True)
-                if mark_billed:
-                    try:
-                        admin.table("project_entries").update({"billing_status":"billed","billed_date":str(mark_billed_date)}).eq("id",selected_entry["id"]).execute()
-                        st.success("已標記為已請款。"); st.rerun()
-                    except Exception as exc: st.error(f"更新請款狀態失敗：{exc}")
-            with st.form("project_record_receipt",clear_on_submit=True,enter_to_submit=False):
-                c1,c2=st.columns(2)
-                receipt_date=c1.date_input("收款日期",date.today())
-                receipt_amount=c2.number_input("本次收款金額",0.0,float(selected_entry["unpaid_amount"]),float(selected_entry["unpaid_amount"]),step=100.0,format="%.0f")
-                receipt_note=st.text_input("收款備註")
-                record_receipt=st.form_submit_button("確認登錄收款",type="primary",use_container_width=True)
-            if record_receipt:
-                try:
-                    client().rpc("record_project_receipt",{"p_project_entry_id":selected_entry["id"],"p_receipt_date":str(receipt_date),
-                        "p_amount":receipt_amount,"p_note":receipt_note.strip() or None}).execute()
-                    st.success("收款紀錄已建立。"); st.rerun()
-                except Exception as exc: st.error(f"收款失敗：{exc}")
-        else: st.info("目前沒有待收款的專案紀錄。")
-    with history_tab:
-        transactions=rows(admin.table("project_wallet_transactions").select("transaction_date,member_id,transaction_type,amount,note,created_at").order("transaction_date",desc=True).limit(1000))
-        member_id_name={v:k for k,v in member_map.items()}
-        for x in transactions:
-            x["member_name"]=member_id_name.get(x.pop("member_id"),"未知")
-            x["transaction_type"]={"topup":"儲值","deduction":"扣款","reversal":"沖銷","adjustment":"調整"}.get(x["transaction_type"],x["transaction_type"])
-        show_table(transactions,["transaction_date","member_name","transaction_type","amount","note","created_at"])
-
 def _excel_bytes(sheet_frames):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter", datetime_format="yyyy-mm-dd") as writer:
@@ -1542,7 +1397,7 @@ def record_admin_page(me):
             person_name=st.text_input("姓名",record.get("person_name") or "")
             c1,c2=st.columns(2)
             quantity=c1.number_input("數量",0.01,100000.0,float(record["quantity"]),step=1.0)
-            total_price=c2.number_input("價格",0.0,1000000000.0,float(record.get("total_amount") or (float(record["quantity"])*float(record["unit_price"]))),step=100.0,format="%.0f",help="此處為本筆總價。")
+            total_price=c2.number_input("價格",0.0,1000000000.0,float(record["quantity"])*float(record["unit_price"]),step=100.0,format="%.0f",help="此處為本筆總價。")
         elif data_type=="課程購買":
             c1,c2,c3=st.columns(3); sessions=c1.number_input("課程堂數",1,999,int(record["total_sessions"])); amount=c2.number_input("成交總金額",0.0,10000000.0,float(record["total_amount"]),step=100.0,format="%.0f"); expiry=c3.date_input("有效期限",pd.to_datetime(record["expiry_date"]).date())
             referral=st.text_input("醫生轉介",record.get("referral") or "")
@@ -1571,7 +1426,7 @@ def record_admin_page(me):
                 admin.table("project_entries").update({"entry_date":str(d),"project_catalog_id":catalog_item["id"],
                     "project_name":catalog_item["project_name"],"person_name":person_name.strip(),"coach_id":record_coach_map[coach],
                     "item_name":catalog_item["item_name"],"item_hours":float(catalog_item["hours"]),"quantity":quantity,
-                    "unit_price":total_price/quantity,"total_amount":total_price}).eq("id",record["id"]).execute()
+                    "unit_price":total_price/quantity}).eq("id",record["id"]).execute()
             elif data_type=="課程購買": admin.table("purchases").update({"total_sessions":sessions,"total_amount":amount,"expiry_date":str(expiry),"referral":referral.strip() or None,"note":note.strip() or None}).eq("id",record["purchase_id"]).execute()
             else:
                 old_date,old_coach=record["usage_date"],record["coach_id"]
@@ -1628,14 +1483,13 @@ def data_management_page(me):
     st.header("資料管理")
     if me["role"]!="admin": st.warning("此頁僅限系統管理員使用。"); return
     if admin_client() is None: st.error("尚未設定 SUPABASE_SECRET_KEY。"); return
-    tab1,tab2,tab3,tab4,tab5,tab6,tab7=st.tabs(["課程名稱管理","體驗項目管理","單堂銷售管理","專案管理","專案款項管理","資料匯入／匯出","修改／刪除"])
+    tab1,tab2,tab3,tab4,tab5,tab6=st.tabs(["課程名稱管理","體驗項目管理","單堂銷售管理","專案管理","資料匯入／匯出","修改／刪除"])
     with tab1: course_admin_page(me)
     with tab2: operation_item_admin_page(me,"trial","體驗項目管理")
     with tab3: operation_item_admin_page(me,"single_sale","單堂銷售管理")
     with tab4: project_admin_page(me)
-    with tab5: project_money_admin_page(me)
-    with tab6: member_course_io_page(me)
-    with tab7: record_admin_page(me)
+    with tab5: member_course_io_page(me)
+    with tab6: record_admin_page(me)
 
 def _tax_display_amount(amount, tax_mode):
     value=Decimal(str(amount or 0))
