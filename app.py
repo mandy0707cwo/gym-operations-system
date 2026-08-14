@@ -1540,6 +1540,10 @@ def financial_report_page(me):
             sales_rows.append({"日期":usage["usage_date"],"會員名稱":member_name_map.get(purchase.get("member_id"),""),
                 sales_amount_column:_tax_display_amount(usage["deducted_amount"],sales_tax_mode),"課程項目":purchase.get("course_name","")})
         sales_df=pd.DataFrame(sales_rows,columns=["日期","會員名稱",sales_amount_column,"課程項目"])
+        sales_subtotal_df=pd.DataFrame([{
+            "項目":"金額小計",
+            sales_amount_column:int(sales_df[sales_amount_column].sum()) if not sales_df.empty else 0
+        }])
 
         # 預收明細以付款日期判斷是否列入，包含查詢期間收到的分期款。
         period_payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").gte("paid_date",str(start)).lte("paid_date",str(end)).order("paid_date",desc=True))
@@ -1577,6 +1581,13 @@ def financial_report_page(me):
                 "_含稅成交":contracted if purchase_in_period else 0,"_含稅預收":period_prepaid,"_含稅銷課":used,"_含稅剩餘":remaining})
         balance_rows.sort(key=lambda x:str(x.get("日期") or ""),reverse=True)
         balance_df=pd.DataFrame(balance_rows,columns=["日期","會員名稱","成交總金額","預收金額","銷課金額","剩餘金額"])
+        balance_subtotal_df=pd.DataFrame([{
+            "項目":"金額小計",
+            "成交總金額":int(balance_df["成交總金額"].sum()) if not balance_df.empty else 0,
+            "預收金額":int(balance_df["預收金額"].sum()) if not balance_df.empty else 0,
+            "銷課金額":int(balance_df["銷課金額"].sum()) if not balance_df.empty else 0,
+            "剩餘金額":int(balance_df["剩餘金額"].sum()) if not balance_df.empty else 0
+        }])
         totals_df=pd.DataFrame([{"成交總金額總計":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
             "預收金額總計":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode),
             "銷課金額總計":_tax_display_amount(sum(x["_含稅銷課"] for x in balance_rows),total_tax_mode),
@@ -1586,9 +1597,13 @@ def financial_report_page(me):
         with detail_tabs[0]:
             st.caption(f"日期依銷課日期；教練篩選依授課教練。目前顯示：{sales_tax_mode}金額。未稅金額按含稅金額 ÷ 1.05 四捨五入至整數。")
             st.dataframe(sales_df,hide_index=True,use_container_width=True,column_config=money_config)
+            st.markdown("**金額小計**")
+            st.dataframe(sales_subtotal_df,hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[1]:
             st.caption(f"日期依查詢期間內最後一筆付款日期；只要期間內有實際收款即列入，包含分期款。非本期間成交者，成交總金額留白。預收金額為期間收款；銷課與剩餘金額累計至 {end}。目前顯示：{detail_tax_mode}金額。")
             st.dataframe(balance_df,hide_index=True,use_container_width=True,column_config=money_config)
+            st.markdown("**金額小計**")
+            st.dataframe(balance_subtotal_df,hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[2]:
             st.caption(f"預收金額總計為查詢期間實際收款；成交總金額總計只計算本期間成交資料。銷課與剩餘金額為列入會員課程截至 {end} 的累計數。目前顯示：{total_tax_mode}金額。")
             st.dataframe(totals_df,hide_index=True,use_container_width=True,column_config=money_config)
