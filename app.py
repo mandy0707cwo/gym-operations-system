@@ -28,7 +28,7 @@ LABELS = {
     "cancel_date":"取消日期", "cancelled_sessions":"上課取消堂數", "reason":"取消原因",
     "project_name":"專案名稱", "person_name":"使用者", "item_name":"操作項目",
     "quantity":"數量", "item_hours":"每次時數", "execution_hours":"執行時數", "unit_price":"價格", "line_total":"總價",
-    "funding_type":"專案類型", "stored_amount":"儲值金額", "used_amount":"已使用金額", "remaining_amount":"剩餘金額", "line_amount":"金額", "active":"狀態",
+    "funding_type":"專案類型", "stored_date":"儲值日期", "stored_amount":"儲值金額", "used_amount":"已使用金額", "remaining_amount":"剩餘金額", "line_amount":"金額", "active":"狀態",
     "referral":"醫生轉介", "note":"備註",
 }
 ROLE_LABELS = {"coach": "教練", "shared_coach": "共用教練帳號", "manager": "主管", "admin": "系統管理員"}
@@ -946,7 +946,7 @@ def project_admin_page(me):
     if me["role"]!="admin": st.warning("此功能僅限系統管理員使用。"); return
     admin=admin_client()
     try:
-        projects=rows(admin.table("projects").select("id,project_name,funding_type,stored_amount,active,created_at").order("project_name"))
+        projects=rows(admin.table("projects").select("id,project_name,funding_type,stored_date,stored_amount,active,created_at").order("project_name"))
     except Exception:
         st.error("專案主檔尚未建立，請先在 Supabase 執行 migration_project_v1_1_0.sql。")
         return
@@ -954,20 +954,26 @@ def project_admin_page(me):
     project_tab,item_tab=st.tabs(["專案設定","操作項目管理"])
     with project_tab:
         st.caption("已儲值專案必須輸入實際儲值金額；未儲值專案採事後請款。")
+        funding_label=st.radio("專案類型",["已儲值","未儲值"],horizontal=True,key="add_project_funding_type")
         with st.form("add_project_master",clear_on_submit=True,enter_to_submit=False):
-            c1,c2=st.columns(2)
-            new_project_name=c1.text_input("專案名稱").strip()
-            funding_label=c2.radio("專案類型",["已儲值","未儲值"],horizontal=True)
-            stored_amount=st.number_input("儲值金額",0.0,1000000000.0,0.0,step=100.0,format="%.0f",
-                disabled=funding_label=="未儲值")
+            new_project_name=st.text_input("專案名稱").strip()
+            if funding_label=="已儲值":
+                c1,c2=st.columns(2)
+                stored_date=c1.date_input("儲值日期",value=None,format="YYYY-MM-DD")
+                stored_amount=c2.number_input("儲值金額",0.0,1000000000.0,0.0,step=100.0,format="%.0f")
+            else:
+                stored_date=None
+                stored_amount=0.0
             add_project=st.form_submit_button("新增專案",type="primary",use_container_width=True)
         if add_project:
             if not new_project_name: st.error("專案名稱不可空白。")
+            elif funding_label=="已儲值" and stored_date is None: st.error("已儲值專案必須填寫儲值日期。")
             elif funding_label=="已儲值" and stored_amount<=0: st.error("已儲值專案的儲值金額必須大於零。")
             else:
                 try:
                     admin.table("projects").insert({"project_name":new_project_name,
                         "funding_type":"stored" if funding_label=="已儲值" else "unfunded",
+                        "stored_date":str(stored_date) if funding_label=="已儲值" else None,
                         "stored_amount":stored_amount if funding_label=="已儲值" else 0,
                         "active":True,"created_by":me["id"]}).execute()
                     st.success("專案已新增。"); st.rerun()
@@ -976,22 +982,30 @@ def project_admin_page(me):
         display_projects=[]
         for x in projects:
             display_projects.append({**x,"funding_type":"已儲值" if x["funding_type"]=="stored" else "未儲值"})
-        show_table(display_projects,["project_name","funding_type","stored_amount","active","created_at"])
+        show_table(display_projects,["project_name","funding_type","stored_date","stored_amount","active","created_at"])
         if projects:
             project_map={x["project_name"]:x for x in projects}
             edit_name=st.selectbox("選擇要修改的專案",list(project_map),key="project_master_edit_select")
             current=project_map[edit_name]
+            edited_type_label=st.radio("修改後專案類型",["已儲值","未儲值"],
+                index=0 if current["funding_type"]=="stored" else 1,horizontal=True,
+                key=f'edit_project_funding_type_{current["id"]}')
             with st.form("edit_project_master",enter_to_submit=False):
                 edited_name=st.text_input("修改後專案名稱",current["project_name"]).strip()
-                edited_type_label=st.radio("修改後專案類型",["已儲值","未儲值"],
-                    index=0 if current["funding_type"]=="stored" else 1,horizontal=True)
-                edited_stored_amount=st.number_input("修改後儲值金額",0.0,1000000000.0,
-                    float(current["stored_amount"]) if current["funding_type"]=="stored" else 0.0,
-                    step=100.0,format="%.0f",disabled=edited_type_label=="未儲值")
+                if edited_type_label=="已儲值":
+                    current_stored_date=date.fromisoformat(current["stored_date"]) if current.get("stored_date") else None
+                    c1,c2=st.columns(2)
+                    edited_stored_date=c1.date_input("修改後儲值日期",value=current_stored_date,format="YYYY-MM-DD")
+                    edited_stored_amount=c2.number_input("修改後儲值金額",0.0,1000000000.0,
+                        float(current.get("stored_amount") or 0),step=100.0,format="%.0f")
+                else:
+                    edited_stored_date=None
+                    edited_stored_amount=0.0
                 edited_active=st.checkbox("啟用專案",value=bool(current.get("active",True)))
                 update_project=st.form_submit_button("儲存專案設定")
             if update_project:
                 if not edited_name: st.error("專案名稱不可空白。")
+                elif edited_type_label=="已儲值" and edited_stored_date is None: st.error("已儲值專案必須填寫儲值日期。")
                 elif edited_type_label=="已儲值" and edited_stored_amount<=0: st.error("已儲值專案的儲值金額必須大於零。")
                 else:
                     try:
@@ -1002,6 +1016,7 @@ def project_admin_page(me):
                             used_amount=float(used[0]["used_amount"]) if used else 0
                             if amount<used_amount: raise ValueError(f"儲值金額不可小於已使用金額 $ {used_amount:,.0f}")
                         admin.table("projects").update({"project_name":edited_name,"funding_type":funding_type,
+                            "stored_date":str(edited_stored_date) if funding_type=="stored" else None,
                             "stored_amount":amount,"active":edited_active,
                             "updated_at":pd.Timestamp.now(tz="UTC").isoformat()}).eq("id",current["id"]).execute()
                         admin.table("project_catalog").update({"project_name":edited_name}).eq("project_id",current["id"]).execute()
