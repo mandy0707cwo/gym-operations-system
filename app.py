@@ -1025,6 +1025,26 @@ def project_money_admin_page(me):
             x["allow_postpaid"]="是" if x["allow_postpaid"] else "否"
             x["active"]="啟用" if x["active"] else "停用"
         show_table(memberships,["member_name","allow_wallet","allow_postpaid","active","note","created_at"])
+        st.markdown("#### 建立純專案會員")
+        st.caption("不需要先購買課程；建立後不會產生課程堂數、購買金額或銷課紀錄。")
+        with st.form("create_project_only_member",clear_on_submit=True,enter_to_submit=False):
+            new_project_member_name=st.text_input("新會員姓名")
+            c1,c2=st.columns(2)
+            new_allow_wallet=c1.checkbox("允許專案儲值扣款",key="new_project_allow_wallet")
+            new_allow_postpaid=c2.checkbox("允許專案事後請款",key="new_project_allow_postpaid")
+            new_project_member_note=st.text_input("資格備註",key="new_project_member_note")
+            create_project_only_member=st.form_submit_button("建立純專案會員",type="primary",use_container_width=True)
+        if create_project_only_member:
+            if not new_project_member_name.strip(): st.error("請輸入會員姓名。")
+            elif not new_allow_wallet and not new_allow_postpaid: st.error("至少選擇一種付款方式。")
+            else:
+                try:
+                    client().rpc("create_project_member",{"p_member_name":new_project_member_name.strip(),
+                        "p_allow_wallet":new_allow_wallet,"p_allow_postpaid":new_allow_postpaid,
+                        "p_note":new_project_member_note.strip() or None}).execute()
+                    st.success("純專案會員及專案資格已建立。"); st.rerun()
+                except Exception as exc: st.error(f"建立失敗：{exc}")
+        st.markdown("#### 既有會員資格設定")
         with st.form("project_member_access",clear_on_submit=True,enter_to_submit=False):
             access_member=st.selectbox("會員名稱",list(member_map),index=None,placeholder="請選擇會員")
             c1,c2=st.columns(2)

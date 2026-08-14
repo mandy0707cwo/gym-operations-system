@@ -89,6 +89,35 @@ language sql stable security definer set search_path=public as $$
   order by m.member_name;
 $$;
 
+create or replace function public.create_project_member(
+  p_member_name text, p_allow_wallet boolean, p_allow_postpaid boolean, p_note text default null
+) returns public.project_members
+language plpgsql security definer set search_path=public as $$
+declare
+  v_member_id uuid;
+  v_row public.project_members%rowtype;
+begin
+  if not public.is_admin() then raise exception '僅系統管理員可建立專案會員'; end if;
+  if nullif(trim(p_member_name),'') is null then raise exception '會員姓名不可空白'; end if;
+  if not p_allow_wallet and not p_allow_postpaid then raise exception '至少選擇一種付款方式'; end if;
+
+  select id into v_member_id from public.members where member_name=trim(p_member_name);
+  if v_member_id is null then
+    insert into public.members(member_name,active,created_by)
+    values(trim(p_member_name),true,auth.uid()) returning id into v_member_id;
+  else
+    update public.members set active=true where id=v_member_id;
+  end if;
+
+  insert into public.project_members(member_id,allow_wallet,allow_postpaid,active,note,created_by,updated_at)
+  values(v_member_id,p_allow_wallet,p_allow_postpaid,true,nullif(trim(p_note),''),auth.uid(),now())
+  on conflict(member_id) do update set
+    allow_wallet=excluded.allow_wallet,allow_postpaid=excluded.allow_postpaid,
+    active=true,note=excluded.note,updated_at=now()
+  returning * into v_row;
+  return v_row;
+end; $$;
+
 create or replace function public.create_project_entry(
   p_entry_date date, p_catalog_id uuid, p_member_id uuid, p_person_name text,
   p_coach_id uuid, p_quantity numeric, p_total_amount numeric,
@@ -216,8 +245,10 @@ create policy project_receipt_admin_insert on public.project_receipt_transaction
 
 grant select on public.project_wallet_balances to authenticated;
 revoke all on function public.get_project_members() from public;
+revoke all on function public.create_project_member(text,boolean,boolean,text) from public;
 revoke all on function public.create_project_entry(date,uuid,uuid,text,uuid,numeric,numeric,text,text) from public;
 revoke all on function public.record_project_receipt(uuid,date,numeric,text) from public;
 grant execute on function public.create_project_entry(date,uuid,uuid,text,uuid,numeric,numeric,text,text) to authenticated;
 grant execute on function public.record_project_receipt(uuid,date,numeric,text) to authenticated;
 grant execute on function public.get_project_members() to authenticated;
+grant execute on function public.create_project_member(text,boolean,boolean,text) to authenticated;
