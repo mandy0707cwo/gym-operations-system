@@ -29,7 +29,7 @@ LABELS = {
     "project_name":"專案名稱", "person_name":"使用者", "item_name":"操作項目",
     "quantity":"數量", "item_hours":"每次時數", "execution_hours":"執行時數", "unit_price":"價格", "line_total":"總價",
     "funding_type":"專案類型", "stored_date":"儲值日期", "stored_amount":"儲值金額", "used_amount":"已使用金額", "remaining_amount":"剩餘金額", "line_amount":"金額", "active":"狀態",
-    "referral":"醫生轉介", "note":"備註",
+    "referral":"醫生轉介", "amount":"金額", "default_amount":"預設金額", "note":"備註",
 }
 ROLE_LABELS = {"coach": "教練", "shared_coach": "共用教練帳號", "manager": "主管", "admin": "系統管理員"}
 USERNAME_RE = re.compile(r"^[a-z0-9_]{3,30}$")
@@ -147,9 +147,10 @@ def daily_page(me):
 
     def standard_entry(tab, table_name, form_key, content_label, catalog_type, member_label=None):
         with tab:
-            catalog=rows(client().table("operation_item_catalog").select("item_name,session_hours").eq("item_type",catalog_type).order("item_name"))
+            catalog=rows(client().table("operation_item_catalog").select("item_name,session_hours,default_amount").eq("item_type",catalog_type).order("item_name"))
             item_names=[x["item_name"] for x in catalog]
             item_hours={x["item_name"]:float(x.get("session_hours") or 1) for x in catalog}
+            item_amounts={x["item_name"]:float(x.get("default_amount") or 0) for x in catalog}
             if not item_names:
                 st.warning(f"尚未建立{content_label}選項，請由系統管理員到「資料管理」新增。")
                 return
@@ -157,10 +158,13 @@ def daily_page(me):
             revision=st.session_state.get(revision_key,0)
             content=st.selectbox(content_label,item_names,index=None,placeholder=f"請選擇{content_label}",key=f"{form_key}_content_{revision}")
             default_hours=item_hours.get(content) if content else None
+            default_amount=item_amounts.get(content) if content else None
             with st.form(f"{form_key}_{revision}",clear_on_submit=True,enter_to_submit=False):
                 c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today()); coach_name=c2.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練")
                 member_name=st.text_input(member_label) if member_label else None
-                hours=st.number_input("時數",0.25,24.0,value=default_hours,step=0.25,placeholder="選擇內容後自動帶入",disabled=True)
+                c1,c2=st.columns(2)
+                hours=c1.number_input("時數",0.25,24.0,value=default_hours,step=0.25,placeholder="選擇內容後自動帶入",disabled=True)
+                amount=c2.number_input("金額（未稅）",0.0,1000000000.0,value=default_amount,step=100.0,format="%.0f",placeholder="選擇內容後自動帶入")
                 note=st.text_input("備註")
                 record_name="體驗項目" if catalog_type=="trial" else "單堂銷售"
                 save=st.form_submit_button(f"確認並建立{record_name}紀錄",type="primary",use_container_width=True)
@@ -174,13 +178,13 @@ def daily_page(me):
                     st.error("；".join(errors)+"。")
                 else:
                     try:
-                        payload={"entry_date":str(entry_date),"content":content,"hours":hours,"note":note.strip() or None,"coach_id":allowed[coach_name],"created_by":me["id"]}
+                        payload={"entry_date":str(entry_date),"content":content,"hours":hours,"amount":amount,"note":note.strip() or None,"coach_id":allowed[coach_name],"created_by":me["id"]}
                         if member_label: payload["member_name"]=member_name.strip()
                         client().table(table_name).insert(payload).execute()
                         st.session_state[revision_key]=revision+1
                         st.success("紀錄已新增。"); st.rerun()
                     except Exception as exc: st.error(f"新增失敗：{exc}")
-            select_fields="entry_date,content,hours,note,coach_id,member_name" if member_label else "entry_date,content,hours,note,coach_id"
+            select_fields="entry_date,content,hours,amount,note,coach_id,member_name" if member_label else "entry_date,content,hours,amount,note,coach_id"
             data=rows(client().table(table_name).select(select_fields).order("entry_date",desc=True).limit(100))
             data=[x for x in data if x.get("coach_id") in names]
             for x in data:
@@ -189,7 +193,7 @@ def daily_page(me):
                     display_member_key="trial_member_name" if catalog_type=="trial" else "single_sale_member_name"
                     x[display_member_key]=x.pop("member_name",None)
             member_column=["trial_member_name" if catalog_type=="trial" else "single_sale_member_name"] if member_label else []
-            columns=["entry_date"] + member_column + ["content","hours","coach_name","note"]
+            columns=["entry_date"] + member_column + ["content","hours","amount","coach_name","note"]
             show_table(data,columns)
 
     standard_entry(tab1,"trial_items","trial_item_form","體驗內容","trial",member_label="體驗會員姓名")
@@ -893,36 +897,38 @@ def operation_item_admin_page(me, item_type, title):
         st.error("尚未設定 SUPABASE_SECRET_KEY。")
         return
     with st.form(f"add_operation_item_{item_type}",clear_on_submit=True):
-        c1,c2=st.columns(2)
+        c1,c2,c3=st.columns(3)
         new_name=c1.text_input("新增項目名稱").strip()
         new_hours=c2.number_input("每堂課時數",0.25,24.0,1.0,step=0.25)
+        new_amount=c3.number_input("預設金額（未稅）",0.0,1000000000.0,0.0,step=100.0,format="%.0f")
         add_item=st.form_submit_button("新增項目")
     if add_item:
         if not new_name:
             st.error("項目名稱不可空白。")
         else:
             try:
-                admin.table("operation_item_catalog").insert({"item_type":item_type,"item_name":new_name,"session_hours":new_hours}).execute()
+                admin.table("operation_item_catalog").insert({"item_type":item_type,"item_name":new_name,"session_hours":new_hours,"default_amount":new_amount}).execute()
                 st.success(f"已新增：{new_name}"); st.rerun()
             except Exception as exc:
                 st.error(f"新增失敗，請確認名稱是否重複：{exc}")
-    items=rows(admin.table("operation_item_catalog").select("id,item_name,session_hours,created_at").eq("item_type",item_type).order("item_name"))
+    items=rows(admin.table("operation_item_catalog").select("id,item_name,session_hours,default_amount,created_at").eq("item_type",item_type).order("item_name"))
     if not items:
         st.info("目前尚未建立項目。")
         return
-    show_table(items,["item_name","session_hours","created_at"])
+    show_table(items,["item_name","session_hours","default_amount","created_at"])
     item_map={x["item_name"]:x for x in items}
     selected=st.selectbox("選擇要修改的項目",list(item_map),key=f"edit_select_{item_type}")
     with st.form(f"edit_operation_item_{item_type}"):
         edited_name=st.text_input("修改後名稱",value=selected).strip()
         edited_hours=st.number_input("修改後每堂課時數",0.25,24.0,float(item_map[selected].get("session_hours") or 1),step=0.25)
+        edited_amount=st.number_input("修改後預設金額（未稅）",0.0,1000000000.0,float(item_map[selected].get("default_amount") or 0),step=100.0,format="%.0f")
         update_item=st.form_submit_button("儲存修改")
     if update_item:
         if not edited_name:
             st.error("項目名稱不可空白。")
         else:
             try:
-                admin.table("operation_item_catalog").update({"item_name":edited_name,"session_hours":edited_hours}).eq("id",item_map[selected]["id"]).execute()
+                admin.table("operation_item_catalog").update({"item_name":edited_name,"session_hours":edited_hours,"default_amount":edited_amount}).eq("id",item_map[selected]["id"]).execute()
                 st.success("項目已修改。既有歷史紀錄仍保留原內容。")
                 st.rerun()
             except Exception as exc:
@@ -1331,8 +1337,8 @@ def member_course_io_page(me):
             "usage_date":x["usage_date"],"coach_username":id_to_display_name.get(x["coach_id"],""),
             "session_seq":x["session_seq"],"deducted_amount":x["deducted_amount"],"note":x.get("note") or ""})
     usage_export_columns=["purchase_id","usage_id","member_name","course_name","usage_date","coach_username","session_seq","deducted_amount","note"]
-    trial_rows=rows(admin.table("trial_items").select("entry_date,member_name,content,hours,note,coach_id,created_at").order("entry_date"))
-    single_sale_rows=rows(admin.table("single_sales").select("entry_date,member_name,content,hours,note,coach_id,created_at").order("entry_date"))
+    trial_rows=rows(admin.table("trial_items").select("entry_date,member_name,content,hours,amount,note,coach_id,created_at").order("entry_date"))
+    single_sale_rows=rows(admin.table("single_sales").select("entry_date,member_name,content,hours,amount,note,coach_id,created_at").order("entry_date"))
     event_rows=rows(admin.table("event_supports").select("entry_date,content,hours,deducted_hours,deduction_reason,coach_id,created_at").order("entry_date"))
     for collection in (trial_rows,single_sale_rows,event_rows):
         for item in collection:
@@ -1533,10 +1539,10 @@ def record_admin_page(me):
             reason=st.text_input("取消原因",record.get("reason") or "")
         elif data_type=="體驗項目":
             c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["entry_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
-            member_name=st.text_input("體驗會員姓名",record.get("member_name") or ""); content=st.text_input("體驗內容",record["content"]); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25); note=st.text_input("備註",record.get("note") or "")
+            member_name=st.text_input("體驗會員姓名",record.get("member_name") or ""); content=st.text_input("體驗內容",record["content"]); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25); amount=st.number_input("金額（未稅）",0.0,1000000000.0,float(record.get("amount") or 0),step=100.0,format="%.0f"); note=st.text_input("備註",record.get("note") or "")
         elif data_type=="單堂銷售":
             c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["entry_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
-            member_name=st.text_input("單堂銷售會員姓名",record.get("member_name") or ""); content=st.text_input("銷售內容",record["content"]); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25); note=st.text_input("備註",record.get("note") or "")
+            member_name=st.text_input("單堂銷售會員姓名",record.get("member_name") or ""); content=st.text_input("銷售內容",record["content"]); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25); amount=st.number_input("金額（未稅）",0.0,1000000000.0,float(record.get("amount") or 0),step=100.0,format="%.0f"); note=st.text_input("備註",record.get("note") or "")
         elif data_type=="活動支援":
             c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["entry_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
             content=st.text_input("活動內容",record["content"])
@@ -1567,10 +1573,10 @@ def record_admin_page(me):
                 admin.table("session_cancellations").update({"cancel_date":str(d),"coach_id":record_coach_map[coach],"cancelled_sessions":cancelled_sessions,"reason":reason.strip() or None}).eq("id",record["id"]).execute()
             elif data_type=="體驗項目":
                 if not member_name.strip() or not content.strip(): raise ValueError("體驗會員姓名及體驗內容不可空白")
-                admin.table("trial_items").update({"entry_date":str(d),"coach_id":record_coach_map[coach],"member_name":member_name.strip(),"content":content.strip(),"hours":hours,"note":note.strip() or None}).eq("id",record["id"]).execute()
+                admin.table("trial_items").update({"entry_date":str(d),"coach_id":record_coach_map[coach],"member_name":member_name.strip(),"content":content.strip(),"hours":hours,"amount":amount,"note":note.strip() or None}).eq("id",record["id"]).execute()
             elif data_type=="單堂銷售":
                 if not member_name.strip() or not content.strip(): raise ValueError("單堂銷售會員姓名及銷售內容不可空白")
-                admin.table("single_sales").update({"entry_date":str(d),"coach_id":record_coach_map[coach],"member_name":member_name.strip(),"content":content.strip(),"hours":hours,"note":note.strip() or None}).eq("id",record["id"]).execute()
+                admin.table("single_sales").update({"entry_date":str(d),"coach_id":record_coach_map[coach],"member_name":member_name.strip(),"content":content.strip(),"hours":hours,"amount":amount,"note":note.strip() or None}).eq("id",record["id"]).execute()
             elif data_type=="活動支援":
                 if not content.strip(): raise ValueError("活動內容不可空白")
                 if deducted_hours>hours: raise ValueError("應扣除時間不可大於活動時數")
@@ -1657,7 +1663,7 @@ def financial_report_page(me):
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
         return
-    report_tabs=st.tabs(["會員報表","教練報表","其它分析報表","專案報表","第五分頁（待建置）"])
+    report_tabs=st.tabs(["會員報表","教練報表","專案報表","其他報表","每月報表"])
     with report_tabs[0]:
         st.subheader("會員報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
@@ -1674,13 +1680,13 @@ def financial_report_page(me):
             return
         selected_coach_id=coaches.get(selected_coach)
         selected_member_id=member_id_map.get(selected_member)
-        detail_tabs=st.tabs(["銷課總表","預收餘額明細","預收餘額總表"])
+        detail_tabs=st.tabs(["預收餘額總表","預收餘額明細","銷課總表"])
         with detail_tabs[0]:
-            sales_tax_mode=st.radio("銷課金額顯示方式",["未稅","含稅"],horizontal=True,key="finance_sales_tax_mode")
+            total_tax_mode=st.radio("預收總額顯示方式",["未稅","含稅"],horizontal=True,key="finance_member_total_tax_mode")
         with detail_tabs[1]:
             detail_tax_mode=st.radio("預收明細金額顯示方式",["未稅","含稅"],horizontal=True,key="finance_member_detail_tax_mode")
         with detail_tabs[2]:
-            total_tax_mode=st.radio("預收總額顯示方式",["未稅","含稅"],horizontal=True,key="finance_member_total_tax_mode")
+            sales_tax_mode=st.radio("銷課金額顯示方式",["未稅","含稅"],horizontal=True,key="finance_sales_tax_mode")
 
         # 銷課總表依銷課日期查詢，教練條件採授課教練。
         usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,deducted_amount").gte("usage_date",str(start)).lte("usage_date",str(end)).order("usage_date",desc=True))
@@ -1751,19 +1757,19 @@ def financial_report_page(me):
 
         money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","成交總金額","預收金額","銷課金額","剩餘金額","成交總金額總計","預收金額總計","銷課金額總計","剩餘金額總計"]}
         with detail_tabs[0]:
-            st.caption(f"日期依銷課日期；教練篩選依授課教練。目前顯示：{sales_tax_mode}金額。未稅金額按含稅金額 ÷ 1.05 四捨五入至整數。")
-            st.dataframe(sales_df,hide_index=True,use_container_width=True,column_config=money_config)
-            st.markdown("**金額小計**")
-            st.dataframe(sales_subtotal_df,hide_index=True,use_container_width=True,column_config=money_config)
+            st.caption(f"預收金額總計為查詢期間實際收款；成交總金額總計只計算本期間成交資料。銷課與剩餘金額為列入會員課程截至 {end} 的累計數。目前顯示：{total_tax_mode}金額。")
+            st.dataframe(totals_df,hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[1]:
             st.caption(f"日期依查詢期間內最後一筆付款日期；只要期間內有實際收款即列入，包含分期款。非本期間成交者，成交總金額留白。預收金額為期間收款；銷課與剩餘金額累計至 {end}。目前顯示：{detail_tax_mode}金額。")
             st.dataframe(balance_df,hide_index=True,use_container_width=True,column_config=money_config)
             st.markdown("**金額小計**")
             st.dataframe(balance_subtotal_df,hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[2]:
-            st.caption(f"預收金額總計為查詢期間實際收款；成交總金額總計只計算本期間成交資料。銷課與剩餘金額為列入會員課程截至 {end} 的累計數。目前顯示：{total_tax_mode}金額。")
-            st.dataframe(totals_df,hide_index=True,use_container_width=True,column_config=money_config)
-        export_data=_excel_bytes({"銷課總表":sales_df,"預收餘額明細":balance_df,"預收餘額總表":totals_df})
+            st.caption(f"日期依銷課日期；教練篩選依授課教練。目前顯示：{sales_tax_mode}金額。未稅金額按含稅金額 ÷ 1.05 四捨五入至整數。")
+            st.dataframe(sales_df,hide_index=True,use_container_width=True,column_config=money_config)
+            st.markdown("**金額小計**")
+            st.dataframe(sales_subtotal_df,hide_index=True,use_container_width=True,column_config=money_config)
+        export_data=_excel_bytes({"預收餘額總表":totals_df,"預收餘額明細":balance_df,"銷課總表":sales_df})
         st.download_button("匯出會員財務報表",export_data,file_name=f"會員財務報表_{start}_{end}_銷課{sales_tax_mode}_明細{detail_tax_mode}_總額{total_tax_mode}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
@@ -1857,8 +1863,8 @@ def financial_report_page(me):
             st.download_button("匯出教練財務報表",coach_export,file_name=f"教練財務報表_{coach_start}_{coach_end}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
-    with report_tabs[2]:
-        st.subheader("其它分析報表")
+    with report_tabs[3]:
+        st.subheader("其他報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
         member_name_map={x["id"]:x["member_name"] for x in members}
         member_id_map={x["member_name"]:x["id"] for x in members}
@@ -1895,10 +1901,10 @@ def financial_report_page(me):
             for other_placeholder in other_tabs[1:]:
                 with other_placeholder: st.info("此分頁將依後續需求建置。")
             other_export=_excel_bytes({"醫生轉介":referral_df})
-            st.download_button("匯出其它分析報表",other_export,file_name=f"其它分析報表_{other_start}_{other_end}.xlsx",
+            st.download_button("匯出其他報表",other_export,file_name=f"其他報表_{other_start}_{other_end}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
-    with report_tabs[3]:
+    with report_tabs[2]:
         st.subheader("專案報表")
         try:
             report_projects=rows(client().table("projects").select("id,project_name,funding_type,stored_amount").order("project_name"))
@@ -1967,8 +1973,66 @@ def financial_report_page(me):
                 st.download_button("匯出專案財務報表",project_export,file_name=f"專案財務報表_{project_start}_{project_end}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
-    for placeholder_tab in report_tabs[4:]:
-        with placeholder_tab: st.info("此分頁將依後續需求建置。")
+    with report_tabs[4]:
+        st.subheader("每月報表")
+        selected_month=st.date_input("報表月份",date.today().replace(day=1),key="monthly_report_month")
+        month_start=selected_month.replace(day=1)
+        month_end=(pd.Timestamp(month_start)+pd.offsets.MonthEnd(1)).date()
+        st.caption(f"報表期間：{month_start} 至 {month_end}；明細日期依月初至月底排列。體驗及單堂銷售採輸入的未稅金額；專案及銷課以含稅金額 ÷ 1.05 計算未稅。")
+
+        monthly_coaches=coach_options(); monthly_coach_name={v:k for k,v in monthly_coaches.items()}
+        monthly_usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,deducted_amount")
+            .gte("usage_date",str(month_start)).lte("usage_date",str(month_end)).order("usage_date"))
+        monthly_purchase_ids=list({x["purchase_id"] for x in monthly_usages})
+        monthly_purchases=rows(client().table("purchases").select("id,member_id,course_name,session_hours").in_("id",monthly_purchase_ids)) if monthly_purchase_ids else []
+        monthly_purchase_map={x["id"]:x for x in monthly_purchases}
+        monthly_member_ids=list({x.get("member_id") for x in monthly_purchases if x.get("member_id")})
+        monthly_members=rows(client().table("members").select("id,member_name").in_("id",monthly_member_ids)) if monthly_member_ids else []
+        monthly_member_name={x["id"]:x["member_name"] for x in monthly_members}
+        monthly_trial=rows(client().table("trial_items").select("entry_date,coach_id,hours,amount").gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date"))
+        monthly_single=rows(client().table("single_sales").select("entry_date,coach_id,hours,amount").gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date"))
+        monthly_events=rows(client().table("event_supports").select("entry_date,coach_id,hours,deducted_hours").gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date"))
+        monthly_projects=rows(client().table("project_entries").select("entry_date,project_id,project_name,person_name,coach_id,item_hours,quantity,line_amount")
+            .gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date"))
+        monthly_project_ids=list({x.get("project_id") for x in monthly_projects if x.get("project_id")})
+        monthly_project_master=rows(client().table("projects").select("id,funding_type").in_("id",monthly_project_ids)) if monthly_project_ids else []
+        monthly_project_type={x["id"]:x["funding_type"] for x in monthly_project_master}
+
+        monthly_sales_df=pd.DataFrame([{"日期":x["usage_date"],"會員名稱":monthly_member_name.get(monthly_purchase_map.get(x["purchase_id"],{}).get("member_id"),"未知"),
+            "銷課金額（未稅）":_tax_display_amount(x.get("deducted_amount"),"未稅")} for x in monthly_usages],columns=["日期","會員名稱","銷課金額（未稅）"])
+        monthly_stored_project_df=pd.DataFrame([{"專案":x["project_name"],"日期":x["entry_date"],"姓名":x.get("person_name") or "",
+            "扣款金額（未稅）":_tax_display_amount(x.get("line_amount"),"未稅")} for x in monthly_projects if monthly_project_type.get(x.get("project_id"))=="stored"],
+            columns=["專案","日期","姓名","扣款金額（未稅）"])
+
+        coach_ids=list(monthly_coaches.values())
+        coach_hour_rows=[]; coach_revenue_rows=[]
+        for coach_id in coach_ids:
+            trial_hours=sum(float(x.get("hours") or 0) for x in monthly_trial if x.get("coach_id")==coach_id)
+            single_hours=sum(float(x.get("hours") or 0) for x in monthly_single if x.get("coach_id")==coach_id)
+            event_hours=sum(max(0,float(x.get("hours") or 0)-float(x.get("deducted_hours") or 0)) for x in monthly_events if x.get("coach_id")==coach_id)
+            project_hours=sum(float(x.get("item_hours") or 0)*float(x.get("quantity") or 0) for x in monthly_projects if x.get("coach_id")==coach_id)
+            usage_hours=sum(float(monthly_purchase_map.get(x["purchase_id"],{}).get("session_hours") or 1) for x in monthly_usages if x.get("coach_id")==coach_id)
+            coach_hour_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"體驗項目時數":trial_hours,"單堂銷售時數":single_hours,
+                "活動支援時數":event_hours,"專案時數":project_hours,"銷課時數":usage_hours,"時數總計":trial_hours+single_hours+event_hours+project_hours+usage_hours})
+            trial_revenue=sum(float(x.get("amount") or 0) for x in monthly_trial if x.get("coach_id")==coach_id)
+            single_revenue=sum(float(x.get("amount") or 0) for x in monthly_single if x.get("coach_id")==coach_id)
+            project_revenue=sum(_tax_display_amount(x.get("line_amount"),"未稅") for x in monthly_projects if x.get("coach_id")==coach_id)
+            usage_revenue=sum(_tax_display_amount(x.get("deducted_amount"),"未稅") for x in monthly_usages if x.get("coach_id")==coach_id)
+            coach_revenue_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"體驗項目金額":round(trial_revenue),"單堂銷售金額":round(single_revenue),
+                "專案（未稅）":round(project_revenue),"銷課（未稅）":round(usage_revenue),"金額總計（未稅）":round(trial_revenue+single_revenue+project_revenue+usage_revenue)})
+        monthly_hours_df=pd.DataFrame(coach_hour_rows)
+        monthly_revenue_df=pd.DataFrame(coach_revenue_rows)
+
+        monthly_tabs=st.tabs(["每月銷課","每月已儲值專案扣款","每月教練時數","每月教練營收"])
+        monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額（未稅）","扣款金額（未稅）","體驗項目金額","單堂銷售金額","專案（未稅）","銷課（未稅）","金額總計（未稅）"]}
+        with monthly_tabs[0]: st.dataframe(monthly_sales_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
+        with monthly_tabs[1]: st.dataframe(monthly_stored_project_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
+        with monthly_tabs[2]: st.dataframe(monthly_hours_df,hide_index=True,use_container_width=True)
+        with monthly_tabs[3]: st.dataframe(monthly_revenue_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
+        monthly_export=_excel_bytes({"每月銷課":monthly_sales_df,"每月已儲值專案扣款":monthly_stored_project_df,
+            "每月教練時數":monthly_hours_df,"每月教練營收":monthly_revenue_df})
+        st.download_button("匯出每月報表",monthly_export,file_name=f"每月報表_{month_start:%Y-%m}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
 user=login(); me=profile(user.id)
 with st.sidebar:
