@@ -35,6 +35,25 @@ create table if not exists public.project_wallet_transactions (
   )
 );
 
+create table if not exists public.project_members (
+  member_id uuid primary key references public.members(id),
+  allow_wallet boolean not null default false,
+  allow_postpaid boolean not null default false,
+  active boolean not null default true,
+  note text,
+  created_by uuid not null references public.profiles(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (allow_wallet or allow_postpaid)
+);
+
+-- 已由管理員建立過儲值的會員，沿用為可使用專案儲值的會員。
+insert into public.project_members(member_id,allow_wallet,allow_postpaid,created_by)
+select distinct t.member_id,true,false,t.created_by
+from public.project_wallet_transactions t
+where t.transaction_type='topup' and t.amount>0
+on conflict(member_id) do update set allow_wallet=true,active=true,updated_at=now();
+
 create table if not exists public.project_receipt_transactions (
   id uuid primary key default gen_random_uuid(),
   project_entry_id uuid not null references public.project_entries(id),
@@ -56,6 +75,19 @@ select m.id member_id, m.member_name,
 from public.members m
 left join public.project_wallet_transactions t on t.member_id=m.id
 group by m.id,m.member_name;
+
+drop function if exists public.get_project_wallet_members();
+-- 專案登錄只取得由系統管理員核准的專案會員與付款方式，不公開交易金額。
+create or replace function public.get_project_members()
+returns table(member_id uuid,member_name text,allow_wallet boolean,allow_postpaid boolean)
+language sql stable security definer set search_path=public as $$
+  select m.id,m.member_name,pm.allow_wallet,pm.allow_postpaid
+  from public.project_members pm
+  join public.members m on m.id=pm.member_id
+  where m.active and pm.active
+    and exists (select 1 from public.profiles p where p.id=auth.uid() and p.active)
+  order by m.member_name;
+$$;
 
 create or replace function public.create_project_entry(
   p_entry_date date, p_catalog_id uuid, p_member_id uuid, p_person_name text,
@@ -84,9 +116,13 @@ begin
   -- 同一會員的儲值操作使用交易鎖，避免同時扣款造成負餘額。
   perform pg_advisory_xact_lock(hashtextextended(p_member_id::text,0));
   if p_payment_method='wallet' then
+    if not exists (select 1 from public.project_members where member_id=p_member_id and active and allow_wallet)
+      then raise exception '此會員未取得專案儲值資格，請由系統管理員新增'; end if;
     select coalesce(sum(amount),0) into v_balance
     from public.project_wallet_transactions where member_id=p_member_id;
     if v_balance < p_total_amount then raise exception '儲值餘額不足，目前餘額：%',v_balance; end if;
+  elsif not exists (select 1 from public.project_members where member_id=p_member_id and active and allow_postpaid) then
+    raise exception '此會員未取得專案事後請款資格，請由系統管理員新增';
   end if;
 
   insert into public.project_entries(
@@ -160,6 +196,7 @@ before update or delete on public.project_entries
 for each row execute function public.protect_project_financial_history();
 
 alter table public.project_wallet_transactions enable row level security;
+alter table public.project_members enable row level security;
 alter table public.project_receipt_transactions enable row level security;
 drop policy if exists project_wallet_read on public.project_wallet_transactions;
 drop policy if exists project_wallet_admin_insert on public.project_wallet_transactions;
@@ -167,6 +204,9 @@ create policy project_wallet_read on public.project_wallet_transactions
   for select to authenticated using (public.is_manager());
 create policy project_wallet_admin_insert on public.project_wallet_transactions
   for insert to authenticated with check (public.is_admin() and created_by=auth.uid());
+drop policy if exists project_members_admin_all on public.project_members;
+create policy project_members_admin_all on public.project_members
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
 drop policy if exists project_receipt_read on public.project_receipt_transactions;
 drop policy if exists project_receipt_admin_insert on public.project_receipt_transactions;
 create policy project_receipt_read on public.project_receipt_transactions
@@ -175,7 +215,9 @@ create policy project_receipt_admin_insert on public.project_receipt_transaction
   for insert to authenticated with check (public.is_admin() and created_by=auth.uid());
 
 grant select on public.project_wallet_balances to authenticated;
+revoke all on function public.get_project_members() from public;
 revoke all on function public.create_project_entry(date,uuid,uuid,text,uuid,numeric,numeric,text,text) from public;
 revoke all on function public.record_project_receipt(uuid,date,numeric,text) from public;
 grant execute on function public.create_project_entry(date,uuid,uuid,text,uuid,numeric,numeric,text,text) to authenticated;
 grant execute on function public.record_project_receipt(uuid,date,numeric,text) to authenticated;
+grant execute on function public.get_project_members() to authenticated;
