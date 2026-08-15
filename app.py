@@ -1793,32 +1793,37 @@ def financial_report_page(me):
             remaining=cumulative_prepaid-used
             purchase_in_period=str(start)<=str(purchase["purchase_date"])<=str(end)
             balance_rows.append({"日期":period_payment_date_map.get(purchase["id"]),"會員名稱":member_name_map.get(purchase["member_id"],""),
-                "成交總金額":_tax_display_amount(contracted,detail_tax_mode) if purchase_in_period else None,"預收金額":_tax_display_amount(period_prepaid,detail_tax_mode),
+                "成交總金額":_tax_display_amount(contracted,detail_tax_mode) if purchase_in_period else None,"實際預收金額":_tax_display_amount(period_prepaid,detail_tax_mode),
                 "銷課金額":_tax_display_amount(used,detail_tax_mode),"剩餘金額":_tax_display_amount(remaining,detail_tax_mode),
                 "_含稅成交":contracted if purchase_in_period else 0,"_含稅預收":period_prepaid,"_含稅銷課":used,"_含稅剩餘":remaining})
         balance_rows.sort(key=lambda x:str(x.get("日期") or ""),reverse=True)
-        balance_df=pd.DataFrame(balance_rows,columns=["日期","會員名稱","成交總金額","預收金額","銷課金額","剩餘金額"])
+        balance_df=pd.DataFrame(balance_rows,columns=["日期","會員名稱","成交總金額","實際預收金額","銷課金額","剩餘金額"])
         balance_subtotal_df=pd.DataFrame([{
             "項目":"金額小計",
             "成交總金額":int(balance_df["成交總金額"].sum()) if not balance_df.empty else 0,
-            "預收金額":int(balance_df["預收金額"].sum()) if not balance_df.empty else 0,
+            "實際預收金額":int(balance_df["實際預收金額"].sum()) if not balance_df.empty else 0,
             "銷課金額":int(balance_df["銷課金額"].sum()) if not balance_df.empty else 0,
             "剩餘金額":int(balance_df["剩餘金額"].sum()) if not balance_df.empty else 0
         }])
         totals_df=pd.DataFrame([{"成交總金額總計":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
-            "預收金額總計":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode),
+            "實際預收金額總計":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode),
             "銷課金額總計":_tax_display_amount(sum(x["_含稅銷課"] for x in balance_rows),total_tax_mode),
             "剩餘金額總計":_tax_display_amount(sum(x["_含稅剩餘"] for x in balance_rows),total_tax_mode)}])
 
-        money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","成交總金額","預收金額","銷課金額","剩餘金額","成交總金額總計","預收金額總計","銷課金額總計","剩餘金額總計"]}
+        money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","成交總金額","實際預收金額","銷課金額","剩餘金額","成交總金額總計","實際預收金額總計","銷課金額總計","剩餘金額總計"]}
+        def center_member_report_columns(frame,columns):
+            centered=[name for name in columns if name in frame.columns]
+            styler=frame.style.set_properties(subset=centered,**{"text-align":"center"})
+            header_styles=[{"selector":f"th.col_heading.level0.col{frame.columns.get_loc(name)}","props":[("text-align","center")]} for name in centered]
+            return styler.set_table_styles(header_styles,overwrite=False)
         with detail_tabs[0]:
-            st.caption(f"預收金額總計為查詢期間實際收款；成交總金額總計只計算本期間成交資料。銷課與剩餘金額為列入會員課程截至 {end} 的累計數。目前顯示：{total_tax_mode}金額。")
-            st.dataframe(totals_df,hide_index=True,use_container_width=True,column_config=money_config)
+            st.caption(f"實際預收金額總計為查詢期間實際收款；成交總金額總計只計算本期間成交資料。銷課與剩餘金額為列入會員課程截至 {end} 的累計數。目前顯示：{total_tax_mode}金額。")
+            st.dataframe(center_member_report_columns(totals_df,["實際預收金額總計"]),hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[1]:
-            st.caption(f"日期依查詢期間內最後一筆付款日期；只要期間內有實際收款即列入，包含分期款。非本期間成交者，成交總金額留白。預收金額為期間收款；銷課與剩餘金額累計至 {end}。目前顯示：{detail_tax_mode}金額。")
-            st.dataframe(balance_df,hide_index=True,use_container_width=True,column_config=money_config)
+            st.caption(f"日期依查詢期間內最後一筆付款日期；只要期間內有實際收款即列入，包含分期款。非本期間成交者，成交總金額留白。實際預收金額為期間收款；銷課與剩餘金額累計至 {end}。目前顯示：{detail_tax_mode}金額。")
+            st.dataframe(center_member_report_columns(balance_df,["實際預收金額"]),hide_index=True,use_container_width=True,column_config=money_config)
             st.markdown("**金額小計**")
-            st.dataframe(balance_subtotal_df,hide_index=True,use_container_width=True,column_config=money_config)
+            st.dataframe(center_member_report_columns(balance_subtotal_df,["實際預收金額"]),hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[2]:
             st.caption(f"日期依銷課日期；教練篩選依授課教練。目前顯示：{sales_tax_mode}金額。未稅金額按含稅金額 ÷ 1.05 四捨五入至整數。")
             st.dataframe(sales_df,hide_index=True,use_container_width=True,column_config=money_config)
