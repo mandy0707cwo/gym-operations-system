@@ -1132,59 +1132,68 @@ def project_admin_page(me):
 
     with item_tab:
         active_projects=[x for x in projects if x.get("active")]
-        if not active_projects:
-            st.info("請先新增並啟用專案。")
-            return
         project_map={x["project_name"]:x for x in active_projects}
-        with st.form("add_project_catalog",clear_on_submit=True,enter_to_submit=False):
-            c1,c2=st.columns(2)
-            selected_project_name=c1.selectbox("專案名稱",list(project_map),index=None,placeholder="請選擇專案")
-            item_name=c2.text_input("操作項目").strip()
-            c1,c2=st.columns(2)
-            hours=c1.number_input("時數",0.25,10000.0,1.0,step=0.25)
-            price=c2.number_input("價格",0.0,10000000.0,0.0,step=100.0,format="%.0f")
-            add_project_item=st.form_submit_button("新增專案操作項目",type="primary",use_container_width=True)
-        if add_project_item:
-            if not selected_project_name or not item_name: st.error("專案名稱及操作項目不可空白。")
-            else:
-                try:
-                    selected_project=project_map[selected_project_name]
-                    admin.table("project_catalog").insert({"project_id":selected_project["id"],
-                        "project_name":selected_project_name,"item_name":item_name,"hours":hours,"price":price}).execute()
-                    st.success("專案操作項目已新增。"); st.rerun()
-                except Exception as exc: st.error(f"新增失敗，請確認專案與項目組合是否重複：{exc}")
-
         items=rows(admin.table("project_catalog").select("id,project_id,project_name,item_name,hours,price,created_at").order("project_name").order("item_name"))
-        if not items: st.info("目前尚未建立專案操作項目。"); return
-        show_table(items,["project_name","item_name","hours","price","created_at"])
         item_map={f'{x["project_name"]}｜{x["item_name"]}':x for x in items}
-        selected=st.selectbox("選擇要修改的專案操作項目",list(item_map),key="project_catalog_edit_select")
-        current_item=item_map[selected]
-        with st.form("edit_project_catalog",enter_to_submit=False):
-            edited_item=st.text_input("修改後操作項目",current_item["item_name"]).strip()
-            c1,c2=st.columns(2)
-            edited_hours=c1.number_input("修改後時數",0.25,10000.0,float(current_item["hours"]),step=0.25)
-            edited_price=c2.number_input("修改後價格",0.0,10000000.0,float(current_item["price"]),step=100.0,format="%.0f")
-            update_project_item=st.form_submit_button("儲存操作項目修改")
-        if update_project_item:
-            if not edited_item: st.error("操作項目不可空白。")
+        add_item_tab,delete_item_tab,edit_item_tab=st.tabs(["新增","刪除","修改"])
+        with add_item_tab:
+            if not active_projects:
+                st.info("請先新增並啟用專案。")
             else:
-                try:
-                    admin.table("project_catalog").update({"item_name":edited_item,
-                        "hours":edited_hours,"price":edited_price}).eq("id",current_item["id"]).execute()
-                    st.success("操作項目已修改；歷史單據內容不受影響。"); st.rerun()
-                except Exception as exc: st.error(f"修改失敗：{exc}")
-        with st.form("delete_project_catalog",enter_to_submit=False):
-            delete_label=st.selectbox("選擇要刪除的專案操作項目",list(item_map),key="project_catalog_delete_select")
-            confirm=st.checkbox("我確認刪除此選項；已有歷史單據時系統會阻止刪除。")
-            delete_project_item=st.form_submit_button("刪除專案操作項目")
-        if delete_project_item:
-            if not confirm: st.error("請先勾選刪除確認。")
+                with st.form("add_project_catalog",clear_on_submit=True,enter_to_submit=False):
+                    c1,c2=st.columns(2)
+                    selected_project_name=c1.selectbox("專案名稱",list(project_map),index=None,placeholder="請選擇專案")
+                    item_name=c2.text_input("操作項目").strip()
+                    c1,c2=st.columns(2)
+                    hours=c1.number_input("時數",0.25,10000.0,1.0,step=0.25)
+                    price=c2.number_input("價格",0.0,10000000.0,0.0,step=100.0,format="%.0f")
+                    add_project_item=st.form_submit_button("新增專案操作項目",type="primary",use_container_width=True)
+                if add_project_item:
+                    if not selected_project_name or not item_name: st.error("專案名稱及操作項目不可空白。")
+                    else:
+                        try:
+                            selected_project=project_map[selected_project_name]
+                            admin.table("project_catalog").insert({"project_id":selected_project["id"],
+                                "project_name":selected_project_name,"item_name":item_name,"hours":hours,"price":price}).execute()
+                            st.success("專案操作項目已新增。"); st.rerun()
+                        except Exception as exc: st.error(f"新增失敗，請確認專案與項目組合是否重複：{exc}")
+        with delete_item_tab:
+            if not items:
+                st.info("目前尚未建立專案操作項目。")
             else:
-                try:
-                    admin.table("project_catalog").delete().eq("id",item_map[delete_label]["id"]).execute()
-                    st.success("專案操作項目已刪除。"); st.rerun()
-                except Exception as exc: st.error(f"刪除失敗；可能已有歷史單據使用此項目：{exc}")
+                with st.form("delete_project_catalog",enter_to_submit=False):
+                    delete_label=st.selectbox("選擇要刪除的專案操作項目",list(item_map),key="project_catalog_delete_select")
+                    confirm=st.checkbox("我確認刪除此選項；已有歷史單據時系統會阻止刪除。")
+                    delete_project_item=st.form_submit_button("刪除專案操作項目",type="primary")
+                if delete_project_item:
+                    if not confirm: st.error("請先勾選刪除確認。")
+                    else:
+                        try:
+                            admin.table("project_catalog").delete().eq("id",item_map[delete_label]["id"]).execute()
+                            st.success("專案操作項目已刪除。"); st.rerun()
+                        except Exception as exc: st.error(f"刪除失敗；可能已有歷史單據使用此項目：{exc}")
+        with edit_item_tab:
+            if not items:
+                st.info("目前尚未建立專案操作項目。")
+            else:
+                show_table(items,["project_name","item_name","hours","price","created_at"])
+                selected=st.selectbox("選擇要修改的專案操作項目",list(item_map),key="project_catalog_edit_select")
+                current_item=item_map[selected]
+                with st.form("edit_project_catalog",enter_to_submit=False):
+                    st.text_input("所屬專案",current_item["project_name"],disabled=True)
+                    edited_item=st.text_input("修改後操作項目",current_item["item_name"]).strip()
+                    c1,c2=st.columns(2)
+                    edited_hours=c1.number_input("修改後時數",0.25,10000.0,float(current_item["hours"]),step=0.25)
+                    edited_price=c2.number_input("修改後價格",0.0,10000000.0,float(current_item["price"]),step=100.0,format="%.0f")
+                    update_project_item=st.form_submit_button("儲存操作項目修改",type="primary")
+                if update_project_item:
+                    if not edited_item: st.error("操作項目不可空白。")
+                    else:
+                        try:
+                            admin.table("project_catalog").update({"item_name":edited_item,
+                                "hours":edited_hours,"price":edited_price}).eq("id",current_item["id"]).execute()
+                            st.success("操作項目已修改；歷史單據內容不受影響。"); st.rerun()
+                        except Exception as exc: st.error(f"修改失敗：{exc}")
 
 def _excel_bytes(sheet_frames):
     output = BytesIO()
