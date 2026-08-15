@@ -623,7 +623,7 @@ def dashboard_page(me):
     if start>end: st.error("開始日期不可晚於結束日期。") ; return
     ids=[coaches[x] for x in selected]
     cancellations=rows(client().table("session_cancellations").select("coach_id,cancelled_sessions,cancel_date").gte("cancel_date",str(start)).lte("cancel_date",str(end)))
-    trials=rows(client().table("trial_items").select("coach_id,member_name,hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
+    trials=rows(client().table("trial_items").select("coach_id,member_name,content,hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
     single_sales=rows(client().table("single_sales").select("coach_id,hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
     event_supports=rows(client().table("event_supports").select("coach_id,hours,deducted_hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
     project_entries=rows(client().table("project_entries").select("coach_id,item_hours,quantity,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
@@ -641,8 +641,9 @@ def dashboard_page(me):
         u=[x for x in usages if x["coach_id"]==cid]
         cancelled=sum(x["cancelled_sessions"] for x in cancellations if x["coach_id"]==cid)
         sessions=sum(x["total_sessions"] for x in p); amount=sum(float(x["total_amount"]) for x in p)
-        trial_names={str(x.get("member_name") or "").strip().casefold() for x in trials if x["coach_id"]==cid and str(x.get("member_name") or "").strip()}
-        trial_count=len(trial_names)
+        trial_member_content={(str(x.get("member_name") or "").strip().casefold(),str(x.get("content") or "").strip().casefold())
+            for x in trials if x["coach_id"]==cid and str(x.get("member_name") or "").strip() and str(x.get("content") or "").strip()}
+        trial_count=len(trial_member_content)
         first_count=sum(1 for x in p if x["purchase_kind"]=="first")
         renewal_count=sum(1 for x in p if x["purchase_kind"]=="renewal")
         received=sum(float(x["amount"]) for x in payments if payment_purchase_map.get(x["purchase_id"])==cid)
@@ -660,8 +661,9 @@ def dashboard_page(me):
     df=pd.DataFrame(result)
     if df.empty: st.info("沒有可顯示的資料。") ; return
     totals=df[["成交堂數","成交總金額","實際預收金額","銷課堂數","銷課金額","總執行時數"]].sum()
-    overall_trial_names={str(x.get("member_name") or "").strip().casefold() for x in trials if x["coach_id"] in ids and str(x.get("member_name") or "").strip()}
-    total_trial_count=len(overall_trial_names)
+    overall_trial_member_content={(str(x.get("member_name") or "").strip().casefold(),str(x.get("content") or "").strip().casefold())
+        for x in trials if x["coach_id"] in ids and str(x.get("member_name") or "").strip() and str(x.get("content") or "").strip()}
+    total_trial_count=len(overall_trial_member_content)
     total_first_count=len([x for x in purchases if x["coach_id"] in ids and x["purchase_kind"]=="first"])
     overall_trial_conversion=total_first_count/total_trial_count if total_trial_count else None
     total_purchase_count=len([x for x in purchases if x["coach_id"] in ids])
