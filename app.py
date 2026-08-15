@@ -147,7 +147,9 @@ def daily_page(me):
 
     def standard_entry(tab, table_name, form_key, content_label, catalog_type, member_label=None):
         with tab:
-            catalog=rows(client().table("operation_item_catalog").select("id,item_name,detail_content,session_hours,default_amount").eq("item_type",catalog_type).order("item_name"))
+            catalog_query=client().table("operation_item_catalog").select("id,item_name,detail_content,session_hours,default_amount,active").eq("item_type",catalog_type)
+            if catalog_type=="trial": catalog_query=catalog_query.eq("active",True)
+            catalog=rows(catalog_query.order("item_name"))
             option_map={
                 (f'{x["item_name"]}｜{x.get("detail_content") or ""}' if catalog_type=="trial" else x["item_name"]):x
                 for x in catalog
@@ -932,21 +934,33 @@ def operation_item_admin_page(me, item_type, title):
             st.error("體驗項目與內容不可空白。" if item_type=="trial" else "項目名稱不可空白。")
         else:
             try:
-                admin.table("operation_item_catalog").insert({"item_type":item_type,"item_name":new_name,"detail_content":new_detail or None,"session_hours":new_hours,"default_amount":new_amount}).execute()
+                admin.table("operation_item_catalog").insert({"item_type":item_type,"item_name":new_name,"detail_content":new_detail or None,"session_hours":new_hours,"default_amount":new_amount,"active":True}).execute()
                 st.success(f"已新增：{new_name}"); st.rerun()
             except Exception as exc:
                 st.error(f"新增失敗，請確認體驗項目與內容的組合是否重複：{exc}" if item_type=="trial" else f"新增失敗，請確認名稱是否重複：{exc}")
-    items=rows(admin.table("operation_item_catalog").select("id,item_name,detail_content,session_hours,default_amount,created_at").eq("item_type",item_type).order("item_name"))
+    items=rows(admin.table("operation_item_catalog").select("id,item_name,detail_content,session_hours,default_amount,active,created_at").eq("item_type",item_type).order("item_name"))
     if not items:
         st.info("目前尚未建立項目。")
         return
-    admin_columns=["item_name","detail_content","session_hours","default_amount","created_at"] if item_type=="trial" else ["item_name","session_hours","default_amount","created_at"]
-    show_table(items,admin_columns)
+    admin_columns=["item_name","detail_content","session_hours","default_amount","active","created_at"] if item_type=="trial" else ["item_name","session_hours","default_amount","created_at"]
+    display_items=[{**x,"active":"啟用" if x.get("active",True) else "停用"} for x in items]
+    show_table(display_items,admin_columns)
     item_map={
         (f'{x["item_name"]}｜{x.get("detail_content") or ""}' if item_type=="trial" else x["item_name"]):x
         for x in items
     }
     selected=st.selectbox("選擇要修改的項目",list(item_map),key=f"edit_select_{item_type}")
+    if item_type=="trial":
+        with st.form("trial_item_active_status"):
+            trial_active=st.checkbox("啟用體驗項目",value=bool(item_map[selected].get("active",True)),key=f'trial_active_{item_map[selected]["id"]}')
+            save_trial_status=st.form_submit_button("儲存啟用／停用狀態",type="primary")
+        if save_trial_status:
+            try:
+                admin.table("operation_item_catalog").update({"active":trial_active}).eq("id",item_map[selected]["id"]).execute()
+                st.success(f'體驗項目已{("啟用" if trial_active else "停用")}：{selected}')
+                st.rerun()
+            except Exception as exc:
+                st.error(f"狀態修改失敗：{exc}")
     with st.form(f"edit_operation_item_{item_type}"):
         edited_name=st.text_input("修改後名稱",value=item_map[selected]["item_name"]).strip()
         edited_detail=st.text_input("修改後內容",value=item_map[selected].get("detail_content") or "").strip() if item_type=="trial" else ""
@@ -1511,10 +1525,15 @@ def record_admin_page(me):
     elif data_type=="課程購買":
         records=rows(admin.table("purchase_balances").select("*").order("expiry_date",desc=True).limit(500))
         record_purchase_ids=[x["purchase_id"] for x in records]
-        record_purchase_dates=rows(admin.table("purchases").select("id,purchase_date").in_("id",record_purchase_ids)) if record_purchase_ids else []
-        purchase_date_map={x["id"]:x.get("purchase_date") for x in record_purchase_dates}
-        records.sort(key=lambda x:str(purchase_date_map.get(x["purchase_id"]) or ""),reverse=True)
-        labels={f'{purchase_date_map.get(x["purchase_id"],"日期不明")}｜{x["member_name"]}｜{x["course_name"]}｜{x["purchase_id"][:8]}':x for x in records}
+        purchase_details=rows(admin.table("purchases").select("id,purchase_date,purchase_kind,coach_id").in_("id",record_purchase_ids)) if record_purchase_ids else []
+        purchase_detail_map={x["id"]:x for x in purchase_details}
+        for item in records:
+            detail=purchase_detail_map.get(item["purchase_id"],{})
+            item["purchase_date"]=detail.get("purchase_date")
+            item["purchase_kind"]=detail.get("purchase_kind")
+            item["coach_id"]=detail.get("coach_id") or item.get("coach_id")
+        records.sort(key=lambda x:str(x.get("purchase_date") or ""),reverse=True)
+        labels={f'{x.get("purchase_date") or "日期不明"}｜{x["member_name"]}｜{x["course_name"]}｜{x["total_sessions"]} 堂｜{id_name.get(x.get("coach_id"),x.get("coach_name") or "未知教練")}':x for x in records}
     else:
         records=rows(admin.table("session_usages").select("*").order("usage_date",desc=True).limit(500))
         usage_purchase_ids=list({x["purchase_id"] for x in records})
@@ -1557,7 +1576,7 @@ def record_admin_page(me):
     if not labels: st.info("目前沒有可管理的資料。"); return
     selected=st.selectbox("選擇紀錄",list(labels)); record=labels[selected]
     record_coach_map=dict(coach_map)
-    if data_type in ("體驗項目","單堂銷售","活動支援","專案","銷課取消紀錄","銷課表") and record.get("coach_id") not in record_coach_map.values():
+    if data_type in ("體驗項目","單堂銷售","活動支援","專案","銷課取消紀錄","課程購買","銷課表") and record.get("coach_id") not in record_coach_map.values():
         historical_name=id_name.get(record.get("coach_id"),f'歷史帳號 {str(record.get("coach_id",""))[:8]}')
         record_coach_map[f'{historical_name}（歷史資料）']=record.get("coach_id")
     coach_names=list(record_coach_map)
@@ -1591,6 +1610,9 @@ def record_admin_page(me):
             total_price=c2.number_input("價格",0.0,1000000000.0,float(record["quantity"])*float(record["unit_price"]),step=100.0,format="%.0f",help="此處為本筆總價。")
             project_note=st.text_input("備註",record.get("note") or "")
         elif data_type=="課程購買":
+            c1,c2=st.columns(2)
+            purchase_kind_label=c1.selectbox("購買類型",["首次購買","續課"],index=0 if record.get("purchase_kind")=="first" else 1)
+            coach=c2.selectbox("指導教練",coach_names,index=current_coach_index)
             c1,c2,c3=st.columns(3); sessions=c1.number_input("課程堂數",1,999,int(record["total_sessions"])); amount=c2.number_input("成交總金額",0.0,10000000.0,float(record["total_amount"]),step=100.0,format="%.0f"); expiry=c3.date_input("有效期限",pd.to_datetime(record["expiry_date"]).date())
             referral=st.text_input("醫生轉介",record.get("referral") or "")
             note=st.text_area("備註",record.get("note") or "")
@@ -1619,7 +1641,7 @@ def record_admin_page(me):
                     "project_name":catalog_item["project_name"],"person_name":person_name.strip(),"coach_id":record_coach_map[coach],
                     "item_name":catalog_item["item_name"],"item_hours":float(catalog_item["hours"]),"quantity":quantity,
                     "unit_price":total_price/quantity,"line_amount":total_price,"note":project_note.strip() or None}).eq("id",record["id"]).execute()
-            elif data_type=="課程購買": admin.table("purchases").update({"total_sessions":sessions,"total_amount":amount,"expiry_date":str(expiry),"referral":referral.strip() or None,"note":note.strip() or None}).eq("id",record["purchase_id"]).execute()
+            elif data_type=="課程購買": admin.table("purchases").update({"purchase_kind":"first" if purchase_kind_label=="首次購買" else "renewal","coach_id":record_coach_map[coach],"total_sessions":sessions,"total_amount":amount,"expiry_date":str(expiry),"referral":referral.strip() or None,"note":note.strip() or None}).eq("id",record["purchase_id"]).execute()
             else:
                 old_date,old_coach=record["usage_date"],record["coach_id"]
                 admin.table("session_usages").update({"usage_date":str(d),"coach_id":record_coach_map[coach],"note":note or None}).eq("id",record["id"]).execute()
