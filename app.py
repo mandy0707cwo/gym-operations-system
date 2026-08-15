@@ -29,7 +29,7 @@ LABELS = {
     "project_name":"專案名稱", "person_name":"使用者", "item_name":"操作項目",
     "quantity":"數量", "item_hours":"每次時數", "execution_hours":"執行時數", "unit_price":"價格", "line_total":"總價",
     "funding_type":"專案類型", "stored_date":"儲值日期", "stored_amount":"儲值金額", "used_amount":"已使用金額", "remaining_amount":"剩餘金額", "line_amount":"金額", "active":"狀態",
-    "referral":"醫生轉介", "amount":"金額", "default_amount":"預設金額", "note":"備註",
+    "trial_item_name":"體驗項目", "detail_content":"內容", "referral":"醫生轉介", "amount":"金額", "default_amount":"預設金額", "note":"備註",
 }
 ROLE_LABELS = {"coach": "教練", "shared_coach": "共用教練帳號", "manager": "主管", "admin": "系統管理員"}
 USERNAME_RE = re.compile(r"^[a-z0-9_]{3,30}$")
@@ -147,10 +147,11 @@ def daily_page(me):
 
     def standard_entry(tab, table_name, form_key, content_label, catalog_type, member_label=None):
         with tab:
-            catalog=rows(client().table("operation_item_catalog").select("item_name,session_hours,default_amount").eq("item_type",catalog_type).order("item_name"))
+            catalog=rows(client().table("operation_item_catalog").select("item_name,detail_content,session_hours,default_amount").eq("item_type",catalog_type).order("item_name"))
             item_names=[x["item_name"] for x in catalog]
             item_hours={x["item_name"]:float(x.get("session_hours") or 1) for x in catalog}
             item_amounts={x["item_name"]:float(x.get("default_amount") or 0) for x in catalog}
+            item_details={x["item_name"]:str(x.get("detail_content") or "") for x in catalog}
             if not item_names:
                 st.warning(f"尚未建立{content_label}選項，請由系統管理員到「資料管理」新增。")
                 return
@@ -159,9 +160,11 @@ def daily_page(me):
             content=st.selectbox(content_label,item_names,index=None,placeholder=f"請選擇{content_label}",key=f"{form_key}_content_{revision}")
             default_hours=item_hours.get(content) if content else None
             default_amount=item_amounts.get(content) if content else None
+            default_detail=item_details.get(content) if content else ""
             with st.form(f"{form_key}_{revision}",clear_on_submit=True,enter_to_submit=False):
                 c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today()); coach_name=c2.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練")
                 member_name=st.text_input(member_label) if member_label else None
+                detail_content=st.text_input("內容",value=default_detail,disabled=True) if catalog_type=="trial" else None
                 c1,c2=st.columns(2)
                 hours=c1.number_input("時數",0.25,24.0,value=default_hours,step=0.25,placeholder="選擇內容後自動帶入",disabled=True)
                 amount=c2.number_input("金額（未稅）",0.0,1000000000.0,value=default_amount,step=100.0,format="%.0f",placeholder="選擇內容後自動帶入")
@@ -179,12 +182,13 @@ def daily_page(me):
                 else:
                     try:
                         payload={"entry_date":str(entry_date),"content":content,"hours":hours,"amount":amount,"note":note.strip() or None,"coach_id":allowed[coach_name],"created_by":me["id"]}
+                        if catalog_type=="trial": payload["detail_content"]=detail_content.strip() or None
                         if member_label: payload["member_name"]=member_name.strip()
                         client().table(table_name).insert(payload).execute()
                         st.session_state[revision_key]=revision+1
                         st.success("紀錄已新增。"); st.rerun()
                     except Exception as exc: st.error(f"新增失敗：{exc}")
-            select_fields="entry_date,content,hours,amount,note,coach_id,member_name" if member_label else "entry_date,content,hours,amount,note,coach_id"
+            select_fields="entry_date,content,detail_content,hours,amount,note,coach_id,member_name" if catalog_type=="trial" else ("entry_date,content,hours,amount,note,coach_id,member_name" if member_label else "entry_date,content,hours,amount,note,coach_id")
             data=rows(client().table(table_name).select(select_fields).order("entry_date",desc=True).limit(100))
             data=[x for x in data if x.get("coach_id") in names]
             for x in data:
@@ -192,11 +196,13 @@ def daily_page(me):
                 if member_label:
                     display_member_key="trial_member_name" if catalog_type=="trial" else "single_sale_member_name"
                     x[display_member_key]=x.pop("member_name",None)
+                if catalog_type=="trial": x["trial_item_name"]=x.pop("content",None)
             member_column=["trial_member_name" if catalog_type=="trial" else "single_sale_member_name"] if member_label else []
-            columns=["entry_date"] + member_column + ["content","hours","amount","coach_name","note"]
+            content_columns=["trial_item_name","detail_content"] if catalog_type=="trial" else ["content"]
+            columns=["entry_date"] + member_column + content_columns + ["hours","amount","coach_name","note"]
             show_table(data,columns)
 
-    standard_entry(tab1,"trial_items","trial_item_form","體驗內容","trial",member_label="體驗會員姓名")
+    standard_entry(tab1,"trial_items","trial_item_form","體驗項目","trial",member_label="體驗會員姓名")
     standard_entry(tab2,"single_sales","single_sale_form","銷售內容","single_sale",member_label="單堂銷售會員姓名")
     with tab3:
         with st.form("event_support_form",clear_on_submit=True,enter_to_submit=False):
@@ -917,34 +923,37 @@ def operation_item_admin_page(me, item_type, title):
         new_name=c1.text_input("新增項目名稱").strip()
         new_hours=c2.number_input("每堂課時數",0.25,24.0,1.0,step=0.25)
         new_amount=c3.number_input("預設金額（未稅）",0.0,1000000000.0,0.0,step=100.0,format="%.0f")
+        new_detail=st.text_input("內容").strip() if item_type=="trial" else ""
         add_item=st.form_submit_button("新增項目")
     if add_item:
-        if not new_name:
-            st.error("項目名稱不可空白。")
+        if not new_name or (item_type=="trial" and not new_detail):
+            st.error("體驗項目與內容不可空白。" if item_type=="trial" else "項目名稱不可空白。")
         else:
             try:
-                admin.table("operation_item_catalog").insert({"item_type":item_type,"item_name":new_name,"session_hours":new_hours,"default_amount":new_amount}).execute()
+                admin.table("operation_item_catalog").insert({"item_type":item_type,"item_name":new_name,"detail_content":new_detail or None,"session_hours":new_hours,"default_amount":new_amount}).execute()
                 st.success(f"已新增：{new_name}"); st.rerun()
             except Exception as exc:
                 st.error(f"新增失敗，請確認名稱是否重複：{exc}")
-    items=rows(admin.table("operation_item_catalog").select("id,item_name,session_hours,default_amount,created_at").eq("item_type",item_type).order("item_name"))
+    items=rows(admin.table("operation_item_catalog").select("id,item_name,detail_content,session_hours,default_amount,created_at").eq("item_type",item_type).order("item_name"))
     if not items:
         st.info("目前尚未建立項目。")
         return
-    show_table(items,["item_name","session_hours","default_amount","created_at"])
+    admin_columns=["item_name","detail_content","session_hours","default_amount","created_at"] if item_type=="trial" else ["item_name","session_hours","default_amount","created_at"]
+    show_table(items,admin_columns)
     item_map={x["item_name"]:x for x in items}
     selected=st.selectbox("選擇要修改的項目",list(item_map),key=f"edit_select_{item_type}")
     with st.form(f"edit_operation_item_{item_type}"):
         edited_name=st.text_input("修改後名稱",value=selected).strip()
+        edited_detail=st.text_input("修改後內容",value=item_map[selected].get("detail_content") or "").strip() if item_type=="trial" else ""
         edited_hours=st.number_input("修改後每堂課時數",0.25,24.0,float(item_map[selected].get("session_hours") or 1),step=0.25)
         edited_amount=st.number_input("修改後預設金額（未稅）",0.0,1000000000.0,float(item_map[selected].get("default_amount") or 0),step=100.0,format="%.0f")
         update_item=st.form_submit_button("儲存修改")
     if update_item:
-        if not edited_name:
-            st.error("項目名稱不可空白。")
+        if not edited_name or (item_type=="trial" and not edited_detail):
+            st.error("體驗項目與內容不可空白。" if item_type=="trial" else "項目名稱不可空白。")
         else:
             try:
-                admin.table("operation_item_catalog").update({"item_name":edited_name,"session_hours":edited_hours,"default_amount":edited_amount}).eq("id",item_map[selected]["id"]).execute()
+                admin.table("operation_item_catalog").update({"item_name":edited_name,"detail_content":edited_detail or None,"session_hours":edited_hours,"default_amount":edited_amount}).eq("id",item_map[selected]["id"]).execute()
                 st.success("項目已修改。既有歷史紀錄仍保留原內容。")
                 st.rerun()
             except Exception as exc:
@@ -1353,7 +1362,7 @@ def member_course_io_page(me):
             "usage_date":x["usage_date"],"coach_username":id_to_display_name.get(x["coach_id"],""),
             "session_seq":x["session_seq"],"deducted_amount":x["deducted_amount"],"note":x.get("note") or ""})
     usage_export_columns=["purchase_id","usage_id","member_name","course_name","usage_date","coach_username","session_seq","deducted_amount","note"]
-    trial_rows=rows(admin.table("trial_items").select("entry_date,member_name,content,hours,amount,note,coach_id,created_at").order("entry_date"))
+    trial_rows=rows(admin.table("trial_items").select("entry_date,member_name,content,detail_content,hours,amount,note,coach_id,created_at").order("entry_date"))
     single_sale_rows=rows(admin.table("single_sales").select("entry_date,member_name,content,hours,amount,note,coach_id,created_at").order("entry_date"))
     event_rows=rows(admin.table("event_supports").select("entry_date,content,hours,deducted_hours,deduction_reason,coach_id,created_at").order("entry_date"))
     for collection in (trial_rows,single_sale_rows,event_rows):
@@ -1555,7 +1564,7 @@ def record_admin_page(me):
             reason=st.text_input("取消原因",record.get("reason") or "")
         elif data_type=="體驗項目":
             c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["entry_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
-            member_name=st.text_input("體驗會員姓名",record.get("member_name") or ""); content=st.text_input("體驗內容",record["content"]); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25); amount=st.number_input("金額（未稅）",0.0,1000000000.0,float(record.get("amount") or 0),step=100.0,format="%.0f"); note=st.text_input("備註",record.get("note") or "")
+            member_name=st.text_input("體驗會員姓名",record.get("member_name") or ""); content=st.text_input("體驗項目",record["content"]); detail_content=st.text_input("內容",record.get("detail_content") or ""); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25); amount=st.number_input("金額（未稅）",0.0,1000000000.0,float(record.get("amount") or 0),step=100.0,format="%.0f"); note=st.text_input("備註",record.get("note") or "")
         elif data_type=="單堂銷售":
             c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["entry_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
             member_name=st.text_input("單堂銷售會員姓名",record.get("member_name") or ""); content=st.text_input("銷售內容",record["content"]); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25); amount=st.number_input("金額（未稅）",0.0,1000000000.0,float(record.get("amount") or 0),step=100.0,format="%.0f"); note=st.text_input("備註",record.get("note") or "")
@@ -1588,8 +1597,8 @@ def record_admin_page(me):
             if data_type=="銷課取消紀錄":
                 admin.table("session_cancellations").update({"cancel_date":str(d),"coach_id":record_coach_map[coach],"cancelled_sessions":cancelled_sessions,"reason":reason.strip() or None}).eq("id",record["id"]).execute()
             elif data_type=="體驗項目":
-                if not member_name.strip() or not content.strip(): raise ValueError("體驗會員姓名及體驗內容不可空白")
-                admin.table("trial_items").update({"entry_date":str(d),"coach_id":record_coach_map[coach],"member_name":member_name.strip(),"content":content.strip(),"hours":hours,"amount":amount,"note":note.strip() or None}).eq("id",record["id"]).execute()
+                if not member_name.strip() or not content.strip(): raise ValueError("體驗會員姓名及體驗項目不可空白")
+                admin.table("trial_items").update({"entry_date":str(d),"coach_id":record_coach_map[coach],"member_name":member_name.strip(),"content":content.strip(),"detail_content":detail_content.strip() or None,"hours":hours,"amount":amount,"note":note.strip() or None}).eq("id",record["id"]).execute()
             elif data_type=="單堂銷售":
                 if not member_name.strip() or not content.strip(): raise ValueError("單堂銷售會員姓名及銷售內容不可空白")
                 admin.table("single_sales").update({"entry_date":str(d),"coach_id":record_coach_map[coach],"member_name":member_name.strip(),"content":content.strip(),"hours":hours,"amount":amount,"note":note.strip() or None}).eq("id",record["id"]).execute()
