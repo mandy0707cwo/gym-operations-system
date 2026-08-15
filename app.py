@@ -283,7 +283,7 @@ def daily_page(me):
 def purchase_page(me):
     st.header("課程購買")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
-    courses=rows(client().table("course_catalog").select("course_name,course_type,session_hours").order("course_name"))
+    courses=rows(client().table("course_catalog").select("course_name,course_type,session_hours").eq("active",True).order("course_name"))
     course_options={f'{x.get("course_type") or "未分類"}｜{x["course_name"]}':x["course_name"] for x in courses}
     course_names=list(course_options)
     course_hours={x["course_name"]:float(x.get("session_hours") or 1) for x in courses}
@@ -861,17 +861,31 @@ def course_admin_page(me):
             st.error("課程名稱與課程種類不可空白。")
         else:
             try:
-                admin.table("course_catalog").insert({"course_name":course_name,"course_type":course_type,"session_hours":course_hours}).execute()
+                admin.table("course_catalog").insert({"course_name":course_name,"course_type":course_type,"session_hours":course_hours,"active":True}).execute()
                 st.success(f"已新增課程：{course_name}")
                 st.rerun()
             except Exception as exc:
                 st.error(f"新增失敗，請確認課程名稱是否重複：{exc}")
-    courses=rows(admin.table("course_catalog").select("id,course_name,course_type,session_hours,created_at").order("course_name"))
+    courses=rows(admin.table("course_catalog").select("id,course_name,course_type,session_hours,active,created_at").order("course_name"))
     if not courses:
         st.info("目前尚未建立課程名稱。")
         return
-    show_table(courses,["course_type","course_name","session_hours","created_at"])
-    course_labels={f'{x.get("course_type") or "未分類"}｜{x["course_name"]}':x["id"] for x in courses}
+    course_display=[{**x,"active":"啟用" if x.get("active",True) else "停用"} for x in courses]
+    show_table(course_display,["course_type","course_name","session_hours","active","created_at"])
+    course_map={f'{x.get("course_type") or "未分類"}｜{x["course_name"]}':x for x in courses}
+    status_course=st.selectbox("選擇要變更狀態的課程",list(course_map),key="course_status_select")
+    with st.form("course_active_status"):
+        status_active=st.checkbox("啟用課程",value=bool(course_map[status_course].get("active",True)),
+            key=f'course_active_{course_map[status_course]["id"]}')
+        save_course_status=st.form_submit_button("儲存啟用／停用狀態",type="primary")
+    if save_course_status:
+        try:
+            admin.table("course_catalog").update({"active":status_active}).eq("id",course_map[status_course]["id"]).execute()
+            st.success(f'課程已{("啟用" if status_active else "停用")}：{status_course}')
+            st.rerun()
+        except Exception as exc:
+            st.error(f"狀態修改失敗：{exc}")
+    course_labels={label:item["id"] for label,item in course_map.items()}
     with st.form("delete_course"):
         selected_course=st.selectbox("選擇要刪除的課程",list(course_labels))
         confirm_delete=st.checkbox("我確認刪除此課程名稱；既有會員購買紀錄仍會保留。")
