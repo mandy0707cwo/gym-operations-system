@@ -862,56 +862,58 @@ def course_admin_page(me):
     if admin is None:
         st.error("尚未設定 SUPABASE_SECRET_KEY。")
         return
-    with st.form("add_course",clear_on_submit=True):
-        c1,c2,c3=st.columns(3)
-        course_name=c1.text_input("新增課程名稱").strip()
-        course_type=c2.text_input("課程種類").strip()
-        course_hours=c3.number_input("每堂課時數",0.25,24.0,1.0,step=0.25,format="%.2f")
-        add_course=st.form_submit_button("新增課程")
-    if add_course:
-        if not course_name or not course_type:
-            st.error("課程名稱與課程種類不可空白。")
-        else:
-            try:
-                admin.table("course_catalog").insert({"course_name":course_name,"course_type":course_type,"session_hours":course_hours,"active":True}).execute()
-                st.success(f"已新增課程：{course_name}")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"新增失敗，請確認課程名稱是否重複：{exc}")
     courses=rows(admin.table("course_catalog").select("id,course_name,course_type,session_hours,active,created_at").order("course_name"))
-    if not courses:
-        st.info("目前尚未建立課程名稱。")
-        return
-    course_display=[{**x,"active":"啟用" if x.get("active",True) else "停用"} for x in courses]
-    show_table(course_display,["course_type","course_name","session_hours","active","created_at"])
     course_map={f'{x.get("course_type") or "未分類"}｜{x["course_name"]}':x for x in courses}
-    status_course=st.selectbox("選擇要變更狀態的課程",list(course_map),key="course_status_select")
-    with st.form("course_active_status"):
-        status_active=st.checkbox("啟用課程",value=bool(course_map[status_course].get("active",True)),
-            key=f'course_active_{course_map[status_course]["id"]}')
-        save_course_status=st.form_submit_button("儲存啟用／停用狀態",type="primary")
-    if save_course_status:
-        try:
-            admin.table("course_catalog").update({"active":status_active}).eq("id",course_map[status_course]["id"]).execute()
-            st.success(f'課程已{("啟用" if status_active else "停用")}：{status_course}')
-            st.rerun()
-        except Exception as exc:
-            st.error(f"狀態修改失敗：{exc}")
-    course_labels={label:item["id"] for label,item in course_map.items()}
-    with st.form("delete_course"):
-        selected_course=st.selectbox("選擇要刪除的課程",list(course_labels))
-        confirm_delete=st.checkbox("我確認刪除此課程名稱；既有會員購買紀錄仍會保留。")
-        delete_course=st.form_submit_button("刪除課程名稱")
-    if delete_course:
-        if not confirm_delete:
-            st.error("請先勾選刪除確認。")
+    add_tab,delete_tab,edit_tab=st.tabs(["新增","刪除","修改"])
+    with add_tab:
+        with st.form("add_course",clear_on_submit=True):
+            c1,c2,c3=st.columns(3)
+            course_name=c1.text_input("新增課程名稱").strip()
+            course_type=c2.text_input("課程種類").strip()
+            course_hours=c3.number_input("每堂課時數",0.25,24.0,1.0,step=0.25,format="%.2f")
+            add_course=st.form_submit_button("新增課程",type="primary")
+        if add_course:
+            if not course_name or not course_type: st.error("課程名稱與課程種類不可空白。")
+            else:
+                try:
+                    admin.table("course_catalog").insert({"course_name":course_name,"course_type":course_type,"session_hours":course_hours,"active":True}).execute()
+                    st.success(f"已新增課程：{course_name}"); st.rerun()
+                except Exception as exc: st.error(f"新增失敗，請確認課程名稱是否重複：{exc}")
+    with delete_tab:
+        if not courses: st.info("目前尚未建立課程名稱。")
         else:
-            try:
-                admin.table("course_catalog").delete().eq("id",course_labels[selected_course]).execute()
-                st.success(f"已刪除課程名稱：{selected_course}")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"刪除失敗：{exc}")
+            with st.form("delete_course"):
+                selected_course=st.selectbox("選擇要刪除的課程",list(course_map))
+                confirm_delete=st.checkbox("我確認刪除此課程名稱；既有會員購買紀錄仍會保留。")
+                delete_course=st.form_submit_button("刪除課程名稱",type="primary")
+            if delete_course:
+                if not confirm_delete: st.error("請先勾選刪除確認。")
+                else:
+                    try:
+                        admin.table("course_catalog").delete().eq("id",course_map[selected_course]["id"]).execute()
+                        st.success(f"已刪除課程名稱：{selected_course}"); st.rerun()
+                    except Exception as exc: st.error(f"刪除失敗：{exc}")
+    with edit_tab:
+        if not courses: st.info("目前尚未建立課程名稱。")
+        else:
+            course_display=[{**x,"active":"啟用" if x.get("active",True) else "停用"} for x in courses]
+            show_table(course_display,["course_type","course_name","session_hours","active","created_at"])
+            selected_course=st.selectbox("選擇要修改的課程",list(course_map),key="course_edit_select")
+            current=course_map[selected_course]
+            with st.form("edit_course"):
+                c1,c2,c3=st.columns(3)
+                edited_name=c1.text_input("課程名稱",current["course_name"]).strip()
+                edited_type=c2.text_input("課程種類",current.get("course_type") or "").strip()
+                edited_hours=c3.number_input("每堂課時數",0.25,24.0,float(current.get("session_hours") or 1),step=0.25,format="%.2f")
+                edited_active=st.checkbox("啟用課程",value=bool(current.get("active",True)))
+                save_course=st.form_submit_button("儲存修改",type="primary")
+            if save_course:
+                if not edited_name or not edited_type: st.error("課程名稱與課程種類不可空白。")
+                else:
+                    try:
+                        admin.table("course_catalog").update({"course_name":edited_name,"course_type":edited_type,"session_hours":edited_hours,"active":edited_active}).eq("id",current["id"]).execute()
+                        st.success("課程資料已修改；既有購買紀錄仍保留原成交內容。"); st.rerun()
+                    except Exception as exc: st.error(f"修改失敗，請確認課程名稱是否重複：{exc}")
 
 def operation_item_admin_page(me, item_type, title):
     st.subheader(title)
@@ -922,74 +924,66 @@ def operation_item_admin_page(me, item_type, title):
     if admin is None:
         st.error("尚未設定 SUPABASE_SECRET_KEY。")
         return
-    with st.form(f"add_operation_item_{item_type}",clear_on_submit=True):
-        c1,c2,c3=st.columns(3)
-        new_name=c1.text_input("新增項目名稱").strip()
-        new_hours=c2.number_input("每堂課時數",0.25,24.0,1.0,step=0.25)
-        new_amount=c3.number_input("預設金額（未稅）",0.0,1000000000.0,0.0,step=100.0,format="%.0f")
-        new_detail=st.text_input("內容").strip() if item_type=="trial" else ""
-        add_item=st.form_submit_button("新增項目")
-    if add_item:
-        if not new_name or (item_type=="trial" and not new_detail):
-            st.error("體驗項目與內容不可空白。" if item_type=="trial" else "項目名稱不可空白。")
-        else:
-            try:
-                admin.table("operation_item_catalog").insert({"item_type":item_type,"item_name":new_name,"detail_content":new_detail or None,"session_hours":new_hours,"default_amount":new_amount,"active":True}).execute()
-                st.success(f"已新增：{new_name}"); st.rerun()
-            except Exception as exc:
-                st.error(f"新增失敗，請確認體驗項目與內容的組合是否重複：{exc}" if item_type=="trial" else f"新增失敗，請確認名稱是否重複：{exc}")
     items=rows(admin.table("operation_item_catalog").select("id,item_name,detail_content,session_hours,default_amount,active,created_at").eq("item_type",item_type).order("item_name"))
-    if not items:
-        st.info("目前尚未建立項目。")
-        return
-    admin_columns=["item_name","detail_content","session_hours","default_amount","active","created_at"] if item_type=="trial" else ["item_name","session_hours","default_amount","created_at"]
-    display_items=[{**x,"active":"啟用" if x.get("active",True) else "停用"} for x in items]
-    show_table(display_items,admin_columns)
     item_map={
         (f'{x["item_name"]}｜{x.get("detail_content") or ""}' if item_type=="trial" else x["item_name"]):x
         for x in items
     }
-    selected=st.selectbox("選擇要修改的項目",list(item_map),key=f"edit_select_{item_type}")
-    if item_type=="trial":
-        with st.form("trial_item_active_status"):
-            trial_active=st.checkbox("啟用體驗項目",value=bool(item_map[selected].get("active",True)),key=f'trial_active_{item_map[selected]["id"]}')
-            save_trial_status=st.form_submit_button("儲存啟用／停用狀態",type="primary")
-        if save_trial_status:
-            try:
-                admin.table("operation_item_catalog").update({"active":trial_active}).eq("id",item_map[selected]["id"]).execute()
-                st.success(f'體驗項目已{("啟用" if trial_active else "停用")}：{selected}')
-                st.rerun()
-            except Exception as exc:
-                st.error(f"狀態修改失敗：{exc}")
-    with st.form(f"edit_operation_item_{item_type}"):
-        edited_name=st.text_input("修改後名稱",value=item_map[selected]["item_name"]).strip()
-        edited_detail=st.text_input("修改後內容",value=item_map[selected].get("detail_content") or "").strip() if item_type=="trial" else ""
-        edited_hours=st.number_input("修改後每堂課時數",0.25,24.0,float(item_map[selected].get("session_hours") or 1),step=0.25)
-        edited_amount=st.number_input("修改後預設金額（未稅）",0.0,1000000000.0,float(item_map[selected].get("default_amount") or 0),step=100.0,format="%.0f")
-        update_item=st.form_submit_button("儲存修改")
-    if update_item:
-        if not edited_name or (item_type=="trial" and not edited_detail):
-            st.error("體驗項目與內容不可空白。" if item_type=="trial" else "項目名稱不可空白。")
+    add_tab,delete_tab,edit_tab=st.tabs(["新增","刪除","修改"])
+    with add_tab:
+        with st.form(f"add_operation_item_{item_type}",clear_on_submit=True):
+            c1,c2,c3=st.columns(3)
+            new_name=c1.text_input("新增項目名稱").strip()
+            new_hours=c2.number_input("每堂課時數",0.25,24.0,1.0,step=0.25)
+            new_amount=c3.number_input("預設金額（未稅）",0.0,1000000000.0,0.0,step=100.0,format="%.0f")
+            new_detail=st.text_input("內容").strip() if item_type=="trial" else ""
+            add_item=st.form_submit_button("新增項目",type="primary")
+        if add_item:
+            if not new_name or (item_type=="trial" and not new_detail): st.error("體驗項目與內容不可空白。" if item_type=="trial" else "項目名稱不可空白。")
+            else:
+                try:
+                    admin.table("operation_item_catalog").insert({"item_type":item_type,"item_name":new_name,"detail_content":new_detail or None,"session_hours":new_hours,"default_amount":new_amount,"active":True}).execute()
+                    st.success(f"已新增：{new_name}"); st.rerun()
+                except Exception as exc: st.error(f"新增失敗，請確認體驗項目與內容的組合是否重複：{exc}" if item_type=="trial" else f"新增失敗，請確認名稱是否重複：{exc}")
+    with delete_tab:
+        if not items: st.info("目前尚未建立項目。")
         else:
-            try:
-                admin.table("operation_item_catalog").update({"item_name":edited_name,"detail_content":edited_detail or None,"session_hours":edited_hours,"default_amount":edited_amount}).eq("id",item_map[selected]["id"]).execute()
-                st.success("項目已修改。既有歷史紀錄仍保留原內容。")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"修改失敗，請確認體驗項目與內容的組合是否重複：{exc}" if item_type=="trial" else f"修改失敗，請確認名稱是否重複：{exc}")
-    with st.form(f"delete_operation_item_{item_type}"):
-        delete_name=st.selectbox("選擇要刪除的項目",list(item_map),key=f"delete_select_{item_type}")
-        confirm=st.checkbox("我確認刪除此下拉選項；既有歷史紀錄不會被刪除。")
-        delete_item=st.form_submit_button("刪除項目")
-    if delete_item:
-        if not confirm:
-            st.error("請先勾選確認。")
+            with st.form(f"delete_operation_item_{item_type}"):
+                delete_name=st.selectbox("選擇要刪除的項目",list(item_map),key=f"delete_select_{item_type}")
+                confirm=st.checkbox("我確認刪除此下拉選項；既有歷史紀錄不會被刪除。")
+                delete_item=st.form_submit_button("刪除項目",type="primary")
+            if delete_item:
+                if not confirm: st.error("請先勾選確認。")
+                else:
+                    try:
+                        admin.table("operation_item_catalog").delete().eq("id",item_map[delete_name]["id"]).execute()
+                        st.success(f"已刪除選項：{delete_name}"); st.rerun()
+                    except Exception as exc: st.error(f"刪除失敗：{exc}")
+    with edit_tab:
+        if not items: st.info("目前尚未建立項目。")
         else:
-            try:
-                admin.table("operation_item_catalog").delete().eq("id",item_map[delete_name]["id"]).execute()
-                st.success(f"已刪除選項：{delete_name}"); st.rerun()
-            except Exception as exc:
-                st.error(f"刪除失敗：{exc}")
+            admin_columns=["item_name","detail_content","session_hours","default_amount","active","created_at"] if item_type=="trial" else ["item_name","session_hours","default_amount","created_at"]
+            display_items=[{**x,"active":"啟用" if x.get("active",True) else "停用"} for x in items]
+            show_table(display_items,admin_columns)
+            selected=st.selectbox("選擇要修改的項目",list(item_map),key=f"edit_select_{item_type}")
+            current=item_map[selected]
+            with st.form(f"edit_operation_item_{item_type}"):
+                edited_name=st.text_input("修改後名稱",value=current["item_name"]).strip()
+                edited_detail=st.text_input("修改後內容",value=current.get("detail_content") or "").strip() if item_type=="trial" else ""
+                c1,c2=st.columns(2)
+                edited_hours=c1.number_input("修改後每堂課時數",0.25,24.0,float(current.get("session_hours") or 1),step=0.25)
+                edited_amount=c2.number_input("修改後預設金額（未稅）",0.0,1000000000.0,float(current.get("default_amount") or 0),step=100.0,format="%.0f")
+                edited_active=st.checkbox("啟用體驗項目",value=bool(current.get("active",True))) if item_type=="trial" else True
+                update_item=st.form_submit_button("儲存修改",type="primary")
+            if update_item:
+                if not edited_name or (item_type=="trial" and not edited_detail): st.error("體驗項目與內容不可空白。" if item_type=="trial" else "項目名稱不可空白。")
+                else:
+                    try:
+                        payload={"item_name":edited_name,"detail_content":edited_detail or None,"session_hours":edited_hours,"default_amount":edited_amount}
+                        if item_type=="trial": payload["active"]=edited_active
+                        admin.table("operation_item_catalog").update(payload).eq("id",current["id"]).execute()
+                        st.success("項目已修改。既有歷史紀錄仍保留原內容。"); st.rerun()
+                    except Exception as exc: st.error(f"修改失敗，請確認體驗項目與內容的組合是否重複：{exc}" if item_type=="trial" else f"修改失敗，請確認名稱是否重複：{exc}")
 
 def project_admin_page(me):
     st.subheader("專案管理")
