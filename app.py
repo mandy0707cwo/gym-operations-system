@@ -438,22 +438,26 @@ def usage_query_tabs(me):
         summary["amount"]+=float(payment["amount"])
         summary["count"]+=1
 
-    tab1,tab2,tab3,tab4=st.tabs(["會員課程查詢","銷課統計","一個月內到期","剩餘三堂（含）"])
+    tab1,tab2,tab3,tab4=st.tabs(["會員課程查詢","執行時數","一個月內到期","剩餘三堂（含）"])
     with tab1:
         can_filter_coach=me["role"] in ("shared_coach","manager","admin")
         if can_filter_coach:
-            filter_col1,filter_col2=st.columns(2)
+            filter_col1,filter_col2,filter_col3=st.columns(3)
             selected_coach=filter_col1.selectbox("成交教練",["全部教練"]+list(coaches),key="member_course_coach_filter")
             member_keyword=filter_col2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="member_course_name_filter").strip()
+            course_end_filter=filter_col3.selectbox("課程結束",["全部","未結束","已結束"],key="member_course_end_filter")
             filtered_balances=balances if selected_coach=="全部教練" else [x for x in balances if x.get("coach_id")==coaches[selected_coach]]
         else:
-            filter_col1,filter_col2=st.columns(2)
+            filter_col1,filter_col2,filter_col3=st.columns(3)
             filter_col1.caption(f'成交教練：{me["display_name"]}')
             member_keyword=filter_col2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="member_course_name_filter").strip()
+            course_end_filter=filter_col3.selectbox("課程結束",["全部","未結束","已結束"],key="member_course_end_filter")
             filtered_balances=[x for x in balances if x.get("coach_id")==me["id"]]
         if member_keyword:
             normalized_keyword=member_keyword.casefold()
             filtered_balances=[x for x in filtered_balances if normalized_keyword in str(x.get("member_name") or "").casefold()]
+        if course_end_filter=="已結束": filtered_balances=[x for x in filtered_balances if float(x.get("remaining_sessions") or 0)<=0]
+        elif course_end_filter=="未結束": filtered_balances=[x for x in filtered_balances if float(x.get("remaining_sessions") or 0)>0]
         detail=[]
         for item in filtered_balances:
             purchase=purchase_map.get(item["purchase_id"],{})
@@ -490,7 +494,7 @@ def usage_query_tabs(me):
         if query_start>query_end:
             st.error("開始日期不可晚於結束日期。")
         else:
-            usages=rows(client().table("session_usages").select("usage_date,coach_id,deducted_amount").gte("usage_date",str(query_start)).lte("usage_date",str(query_end)))
+            usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,deducted_amount").gte("usage_date",str(query_start)).lte("usage_date",str(query_end)).order("usage_date",desc=True))
             usages=[x for x in usages if x.get("coach_id") in operational_ids]
             trial_hours=rows(client().table("trial_items").select("coach_id,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
             single_hours=rows(client().table("single_sales").select("coach_id,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
@@ -507,36 +511,51 @@ def usage_query_tabs(me):
                 single_hours=[x for x in single_hours if x.get("coach_id")==usage_coach_id]
                 event_hours=[x for x in event_hours if x.get("coach_id")==usage_coach_id]
                 project_hours=[x for x in project_hours if x.get("coach_id")==usage_coach_id]
-            total_sessions=len(usages)
+            balance_by_purchase={x["purchase_id"]:x for x in balances}
+            usage_detail=[]
+            total_usage_hours=0.0
+            for usage in usages:
+                purchase=purchase_map.get(usage["purchase_id"],{})
+                session_hours=float(purchase.get("session_hours") or 1)
+                total_usage_hours+=session_hours
+                usage_detail.append({"日期":usage["usage_date"],"教練":next((name for name,cid in coaches.items() if cid==usage["coach_id"]),"未知"),
+                    "會員名稱":balance_by_purchase.get(usage["purchase_id"],{}).get("member_name","未知"),
+                    "銷課時數":session_hours,"銷課金額":float(usage["deducted_amount"])})
             total_amount=sum(float(x["deducted_amount"]) for x in usages)
-            average=total_amount/total_sessions if total_sessions else 0
-            total_execution_hours=(total_sessions+sum(float(x["hours"]) for x in trial_hours)
+            total_daily_hours=(sum(float(x["hours"]) for x in trial_hours)
                 +sum(float(x["hours"]) for x in single_hours)
-                +sum(float(x["hours"])-float(x.get("deducted_hours") or 0) for x in event_hours)
+                +sum((float(x["hours"])-float(x.get("deducted_hours") or 0))/2 for x in event_hours)
                 +sum(float(x.get("item_hours") or 0)*float(x["quantity"]) for x in project_hours))
-            a,b,c,d=st.columns(4)
-            a.metric("總銷課堂數",f"{total_sessions:,}")
-            b.metric("總銷課金額",f"$ {total_amount:,.0f}")
-            c.metric("平均單價",f"$ {average:,.0f}")
-            d.metric("總執行時數",f"{total_execution_hours:,.2f} 小時")
-            by_coach=[]
-            for coach_name,coach_id in coaches.items():
-                coach_rows=[x for x in usages if x["coach_id"]==coach_id]
-                coach_trial_hours=sum(float(x["hours"]) for x in trial_hours if x["coach_id"]==coach_id)
-                coach_single_hours=sum(float(x["hours"]) for x in single_hours if x["coach_id"]==coach_id)
-                coach_event_hours=sum(float(x["hours"])-float(x.get("deducted_hours") or 0) for x in event_hours if x["coach_id"]==coach_id)
-                coach_project_hours=sum(float(x.get("item_hours") or 0)*float(x["quantity"]) for x in project_hours if x["coach_id"]==coach_id)
-                coach_execution_hours=len(coach_rows)+coach_trial_hours+coach_single_hours+coach_event_hours+coach_project_hours
-                if coach_rows or coach_execution_hours:
-                    coach_amount=sum(float(x["deducted_amount"]) for x in coach_rows)
-                    by_coach.append({"教練":coach_name,"銷課堂數":len(coach_rows),"銷課金額":coach_amount,
-                                     "平均單價":coach_amount/len(coach_rows) if coach_rows else 0,
-                                     "總執行時數":coach_execution_hours})
-            if by_coach:
-                st.dataframe(pd.DataFrame(by_coach),hide_index=True,use_container_width=True,
-                    column_config={"銷課金額":st.column_config.NumberColumn(format="$ %.0f"),
-                                   "平均單價":st.column_config.NumberColumn(format="$ %.0f"),
-                                   "總執行時數":st.column_config.NumberColumn(format="%.2f 小時")})
+            total_execution_hours=total_usage_hours+total_daily_hours
+            a,b,c=st.columns(3)
+            a.metric("銷課時數",f"{total_usage_hours:,.2f} 小時")
+            b.metric("每日營運時數",f"{total_daily_hours:,.2f} 小時")
+            c.metric("總執行時數",f"{total_execution_hours:,.2f} 小時")
+            execution_tabs=st.tabs(["銷課時數","每日營運時數"])
+            with execution_tabs[0]:
+                if usage_detail:
+                    usage_detail_display=pd.DataFrame(usage_detail,columns=["日期","教練","會員名稱","銷課時數","銷課金額"])
+                    usage_detail_display=pd.concat([usage_detail_display,pd.DataFrame([{
+                        "日期":"合計","教練":"","會員名稱":"","銷課時數":total_usage_hours,"銷課金額":total_amount}])],ignore_index=True)
+                    st.dataframe(usage_detail_display,hide_index=True,use_container_width=True,
+                        column_config={"銷課時數":st.column_config.NumberColumn(format="%.2f 小時"),"銷課金額":st.column_config.NumberColumn(format="$ %.0f")})
+                else: st.info("查詢期間沒有銷課時數資料。")
+            with execution_tabs[1]:
+                daily_keys=sorted({(str(x["entry_date"]),x["coach_id"]) for group in (trial_hours,single_hours,event_hours,project_hours) for x in group},reverse=True)
+                daily_rows=[]
+                coach_name_by_id={cid:name for name,cid in coaches.items()}
+                for entry_date,coach_id in daily_keys:
+                    trial_total=sum(float(x["hours"]) for x in trial_hours if str(x["entry_date"])==entry_date and x["coach_id"]==coach_id)
+                    single_total=sum(float(x["hours"]) for x in single_hours if str(x["entry_date"])==entry_date and x["coach_id"]==coach_id)
+                    project_total=sum(float(x.get("item_hours") or 0)*float(x["quantity"]) for x in project_hours if str(x["entry_date"])==entry_date and x["coach_id"]==coach_id)
+                    event_total=sum((float(x["hours"])-float(x.get("deducted_hours") or 0))/2 for x in event_hours if str(x["entry_date"])==entry_date and x["coach_id"]==coach_id)
+                    daily_rows.append({"日期":entry_date,"教練":coach_name_by_id.get(coach_id,"未知"),"體驗項目時數":trial_total,
+                        "單堂銷售時數":single_total,"專案時數":project_total,"活動支援時數（扣除後÷2）":event_total,
+                        "每日營運時數合計":trial_total+single_total+project_total+event_total})
+                if daily_rows:
+                    daily_hour_columns={name:st.column_config.NumberColumn(format="%.2f 小時") for name in ["體驗項目時數","單堂銷售時數","專案時數","活動支援時數（扣除後÷2）","每日營運時數合計"]}
+                    st.dataframe(pd.DataFrame(daily_rows),hide_index=True,use_container_width=True,column_config=daily_hour_columns)
+                else: st.info("查詢期間沒有每日營運時數資料。")
 
     with tab3:
         today=date.today()
