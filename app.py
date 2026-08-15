@@ -1352,13 +1352,7 @@ def member_course_io_page(me):
 
     st.subheader("匯出資料報表")
     purchases=rows(admin.table("purchases").select("*").order("purchase_date"))
-    purchases=sorted(purchases,key=lambda x:(str(x["purchase_date"]),str(x.get("created_at") or ""),str(x["id"])))
-    daily_purchase_sequences={}
-    purchase_code_map={}
-    for purchase in purchases:
-        purchase_date_key=str(purchase["purchase_date"])
-        daily_purchase_sequences[purchase_date_key]=daily_purchase_sequences.get(purchase_date_key,0)+1
-        purchase_code_map[purchase["id"]]=f'{purchase_date_key.replace("-","")}-{daily_purchase_sequences[purchase_date_key]:03d}'
+    purchase_code_map=_build_purchase_code_map(purchases)
     payments=rows(admin.table("purchase_payments").select("purchase_id,amount,paid_date"))
     paid_map={}
     paid_date_map={}
@@ -1713,6 +1707,16 @@ def _tax_display_amount(amount, tax_mode):
     if tax_mode=="未稅": value=value/Decimal("1.05")
     return int(value.quantize(Decimal("1"),rounding=ROUND_HALF_UP))
 
+def _build_purchase_code_map(purchases):
+    ordered=sorted(purchases,key=lambda x:(str(x.get("purchase_date") or ""),str(x.get("created_at") or ""),str(x["id"])))
+    daily_sequences={}
+    code_map={}
+    for purchase in ordered:
+        purchase_date_key=str(purchase.get("purchase_date") or "")
+        daily_sequences[purchase_date_key]=daily_sequences.get(purchase_date_key,0)+1
+        code_map[purchase["id"]]=f'{purchase_date_key.replace("-","")}-{daily_sequences[purchase_date_key]:03d}'
+    return code_map
+
 def financial_report_page(me):
     st.header("財務報表")
     if me["role"]!="admin":
@@ -1749,6 +1753,8 @@ def financial_report_page(me):
         usage_purchase_ids=list({x["purchase_id"] for x in usages})
         usage_purchases=rows(client().table("purchases").select("id,member_id,course_name,total_sessions").in_("id",usage_purchase_ids)) if usage_purchase_ids else []
         usage_purchase_map={x["id"]:x for x in usage_purchases}
+        all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at").order("purchase_date"))
+        financial_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
         if selected_member_id: usages=[x for x in usages if usage_purchase_map.get(x["purchase_id"],{}).get("member_id")==selected_member_id]
         sales_rows=[]
         sales_amount_column="銷課金額"
@@ -1759,7 +1765,7 @@ def financial_report_page(me):
             session_display=f"{session_seq}/{total_sessions}" if total_sessions else str(session_seq)
             course_status="已完成" if total_sessions and session_seq>=total_sessions else "進行中"
             sales_rows.append({"日期":usage["usage_date"],"會員名稱":member_name_map.get(purchase.get("member_id"),""),
-                sales_amount_column:_tax_display_amount(usage["deducted_amount"],sales_tax_mode),"購買_ID":usage["purchase_id"],
+                sales_amount_column:_tax_display_amount(usage["deducted_amount"],sales_tax_mode),"購買_ID":financial_purchase_code_map.get(usage["purchase_id"],""),
                 "課程項目":purchase.get("course_name","") ,"堂數":session_display,"課程狀態":course_status})
         sales_df=pd.DataFrame(sales_rows,columns=["日期","會員名稱","銷課金額","購買_ID","課程項目","堂數","課程狀態"])
         sales_subtotal_df=pd.DataFrame([{
