@@ -147,20 +147,22 @@ def daily_page(me):
 
     def standard_entry(tab, table_name, form_key, content_label, catalog_type, member_label=None):
         with tab:
-            catalog=rows(client().table("operation_item_catalog").select("item_name,detail_content,session_hours,default_amount").eq("item_type",catalog_type).order("item_name"))
-            item_names=[x["item_name"] for x in catalog]
-            item_hours={x["item_name"]:float(x.get("session_hours") or 1) for x in catalog}
-            item_amounts={x["item_name"]:float(x.get("default_amount") or 0) for x in catalog}
-            item_details={x["item_name"]:str(x.get("detail_content") or "") for x in catalog}
-            if not item_names:
+            catalog=rows(client().table("operation_item_catalog").select("id,item_name,detail_content,session_hours,default_amount").eq("item_type",catalog_type).order("item_name"))
+            option_map={
+                (f'{x["item_name"]}｜{x.get("detail_content") or ""}' if catalog_type=="trial" else x["item_name"]):x
+                for x in catalog
+            }
+            if not option_map:
                 st.warning(f"尚未建立{content_label}選項，請由系統管理員到「資料管理」新增。")
                 return
             revision_key=f"{form_key}_revision"
             revision=st.session_state.get(revision_key,0)
-            content=st.selectbox(content_label,item_names,index=None,placeholder=f"請選擇{content_label}",key=f"{form_key}_content_{revision}")
-            default_hours=item_hours.get(content) if content else None
-            default_amount=item_amounts.get(content) if content else None
-            default_detail=item_details.get(content) if content else ""
+            selected_option=st.selectbox(content_label,list(option_map),index=None,placeholder=f"請選擇{content_label}",key=f"{form_key}_content_{revision}")
+            selected_catalog=option_map.get(selected_option) if selected_option else None
+            content=selected_catalog.get("item_name") if selected_catalog else None
+            default_hours=float(selected_catalog.get("session_hours") or 1) if selected_catalog else None
+            default_amount=float(selected_catalog.get("default_amount") or 0) if selected_catalog else None
+            default_detail=str(selected_catalog.get("detail_content") or "") if selected_catalog else ""
             with st.form(f"{form_key}_{revision}",clear_on_submit=True,enter_to_submit=False):
                 c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today()); coach_name=c2.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練")
                 member_name=st.text_input(member_label) if member_label else None
@@ -933,17 +935,20 @@ def operation_item_admin_page(me, item_type, title):
                 admin.table("operation_item_catalog").insert({"item_type":item_type,"item_name":new_name,"detail_content":new_detail or None,"session_hours":new_hours,"default_amount":new_amount}).execute()
                 st.success(f"已新增：{new_name}"); st.rerun()
             except Exception as exc:
-                st.error(f"新增失敗，請確認名稱是否重複：{exc}")
+                st.error(f"新增失敗，請確認體驗項目與內容的組合是否重複：{exc}" if item_type=="trial" else f"新增失敗，請確認名稱是否重複：{exc}")
     items=rows(admin.table("operation_item_catalog").select("id,item_name,detail_content,session_hours,default_amount,created_at").eq("item_type",item_type).order("item_name"))
     if not items:
         st.info("目前尚未建立項目。")
         return
     admin_columns=["item_name","detail_content","session_hours","default_amount","created_at"] if item_type=="trial" else ["item_name","session_hours","default_amount","created_at"]
     show_table(items,admin_columns)
-    item_map={x["item_name"]:x for x in items}
+    item_map={
+        (f'{x["item_name"]}｜{x.get("detail_content") or ""}' if item_type=="trial" else x["item_name"]):x
+        for x in items
+    }
     selected=st.selectbox("選擇要修改的項目",list(item_map),key=f"edit_select_{item_type}")
     with st.form(f"edit_operation_item_{item_type}"):
-        edited_name=st.text_input("修改後名稱",value=selected).strip()
+        edited_name=st.text_input("修改後名稱",value=item_map[selected]["item_name"]).strip()
         edited_detail=st.text_input("修改後內容",value=item_map[selected].get("detail_content") or "").strip() if item_type=="trial" else ""
         edited_hours=st.number_input("修改後每堂課時數",0.25,24.0,float(item_map[selected].get("session_hours") or 1),step=0.25)
         edited_amount=st.number_input("修改後預設金額（未稅）",0.0,1000000000.0,float(item_map[selected].get("default_amount") or 0),step=100.0,format="%.0f")
@@ -957,7 +962,7 @@ def operation_item_admin_page(me, item_type, title):
                 st.success("項目已修改。既有歷史紀錄仍保留原內容。")
                 st.rerun()
             except Exception as exc:
-                st.error(f"修改失敗，請確認名稱是否重複：{exc}")
+                st.error(f"修改失敗，請確認體驗項目與內容的組合是否重複：{exc}" if item_type=="trial" else f"修改失敗，請確認名稱是否重複：{exc}")
     with st.form(f"delete_operation_item_{item_type}"):
         delete_name=st.selectbox("選擇要刪除的項目",list(item_map),key=f"delete_select_{item_type}")
         confirm=st.checkbox("我確認刪除此下拉選項；既有歷史紀錄不會被刪除。")
