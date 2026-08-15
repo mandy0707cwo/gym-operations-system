@@ -1744,19 +1744,20 @@ def financial_report_page(me):
             sales_tax_mode=st.radio("銷課金額顯示方式",["未稅","含稅"],horizontal=True,key="finance_sales_tax_mode")
 
         # 銷課總表依銷課日期查詢，教練條件採授課教練。
-        usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,deducted_amount").gte("usage_date",str(start)).lte("usage_date",str(end)).order("usage_date",desc=True))
+        usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,session_seq,deducted_amount").gte("usage_date",str(start)).lte("usage_date",str(end)).order("usage_date",desc=True))
         if selected_coach_id: usages=[x for x in usages if x.get("coach_id")==selected_coach_id]
         usage_purchase_ids=list({x["purchase_id"] for x in usages})
         usage_purchases=rows(client().table("purchases").select("id,member_id,course_name").in_("id",usage_purchase_ids)) if usage_purchase_ids else []
         usage_purchase_map={x["id"]:x for x in usage_purchases}
         if selected_member_id: usages=[x for x in usages if usage_purchase_map.get(x["purchase_id"],{}).get("member_id")==selected_member_id]
         sales_rows=[]
-        sales_amount_column=f"{sales_tax_mode}金額"
+        sales_amount_column="銷課金額"
         for usage in usages:
             purchase=usage_purchase_map.get(usage["purchase_id"],{})
             sales_rows.append({"日期":usage["usage_date"],"會員名稱":member_name_map.get(purchase.get("member_id"),""),
-                sales_amount_column:_tax_display_amount(usage["deducted_amount"],sales_tax_mode),"課程項目":purchase.get("course_name","")})
-        sales_df=pd.DataFrame(sales_rows,columns=["日期","會員名稱",sales_amount_column,"課程項目"])
+                sales_amount_column:_tax_display_amount(usage["deducted_amount"],sales_tax_mode),"購買_ID":usage["purchase_id"],
+                "課程項目":purchase.get("course_name","") ,"堂數":int(usage["session_seq"])})
+        sales_df=pd.DataFrame(sales_rows,columns=["日期","會員名稱","銷課金額","購買_ID","課程項目","堂數"])
         sales_subtotal_df=pd.DataFrame([{
             "項目":"金額小計",
             sales_amount_column:int(sales_df[sales_amount_column].sum()) if not sales_df.empty else 0
@@ -1825,7 +1826,7 @@ def financial_report_page(me):
             st.markdown("**金額小計**")
             st.dataframe(center_member_report_columns(balance_subtotal_df,["實際預收金額"]),hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[2]:
-            st.caption(f"日期依銷課日期；教練篩選依授課教練。目前顯示：{sales_tax_mode}金額。未稅金額按含稅金額 ÷ 1.05 四捨五入至整數。")
+            st.caption(f"日期依銷課日期；堂數顯示該會員課程的銷課堂次序號（session_seq）；教練篩選依授課教練。目前銷課金額顯示：{sales_tax_mode}。未稅金額按含稅金額 ÷ 1.05 四捨五入至整數。")
             st.dataframe(sales_df,hide_index=True,use_container_width=True,column_config=money_config)
             st.markdown("**金額小計**")
             st.dataframe(sales_subtotal_df,hide_index=True,use_container_width=True,column_config=money_config)
