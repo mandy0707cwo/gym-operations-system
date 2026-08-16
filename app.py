@@ -33,6 +33,8 @@ LABELS = {
 }
 ROLE_LABELS = {"coach": "教練", "shared_coach": "共用教練帳號", "manager": "主管", "admin": "系統管理員"}
 USERNAME_RE = re.compile(r"^[a-z0-9_]{3,30}$")
+TALK_BONUS_RATE = Decimal("0.03")
+COMPLETION_BONUS_RATE = Decimal("0.04")
 
 def username_email(username):
     return f"{username.lower()}@gym-users.example.com"
@@ -2076,10 +2078,10 @@ def financial_report_page(me):
         st.markdown(f"- 報表期間：{month_start} 至 {month_end}")
 
         monthly_coaches=coach_options(); monthly_coach_name={v:k for k,v in monthly_coaches.items()}
-        monthly_usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,deducted_amount")
+        monthly_usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,session_seq,deducted_amount")
             .gte("usage_date",str(month_start)).lte("usage_date",str(month_end)).order("usage_date"))
         monthly_purchase_ids=list({x["purchase_id"] for x in monthly_usages})
-        monthly_purchases=rows(client().table("purchases").select("id,member_id,course_name,session_hours").in_("id",monthly_purchase_ids)) if monthly_purchase_ids else []
+        monthly_purchases=rows(client().table("purchases").select("id,member_id,course_name,session_hours,total_sessions,total_amount").in_("id",monthly_purchase_ids)) if monthly_purchase_ids else []
         monthly_purchase_map={x["id"]:x for x in monthly_purchases}
         monthly_member_ids=list({x.get("member_id") for x in monthly_purchases if x.get("member_id")})
         monthly_members=rows(client().table("members").select("id,member_name").in_("id",monthly_member_ids)) if monthly_member_ids else []
@@ -2118,14 +2120,49 @@ def financial_report_page(me):
         monthly_hours_df=pd.DataFrame(coach_hour_rows)
         monthly_revenue_df=pd.DataFrame(coach_revenue_rows)
 
-        monthly_tabs=st.tabs(["每月銷課","每月已儲值專案扣款","每月教練時數","每月教練營收"])
-        monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額（未稅）","扣款金額（未稅）","體驗項目金額","單堂銷售金額","專案（未稅）","銷課（未稅）","金額總計（未稅）"]}
+        talk_purchases=rows(client().table("purchases").select("id,coach_id,total_amount,purchase_date")
+            .gte("purchase_date",str(month_start)).lte("purchase_date",str(month_end)).order("purchase_date"))
+        talk_amount_by_coach={coach_id:0 for coach_id in coach_ids}
+        for purchase in talk_purchases:
+            coach_id=purchase.get("coach_id")
+            if coach_id in talk_amount_by_coach:
+                talk_amount_by_coach[coach_id]+=_tax_display_amount(purchase.get("total_amount"),"未稅")
+        talk_bonus_rows=[]
+        for coach_id in coach_ids:
+            untaxed_amount=talk_amount_by_coach[coach_id]
+            bonus=int((Decimal(untaxed_amount)*TALK_BONUS_RATE).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
+            talk_bonus_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"成交未稅金額":untaxed_amount,"談單3%":bonus})
+        monthly_talk_bonus_df=pd.DataFrame(talk_bonus_rows,columns=["教練","成交未稅金額","談單3%"])
+
+        completed_purchase_usage={}
+        for usage in monthly_usages:
+            purchase=monthly_purchase_map.get(usage["purchase_id"],{})
+            total_sessions=int(purchase.get("total_sessions") or 0)
+            if total_sessions and int(usage.get("session_seq") or 0)==total_sessions:
+                completed_purchase_usage[usage["purchase_id"]]=usage
+        completion_amount_by_coach={coach_id:0 for coach_id in coach_ids}
+        for purchase_id,usage in completed_purchase_usage.items():
+            coach_id=usage.get("coach_id")
+            if coach_id in completion_amount_by_coach:
+                completion_amount_by_coach[coach_id]+=_tax_display_amount(monthly_purchase_map[purchase_id].get("total_amount"),"未稅")
+        completion_bonus_rows=[]
+        for coach_id in coach_ids:
+            completed_amount=completion_amount_by_coach[coach_id]
+            bonus=int((Decimal(completed_amount)*COMPLETION_BONUS_RATE).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
+            completion_bonus_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"當期課程結束成交未稅金額":completed_amount,"結單4%":bonus})
+        monthly_completion_bonus_df=pd.DataFrame(completion_bonus_rows,columns=["教練","當期課程結束成交未稅金額","結單4%"])
+
+        monthly_tabs=st.tabs(["每月銷課","每月已儲值專案扣款","每月教練時數","每月教練營收","每月教練談單獎金","每月教練結單獎金"])
+        monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額（未稅）","扣款金額（未稅）","體驗項目金額","單堂銷售金額","專案（未稅）","銷課（未稅）","金額總計（未稅）","成交未稅金額","談單3%","當期課程結束成交未稅金額","結單4%"]}
         with monthly_tabs[0]: st.dataframe(monthly_sales_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
         with monthly_tabs[1]: st.dataframe(monthly_stored_project_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
         with monthly_tabs[2]: st.dataframe(monthly_hours_df,hide_index=True,use_container_width=True)
         with monthly_tabs[3]: st.dataframe(monthly_revenue_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
+        with monthly_tabs[4]: st.dataframe(monthly_talk_bonus_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
+        with monthly_tabs[5]: st.dataframe(monthly_completion_bonus_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
         monthly_export=_excel_bytes({"每月銷課":monthly_sales_df,"每月已儲值專案扣款":monthly_stored_project_df,
-            "每月教練時數":monthly_hours_df,"每月教練營收":monthly_revenue_df})
+            "每月教練時數":monthly_hours_df,"每月教練營收":monthly_revenue_df,
+            "每月教練談單獎金":monthly_talk_bonus_df,"每月教練結單獎金":monthly_completion_bonus_df})
         st.download_button("匯出每月報表",monthly_export,file_name=f"每月報表_{month_start}_{month_end}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
