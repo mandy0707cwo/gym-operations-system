@@ -431,6 +431,12 @@ def usage_query_tabs(me):
         purchases=rows(client().table("purchases").select("id,payment_plan,installment_count,session_hours,purchase_date").in_("id",purchase_ids))
         payments=rows(client().table("purchase_payments").select("purchase_id,installment_no,amount").in_("purchase_id",purchase_ids))
     purchase_map={x["id"]:x for x in purchases}
+    completed_purchase_ids=[x["purchase_id"] for x in balances if float(x.get("remaining_sessions") or 0)<=0]
+    completion_usages=(rows(client().table("session_usages").select("purchase_id,usage_date").in_("purchase_id",completed_purchase_ids).order("usage_date",desc=True))
+        if completed_purchase_ids else [])
+    completion_date_map={}
+    for usage in completion_usages:
+        completion_date_map.setdefault(usage["purchase_id"],usage["usage_date"])
     for balance in balances:
         balance["purchase_date"]=purchase_map.get(balance["purchase_id"],{}).get("purchase_date")
     balances.sort(key=lambda x:str(x.get("purchase_date") or ""),reverse=True)
@@ -440,7 +446,7 @@ def usage_query_tabs(me):
         summary["amount"]+=float(payment["amount"])
         summary["count"]+=1
 
-    tab1,tab2,tab3,tab4=st.tabs(["會員課程查詢","執行時數","期限查詢","剩餘三堂（含）"])
+    tab1,tab2,tab3,tab4=st.tabs(["會員課程查詢","執行時數","即將到期／過期","剩餘三堂（含）"])
     with tab1:
         can_filter_coach=me["role"] in ("shared_coach","manager","admin")
         if can_filter_coach:
@@ -476,12 +482,13 @@ def usage_query_tabs(me):
                 "成交金額":total_amount,"時數":float(purchase.get("session_hours") or 1),"購買堂數":item["total_sessions"],
                 "剩餘堂數":item["remaining_sessions"],"剩餘金額":float(item["remaining_amount"]),"有效期限":item["expiry_date"],
                 "付款狀況":payment_status,"課程完成":"是" if float(item["remaining_sessions"])<=0 else "否",
+                "課程完成日期":completion_date_map.get(item["purchase_id"]),
             })
         if detail:
-            detail_columns=["成交日期","會員名稱","課程名稱","成交金額","時數","購買堂數","剩餘堂數","剩餘金額","有效期限","付款狀況","課程完成"]
+            detail_columns=["成交日期","會員名稱","課程名稱","成交金額","時數","購買堂數","剩餘堂數","剩餘金額","有效期限","付款狀況","課程完成","課程完成日期"]
             st.dataframe(pd.DataFrame(detail,columns=detail_columns),hide_index=True,use_container_width=True,
                 column_config={"成交金額":st.column_config.NumberColumn(format="$ %.0f"),
-                               "時數":st.column_config.NumberColumn(format="%.2f 小時"),
+                               "時數":st.column_config.NumberColumn(format="%.2f"),
                                "剩餘金額":st.column_config.NumberColumn(format="$ %.0f")})
         else:
             st.info("目前沒有可查詢的課程資料。")
@@ -563,26 +570,19 @@ def usage_query_tabs(me):
 
     with tab3:
         today=date.today()
-        c1,c2=st.columns(2)
-        expiry_start=c1.date_input("有效期限開始日期",today,key="expiry_query_start")
-        expiry_end=c2.date_input("有效期限結束日期",today+timedelta(days=30),key="expiry_query_end")
-        if expiry_start>expiry_end:
-            st.error("有效期限開始日期不可晚於結束日期。")
-            expiring=[]
-        else:
-            expiring=[x for x in balances if x.get("expiry_date") and expiry_start<=pd.to_datetime(x["expiry_date"]).date()<=expiry_end]
+        deadline=today+timedelta(days=30)
+        expiring=[x for x in balances if x.get("expiry_date") and pd.to_datetime(x["expiry_date"]).date()<=deadline]
         if expiring:
             expiry_rows=[]
             for x in expiring:
                 expiry_date=pd.to_datetime(x["expiry_date"]).date()
-                expiry_rows.append({"成交日期":x.get("purchase_date"),"會員名稱":x["member_name"],"成交教練":x["coach_name"],
-                    "剩餘堂數／購買堂數":f'{x["remaining_sessions"]}/{x["total_sessions"]}',"有效期限":x["expiry_date"],
-                    "剩餘天數":(expiry_date-today).days,"過期":"是" if expiry_date<today else "否",
-                    "課程結束":"是" if float(x.get("remaining_sessions") or 0)<=0 else "否"})
-            expiry_columns=["成交日期","會員名稱","成交教練","剩餘堂數／購買堂數","有效期限","剩餘天數","過期","課程結束"]
+                expiry_rows.append({"成交日期":x.get("purchase_date"),"會員名稱":x["member_name"],"教練":x["coach_name"],
+                    "有效期限":x["expiry_date"],"即將到期":"是" if today<=expiry_date<=deadline else "否",
+                    "過期":"是" if expiry_date<today else "否"})
+            expiry_columns=["成交日期","會員名稱","教練","有效期限","即將到期","過期"]
             st.dataframe(pd.DataFrame(expiry_rows,columns=expiry_columns),hide_index=True,use_container_width=True)
-        elif expiry_start<=expiry_end:
-            st.info("查詢日期區間內沒有課程期限資料。")
+        else:
+            st.info("目前沒有即將到期或過期的課程資料。")
 
     with tab4:
         low_balances=[x for x in balances if x["status"]=="active" and 0<x["remaining_sessions"]<=3]
@@ -1752,7 +1752,7 @@ def financial_report_page(me):
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
         return
-    report_tabs=st.tabs(["會員報表","教練報表","專案報表","其他報表","每月報表"])
+    report_tabs=st.tabs(["會員報表","專案報表","其他報表","每月報表"])
     with report_tabs[0]:
         st.subheader("會員報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
@@ -1769,7 +1769,7 @@ def financial_report_page(me):
             return
         selected_coach_id=coaches.get(selected_coach)
         selected_member_id=member_id_map.get(selected_member)
-        detail_tabs=st.tabs(["預收餘額總表","預收餘額明細","銷課總表"])
+        detail_tabs=st.tabs(["預收餘額總表","預收餘額明細","銷課明細"])
         with detail_tabs[0]:
             total_tax_mode=st.radio("預收總額顯示方式",["未稅","含稅"],horizontal=True,key="finance_member_total_tax_mode")
         with detail_tabs[1]:
@@ -1777,7 +1777,7 @@ def financial_report_page(me):
         with detail_tabs[2]:
             sales_tax_mode=st.radio("銷課金額顯示方式",["未稅","含稅"],horizontal=True,key="finance_sales_tax_mode")
 
-        # 銷課總表依銷課日期查詢，教練條件採授課教練。
+        # 銷課明細依銷課日期查詢，教練條件採授課教練。
         usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,session_seq,deducted_amount").gte("usage_date",str(start)).lte("usage_date",str(end)).order("usage_date",desc=True))
         if selected_coach_id: usages=[x for x in usages if x.get("coach_id")==selected_coach_id]
         usage_purchase_ids=list({x["purchase_id"] for x in usages})
@@ -1870,11 +1870,11 @@ def financial_report_page(me):
             st.dataframe(sales_df,hide_index=True,use_container_width=True,column_config=money_config)
             st.markdown("**金額小計**")
             st.dataframe(sales_subtotal_df,hide_index=True,use_container_width=True,column_config=money_config)
-        export_data=_excel_bytes({"預收餘額總表":totals_df,"預收餘額明細":balance_df,"銷課總表":sales_df})
+        export_data=_excel_bytes({"預收餘額總表":totals_df,"預收餘額明細":balance_df,"銷課明細":sales_df})
         st.download_button("匯出會員財務報表",export_data,file_name=f"會員財務報表_{start}_{end}_銷課{sales_tax_mode}_明細{detail_tax_mode}_總額{total_tax_mode}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
-    with report_tabs[1]:
+    if False:  # v1.7.6 起移除教練報表畫面，保留舊程式供歷史版本比對。
         st.subheader("教練報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
         member_name_map={x["id"]:x["member_name"] for x in members}
@@ -1964,7 +1964,7 @@ def financial_report_page(me):
             st.download_button("匯出教練財務報表",coach_export,file_name=f"教練財務報表_{coach_start}_{coach_end}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
-    with report_tabs[3]:
+    with report_tabs[2]:
         st.subheader("其他報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
         member_name_map={x["id"]:x["member_name"] for x in members}
@@ -2005,7 +2005,7 @@ def financial_report_page(me):
             st.download_button("匯出其他報表",other_export,file_name=f"其他報表_{other_start}_{other_end}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
-    with report_tabs[2]:
+    with report_tabs[1]:
         st.subheader("專案報表")
         try:
             report_projects=rows(client().table("projects").select("id,project_name,funding_type,stored_amount").order("project_name"))
@@ -2074,7 +2074,7 @@ def financial_report_page(me):
                 st.download_button("匯出專案財務報表",project_export,file_name=f"專案財務報表_{project_start}_{project_end}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
-    with report_tabs[4]:
+    with report_tabs[3]:
         st.subheader("每月報表")
         default_month_start=date.today().replace(day=1)
         default_month_end=(pd.Timestamp(default_month_start)+pd.offsets.MonthEnd(1)).date()
