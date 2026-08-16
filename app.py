@@ -888,11 +888,11 @@ def course_admin_page(me):
         with st.form("add_course",clear_on_submit=True):
             c1,c2,c3=st.columns(3)
             course_name=c1.text_input("新增課程名稱").strip()
-            course_type=c2.text_input("課程種類").strip()
+            course_type=c2.text_input("課程屬性").strip()
             course_hours=c3.number_input("每堂課時數",0.25,24.0,1.0,step=0.25,format="%.2f")
             add_course=st.form_submit_button("新增課程",type="primary")
         if add_course:
-            if not course_name or not course_type: st.error("課程名稱與課程種類不可空白。")
+            if not course_name or not course_type: st.error("課程名稱與課程屬性不可空白。")
             else:
                 try:
                     admin.table("course_catalog").insert({"course_name":course_name,"course_type":course_type,"session_hours":course_hours,"active":True}).execute()
@@ -915,19 +915,19 @@ def course_admin_page(me):
     with edit_tab:
         if not courses: st.info("目前尚未建立課程名稱。")
         else:
-            course_display=[{**x,"active":"啟用" if x.get("active",True) else "停用"} for x in courses]
-            show_table(course_display,["course_type","course_name","session_hours","active","created_at"])
+            course_display=[{**x,"課程屬性":x.get("course_type") or "","active":"啟用" if x.get("active",True) else "停用"} for x in courses]
+            show_table(course_display,["課程屬性","course_name","session_hours","active","created_at"])
             selected_course=st.selectbox("選擇要修改的課程",list(course_map),key="course_edit_select")
             current=course_map[selected_course]
             with st.form("edit_course"):
                 c1,c2,c3=st.columns(3)
                 edited_name=c1.text_input("課程名稱",current["course_name"]).strip()
-                edited_type=c2.text_input("課程種類",current.get("course_type") or "").strip()
+                edited_type=c2.text_input("課程屬性",current.get("course_type") or "").strip()
                 edited_hours=c3.number_input("每堂課時數",0.25,24.0,float(current.get("session_hours") or 1),step=0.25,format="%.2f")
                 edited_active=st.checkbox("啟用課程",value=bool(current.get("active",True)))
                 save_course=st.form_submit_button("儲存修改",type="primary")
             if save_course:
-                if not edited_name or not edited_type: st.error("課程名稱與課程種類不可空白。")
+                if not edited_name or not edited_type: st.error("課程名稱與課程屬性不可空白。")
                 else:
                     try:
                         admin.table("course_catalog").update({"course_name":edited_name,"course_type":edited_type,"session_hours":edited_hours,"active":edited_active}).eq("id",current["id"]).execute()
@@ -2065,10 +2065,15 @@ def financial_report_page(me):
 
     with report_tabs[4]:
         st.subheader("每月報表")
-        selected_month=st.date_input("報表月份",date.today().replace(day=1),key="monthly_report_month")
-        month_start=selected_month.replace(day=1)
-        month_end=(pd.Timestamp(month_start)+pd.offsets.MonthEnd(1)).date()
-        st.caption(f"報表期間：{month_start} 至 {month_end}；明細日期依月初至月底排列。體驗及單堂銷售採輸入的未稅金額；專案及銷課以含稅金額 ÷ 1.05 計算未稅。")
+        default_month_start=date.today().replace(day=1)
+        default_month_end=(pd.Timestamp(default_month_start)+pd.offsets.MonthEnd(1)).date()
+        c1,c2=st.columns(2)
+        month_start=c1.date_input("開始日期",default_month_start,key="monthly_report_start")
+        month_end=c2.date_input("結束日期",default_month_end,key="monthly_report_end")
+        if month_start>month_end:
+            st.error("開始日期不可晚於結束日期。")
+            st.stop()
+        st.markdown(f"- 報表期間：{month_start} 至 {month_end}")
 
         monthly_coaches=coach_options(); monthly_coach_name={v:k for k,v in monthly_coaches.items()}
         monthly_usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,deducted_amount")
@@ -2121,7 +2126,7 @@ def financial_report_page(me):
         with monthly_tabs[3]: st.dataframe(monthly_revenue_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
         monthly_export=_excel_bytes({"每月銷課":monthly_sales_df,"每月已儲值專案扣款":monthly_stored_project_df,
             "每月教練時數":monthly_hours_df,"每月教練營收":monthly_revenue_df})
-        st.download_button("匯出每月報表",monthly_export,file_name=f"每月報表_{month_start:%Y-%m}.xlsx",
+        st.download_button("匯出每月報表",monthly_export,file_name=f"每月報表_{month_start}_{month_end}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
 user=login(); me=profile(user.id)
