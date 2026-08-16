@@ -419,7 +419,7 @@ def purchase_page(me):
 
 def usage_query_tabs(me):
     st.divider()
-    st.subheader("銷課查詢")
+    st.subheader("教練查詢")
     coaches=coach_options()
     operational_ids=set(coaches.values())
     balances=rows(client().table("purchase_balances").select("*").order("expiry_date"))
@@ -440,26 +440,26 @@ def usage_query_tabs(me):
         summary["amount"]+=float(payment["amount"])
         summary["count"]+=1
 
-    tab1,tab2,tab3,tab4=st.tabs(["會員課程查詢","執行時數","一個月內到期","剩餘三堂（含）"])
+    tab1,tab2,tab3,tab4=st.tabs(["會員課程查詢","執行時數","期限查詢","剩餘三堂（含）"])
     with tab1:
         can_filter_coach=me["role"] in ("shared_coach","manager","admin")
         if can_filter_coach:
             filter_col1,filter_col2,filter_col3=st.columns(3)
             selected_coach=filter_col1.selectbox("成交教練",["全部教練"]+list(coaches),key="member_course_coach_filter")
             member_keyword=filter_col2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="member_course_name_filter").strip()
-            course_end_filter=filter_col3.selectbox("課程結束",["全部","未結束","已結束"],key="member_course_end_filter")
+            course_end_filter=filter_col3.selectbox("課程完成",["全部","未完成","已完成"],key="member_course_end_filter")
             filtered_balances=balances if selected_coach=="全部教練" else [x for x in balances if x.get("coach_id")==coaches[selected_coach]]
         else:
             filter_col1,filter_col2,filter_col3=st.columns(3)
             filter_col1.caption(f'成交教練：{me["display_name"]}')
             member_keyword=filter_col2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="member_course_name_filter").strip()
-            course_end_filter=filter_col3.selectbox("課程結束",["全部","未結束","已結束"],key="member_course_end_filter")
+            course_end_filter=filter_col3.selectbox("課程完成",["全部","未完成","已完成"],key="member_course_end_filter")
             filtered_balances=[x for x in balances if x.get("coach_id")==me["id"]]
         if member_keyword:
             normalized_keyword=member_keyword.casefold()
             filtered_balances=[x for x in filtered_balances if normalized_keyword in str(x.get("member_name") or "").casefold()]
-        if course_end_filter=="已結束": filtered_balances=[x for x in filtered_balances if float(x.get("remaining_sessions") or 0)<=0]
-        elif course_end_filter=="未結束": filtered_balances=[x for x in filtered_balances if float(x.get("remaining_sessions") or 0)>0]
+        if course_end_filter=="已完成": filtered_balances=[x for x in filtered_balances if float(x.get("remaining_sessions") or 0)<=0]
+        elif course_end_filter=="未完成": filtered_balances=[x for x in filtered_balances if float(x.get("remaining_sessions") or 0)>0]
         detail=[]
         for item in filtered_balances:
             purchase=purchase_map.get(item["purchase_id"],{})
@@ -472,14 +472,16 @@ def usage_query_tabs(me):
             else:
                 payment_status=f'尚欠 $ {total_amount-payment["amount"]:,.0f}'
             detail.append({
-                "成交日期":purchase.get("purchase_date"),"會員名稱":item["member_name"],"課程名稱":item["course_name"],"成交教練":item["coach_name"],
-                "購買堂數":item["total_sessions"],"每堂課時數":float(purchase.get("session_hours") or 1),"成交金額":total_amount,"已上堂數":item["used_sessions"],
-                "剩餘堂數":item["remaining_sessions"],"課程結束":"是" if float(item["remaining_sessions"])<=0 else "否","剩餘金額":float(item["remaining_amount"]),
-                "有效期限":item["expiry_date"],"分期支付狀況":payment_status,
+                "成交日期":purchase.get("purchase_date"),"會員名稱":item["member_name"],"課程名稱":item["course_name"],
+                "成交金額":total_amount,"時數":float(purchase.get("session_hours") or 1),"購買堂數":item["total_sessions"],
+                "剩餘堂數":item["remaining_sessions"],"剩餘金額":float(item["remaining_amount"]),"有效期限":item["expiry_date"],
+                "付款狀況":payment_status,"課程完成":"是" if float(item["remaining_sessions"])<=0 else "否",
             })
         if detail:
-            st.dataframe(pd.DataFrame(detail),hide_index=True,use_container_width=True,
+            detail_columns=["成交日期","會員名稱","課程名稱","成交金額","時數","購買堂數","剩餘堂數","剩餘金額","有效期限","付款狀況","課程完成"]
+            st.dataframe(pd.DataFrame(detail,columns=detail_columns),hide_index=True,use_container_width=True,
                 column_config={"成交金額":st.column_config.NumberColumn(format="$ %.0f"),
+                               "時數":st.column_config.NumberColumn(format="%.2f 小時"),
                                "剩餘金額":st.column_config.NumberColumn(format="$ %.0f")})
         else:
             st.info("目前沒有可查詢的課程資料。")
@@ -561,19 +563,26 @@ def usage_query_tabs(me):
 
     with tab3:
         today=date.today()
-        deadline=today+timedelta(days=30)
-        expiring=[x for x in balances if x["status"]=="active" and x["remaining_sessions"]>0
-                  and today<=pd.to_datetime(x["expiry_date"]).date()<=deadline]
-        st.caption(f"查詢期間：{today} 至 {deadline}")
-        if expiring:
-            expiry_rows=[{"成交日期":x.get("purchase_date"),"會員名稱":x["member_name"],"課程名稱":x["course_name"],"成交教練":x["coach_name"],
-                          "剩餘堂數":x["remaining_sessions"],"剩餘金額":float(x["remaining_amount"]),
-                          "有效期限":x["expiry_date"],"剩餘天數":(pd.to_datetime(x["expiry_date"]).date()-today).days}
-                         for x in expiring]
-            st.dataframe(pd.DataFrame(expiry_rows),hide_index=True,use_container_width=True,
-                column_config={"剩餘金額":st.column_config.NumberColumn(format="$ %.0f")})
+        c1,c2=st.columns(2)
+        expiry_start=c1.date_input("有效期限開始日期",today,key="expiry_query_start")
+        expiry_end=c2.date_input("有效期限結束日期",today+timedelta(days=30),key="expiry_query_end")
+        if expiry_start>expiry_end:
+            st.error("有效期限開始日期不可晚於結束日期。")
+            expiring=[]
         else:
-            st.info("未來 30 天內沒有即將到期且仍有剩餘堂數的課程。")
+            expiring=[x for x in balances if x.get("expiry_date") and expiry_start<=pd.to_datetime(x["expiry_date"]).date()<=expiry_end]
+        if expiring:
+            expiry_rows=[]
+            for x in expiring:
+                expiry_date=pd.to_datetime(x["expiry_date"]).date()
+                expiry_rows.append({"成交日期":x.get("purchase_date"),"會員名稱":x["member_name"],"成交教練":x["coach_name"],
+                    "剩餘堂數／購買堂數":f'{x["remaining_sessions"]}/{x["total_sessions"]}',"有效期限":x["expiry_date"],
+                    "剩餘天數":(expiry_date-today).days,"過期":"是" if expiry_date<today else "否",
+                    "課程結束":"是" if float(x.get("remaining_sessions") or 0)<=0 else "否"})
+            expiry_columns=["成交日期","會員名稱","成交教練","剩餘堂數／購買堂數","有效期限","剩餘天數","過期","課程結束"]
+            st.dataframe(pd.DataFrame(expiry_rows,columns=expiry_columns),hide_index=True,use_container_width=True)
+        elif expiry_start<=expiry_end:
+            st.info("查詢日期區間內沒有課程期限資料。")
 
     with tab4:
         low_balances=[x for x in balances if x["status"]=="active" and 0<x["remaining_sessions"]<=3]
@@ -590,7 +599,7 @@ def usage_query_tabs(me):
 def usage_page(me):
     st.header("銷課表")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
-    cancel_tab,register_tab,query_tab=st.tabs(["上課預約取消","銷課登錄","銷課查詢"])
+    cancel_tab,register_tab,query_tab=st.tabs(["上課預約取消","銷課登錄","教練查詢"])
     with cancel_tab:
         st.markdown('<div style="font-size:1.5rem;font-weight:600;line-height:1.3;margin:0.25rem 0 1rem 0;">上課預約取消 <span style="font-size:0.75rem;font-weight:400;">（前一日及當日臨時請假者）</span></div>',unsafe_allow_html=True)
         with st.form("session_cancellation",clear_on_submit=True):
