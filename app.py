@@ -171,7 +171,7 @@ def daily_page(me):
                 detail_content=st.text_input("內容",value=default_detail,disabled=True) if catalog_type=="trial" else None
                 c1,c2=st.columns(2)
                 hours=c1.number_input("時數",0.25,24.0,value=default_hours,step=0.25,placeholder="選擇內容後自動帶入",disabled=True)
-                amount=c2.number_input("金額（未稅）",0.0,1000000000.0,value=default_amount,step=100.0,format="%.0f",placeholder="選擇內容後自動帶入")
+                amount=c2.number_input("金額",0.0,1000000000.0,value=default_amount,step=100.0,format="%.0f",placeholder="選擇內容後自動帶入")
                 note=st.text_input("備註")
                 record_name="體驗項目" if catalog_type=="trial" else "單堂銷售"
                 save=st.form_submit_button(f"確認並建立{record_name}紀錄",type="primary",use_container_width=True)
