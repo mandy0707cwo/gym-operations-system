@@ -33,8 +33,6 @@ LABELS = {
 }
 ROLE_LABELS = {"coach": "教練", "shared_coach": "共用教練帳號", "manager": "主管", "admin": "系統管理員"}
 USERNAME_RE = re.compile(r"^[a-z0-9_]{3,30}$")
-TALK_BONUS_RATE = Decimal("0.03")
-COMPLETION_BONUS_RATE = Decimal("0.04")
 
 def username_email(username):
     return f"{username.lower()}@gym-users.example.com"
@@ -1720,22 +1718,119 @@ def record_admin_page(me):
                 st.success(f"已刪除 {len(delete_records)} 筆資料。"); st.rerun()
             except Exception as exc: st.error(f"刪除失敗：{exc}")
 
+def bonus_rule_admin_page(me):
+    st.subheader("獎金規則管理")
+    if me["role"]!="admin": st.warning("此功能僅限系統管理員使用。"); return
+    admin=admin_client()
+    if admin is None: st.error("尚未設定 SUPABASE_SECRET_KEY。"); return
+    try:
+        rules=rows(admin.table("bonus_rules").select("*").order("effective_from",desc=True))
+    except Exception:
+        st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
+        return
+    display_rows=[]
+    for rule in rules:
+        display_rows.append({"規則名稱":rule["rule_name"],"生效日期":rule["effective_from"],"結束日期":rule.get("effective_to") or "無期限",
+            "談單獎金率":float(rule["talk_rate"])*100,"結單獎金率":float(rule["completion_rate"])*100,
+            "轉介首購談單":"計算" if rule["referral_first_talk_eligible"] else "不計",
+            "轉介首購結單":"計算" if rule["referral_first_completion_eligible"] else "不計",
+            "轉介續約談單":"計算" if rule["referral_renewal_talk_eligible"] else "不計",
+            "轉介續約結單":"計算" if rule["referral_renewal_completion_eligible"] else "不計",
+            "狀態":"啟用" if rule["active"] else "停用","備註":rule.get("note") or ""})
+    if display_rows:
+        st.dataframe(pd.DataFrame(display_rows),hide_index=True,use_container_width=True,
+            column_config={"談單獎金率":st.column_config.NumberColumn(format="%.2f%%"),"結單獎金率":st.column_config.NumberColumn(format="%.2f%%")})
+    add_tab,end_tab=st.tabs(["新增規則","結束現行規則"])
+    with add_tab:
+        st.caption("新增規則前，請先將日期重疊的現行規則設定結束日期；歷史規則的比例不會被覆蓋。")
+        with st.form("add_bonus_rule",clear_on_submit=True):
+            rule_name=st.text_input("規則名稱").strip()
+            c1,c2,c3=st.columns(3)
+            effective_from=c1.date_input("生效日期",date.today())
+            no_end=c2.checkbox("無結束日期",value=True)
+            effective_to=c3.date_input("結束日期",date.today())
+            c1,c2=st.columns(2)
+            talk_rate_percent=c1.number_input("談單獎金率（%）",0.0,100.0,3.0,step=0.1,format="%.2f")
+            completion_rate_percent=c2.number_input("結單獎金率（%）",0.0,100.0,4.0,step=0.1,format="%.2f")
+            st.markdown("**醫生轉介適用條件**")
+            c1,c2=st.columns(2)
+            referral_first_talk=c1.checkbox("轉介首購計算談單獎金",value=False)
+            referral_first_completion=c2.checkbox("轉介首購計算結單獎金",value=False)
+            c1,c2=st.columns(2)
+            referral_renewal_talk=c1.checkbox("轉介續約計算談單獎金",value=True)
+            referral_renewal_completion=c2.checkbox("轉介續約計算結單獎金",value=True)
+            note=st.text_area("備註")
+            create_rule=st.form_submit_button("新增獎金規則",type="primary",use_container_width=True)
+        if create_rule:
+            end_value=None if no_end else effective_to
+            if not rule_name: st.error("規則名稱不可空白。")
+            elif end_value and end_value<effective_from: st.error("結束日期不可早於生效日期。")
+            else:
+                try:
+                    admin.table("bonus_rules").insert({"rule_name":rule_name,"effective_from":str(effective_from),
+                        "effective_to":str(end_value) if end_value else None,"talk_rate":talk_rate_percent/100,
+                        "completion_rate":completion_rate_percent/100,"referral_first_talk_eligible":referral_first_talk,
+                        "referral_first_completion_eligible":referral_first_completion,"referral_renewal_talk_eligible":referral_renewal_talk,
+                        "referral_renewal_completion_eligible":referral_renewal_completion,"note":note.strip() or None,"created_by":me["id"]}).execute()
+                    st.success("獎金規則已新增。"); st.rerun()
+                except Exception as exc: st.error(f"新增失敗，請確認規則期間是否重疊：{exc}")
+    with end_tab:
+        active_rules=[x for x in rules if x.get("active",True)]
+        if not active_rules: st.info("目前沒有可設定結束日期的規則。")
+        else:
+            active_map={f'{x["rule_name"]}｜{x["effective_from"]} 至 {x.get("effective_to") or "無期限"}':x for x in active_rules}
+            selected_rule_name=st.selectbox("選擇規則",list(active_map),key="end_bonus_rule_select")
+            selected_rule=active_map[selected_rule_name]
+            with st.form("end_bonus_rule"):
+                close_date=st.date_input("新的結束日期",date.today())
+                confirm_close=st.checkbox("我確認只調整結束日期，不修改此規則既有比例。")
+                close_rule=st.form_submit_button("設定規則結束日期",type="primary")
+            if close_rule:
+                if not confirm_close: st.error("請先勾選確認。")
+                elif close_date<pd.to_datetime(selected_rule["effective_from"]).date(): st.error("結束日期不可早於生效日期。")
+                else:
+                    try:
+                        admin.table("bonus_rules").update({"effective_to":str(close_date)}).eq("id",selected_rule["id"]).execute()
+                        st.success("規則結束日期已更新。"); st.rerun()
+                    except Exception as exc: st.error(f"更新失敗：{exc}")
+
 def data_management_page(me):
     st.header("資料管理")
     if me["role"]!="admin": st.warning("此頁僅限系統管理員使用。"); return
     if admin_client() is None: st.error("尚未設定 SUPABASE_SECRET_KEY。"); return
-    tab1,tab2,tab3,tab4,tab5,tab6=st.tabs(["課程名稱管理","體驗項目管理","單堂銷售管理","專案管理","資料匯入／匯出","修改／刪除"])
+    tab1,tab2,tab3,tab4,tab5,tab6,tab7=st.tabs(["課程名稱管理","體驗項目管理","單堂銷售管理","專案管理","獎金規則管理","資料匯入／匯出","修改／刪除"])
     with tab1: course_admin_page(me)
     with tab2: operation_item_admin_page(me,"trial","體驗項目管理")
     with tab3: operation_item_admin_page(me,"single_sale","單堂銷售管理")
     with tab4: project_admin_page(me)
-    with tab5: member_course_io_page(me)
-    with tab6: record_admin_page(me)
+    with tab5: bonus_rule_admin_page(me)
+    with tab6: member_course_io_page(me)
+    with tab7: record_admin_page(me)
 
 def _tax_display_amount(amount, tax_mode):
     value=Decimal(str(amount or 0))
     if tax_mode=="未稅": value=value/Decimal("1.05")
     return int(value.quantize(Decimal("1"),rounding=ROUND_HALF_UP))
+
+def _bonus_rule_for_date(rules,event_date):
+    target=pd.to_datetime(event_date).date()
+    applicable=[]
+    for rule in rules:
+        if not rule.get("active",True): continue
+        start=pd.to_datetime(rule["effective_from"]).date()
+        end=pd.to_datetime(rule["effective_to"]).date() if rule.get("effective_to") else None
+        if start<=target and (end is None or target<=end): applicable.append(rule)
+    return max(applicable,key=lambda x:str(x["effective_from"])) if applicable else None
+
+def _bonus_eligibility(rule,purchase,bonus_kind):
+    if not rule: return False,"查無適用的獎金規則"
+    if not str(purchase.get("referral") or "").strip(): return True,"符合規則"
+    purchase_kind=purchase.get("purchase_kind")
+    if purchase_kind=="first": field=f"referral_first_{bonus_kind}_eligible"
+    elif purchase_kind=="renewal": field=f"referral_renewal_{bonus_kind}_eligible"
+    else: return True,"符合規則"
+    if rule.get(field,False): return True,"符合規則"
+    return False,"醫生轉介首購不計獎金" if purchase_kind=="first" else "醫生轉介續約不計獎金"
 
 def _build_purchase_code_map(purchases):
     ordered=sorted(purchases,key=lambda x:(str(x.get("purchase_date") or ""),str(x.get("created_at") or ""),str(x["id"])))
@@ -2090,7 +2185,7 @@ def financial_report_page(me):
         monthly_usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,session_seq,deducted_amount")
             .gte("usage_date",str(month_start)).lte("usage_date",str(month_end)).order("usage_date"))
         monthly_purchase_ids=list({x["purchase_id"] for x in monthly_usages})
-        monthly_purchases=rows(client().table("purchases").select("id,member_id,course_name,session_hours,total_sessions,total_amount").in_("id",monthly_purchase_ids)) if monthly_purchase_ids else []
+        monthly_purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,session_hours,total_sessions,total_amount,purchase_date,purchase_kind,referral,created_at").in_("id",monthly_purchase_ids)) if monthly_purchase_ids else []
         monthly_purchase_map={x["id"]:x for x in monthly_purchases}
         monthly_member_ids=list({x.get("member_id") for x in monthly_purchases if x.get("member_id")})
         monthly_members=rows(client().table("members").select("id,member_name").in_("id",monthly_member_ids)) if monthly_member_ids else []
@@ -2129,19 +2224,38 @@ def financial_report_page(me):
         monthly_hours_df=pd.DataFrame(coach_hour_rows)
         monthly_revenue_df=pd.DataFrame(coach_revenue_rows)
 
-        talk_purchases=rows(client().table("purchases").select("id,coach_id,total_amount,purchase_date")
+        try:
+            bonus_rules=rows(client().table("bonus_rules").select("*").eq("active",True).order("effective_from",desc=True))
+            bonus_rule_error=False
+        except Exception:
+            bonus_rules=[]; bonus_rule_error=True
+
+        talk_purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_amount,purchase_date,purchase_kind,referral,created_at")
             .gte("purchase_date",str(month_start)).lte("purchase_date",str(month_end)).order("purchase_date"))
-        talk_amount_by_coach={coach_id:0 for coach_id in coach_ids}
+        bonus_member_ids=list({x.get("member_id") for x in monthly_purchases+talk_purchases if x.get("member_id")})
+        missing_member_ids=[x for x in bonus_member_ids if x not in monthly_member_name]
+        if missing_member_ids:
+            for member in rows(client().table("members").select("id,member_name").in_("id",missing_member_ids)):
+                monthly_member_name[member["id"]]=member["member_name"]
+        all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at").order("purchase_date"))
+        bonus_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
+
+        talk_bonus_rows=[]
         for purchase in talk_purchases:
             coach_id=purchase.get("coach_id")
-            if coach_id in talk_amount_by_coach:
-                talk_amount_by_coach[coach_id]+=_tax_display_amount(purchase.get("total_amount"),"未稅")
-        talk_bonus_rows=[]
-        for coach_id in coach_ids:
-            untaxed_amount=talk_amount_by_coach[coach_id]
-            bonus=int((Decimal(untaxed_amount)*TALK_BONUS_RATE).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
-            talk_bonus_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"成交未稅金額":untaxed_amount,"談單3%":bonus})
-        monthly_talk_bonus_df=pd.DataFrame(talk_bonus_rows,columns=["教練","成交未稅金額","談單3%"])
+            if coach_id not in coach_ids: continue
+            rule=_bonus_rule_for_date(bonus_rules,purchase["purchase_date"])
+            eligible,reason=_bonus_eligibility(rule,purchase,"talk")
+            untaxed_amount=_tax_display_amount(purchase.get("total_amount"),"未稅")
+            rate=Decimal(str(rule.get("talk_rate") or 0)) if rule else Decimal("0")
+            bonus=int((Decimal(untaxed_amount)*rate).quantize(Decimal("1"),rounding=ROUND_HALF_UP)) if eligible else 0
+            talk_bonus_rows.append({"成交日期":purchase["purchase_date"],"購買_ID":bonus_purchase_code_map.get(purchase["id"],""),
+                "會員名稱":monthly_member_name.get(purchase.get("member_id"),"未知"),"教練":monthly_coach_name.get(coach_id,"未知"),
+                "購買類型":"首次購買" if purchase.get("purchase_kind")=="first" else "續約" if purchase.get("purchase_kind")=="renewal" else purchase.get("purchase_kind") or "",
+                "醫生轉介":purchase.get("referral") or "","成交未稅金額":untaxed_amount,"談單率":float(rate)*100,
+                "談單獎金":bonus,"適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
+        talk_bonus_columns=["成交日期","購買_ID","會員名稱","教練","購買類型","醫生轉介","成交未稅金額","談單率","談單獎金","適用規則","計算狀態"]
+        monthly_talk_bonus_df=pd.DataFrame(talk_bonus_rows,columns=talk_bonus_columns)
 
         completed_purchase_usage={}
         for usage in monthly_usages:
@@ -2149,26 +2263,37 @@ def financial_report_page(me):
             total_sessions=int(purchase.get("total_sessions") or 0)
             if total_sessions and int(usage.get("session_seq") or 0)==total_sessions:
                 completed_purchase_usage[usage["purchase_id"]]=usage
-        completion_amount_by_coach={coach_id:0 for coach_id in coach_ids}
-        for purchase_id,usage in completed_purchase_usage.items():
-            coach_id=usage.get("coach_id")
-            if coach_id in completion_amount_by_coach:
-                completion_amount_by_coach[coach_id]+=_tax_display_amount(monthly_purchase_map[purchase_id].get("total_amount"),"未稅")
         completion_bonus_rows=[]
-        for coach_id in coach_ids:
-            completed_amount=completion_amount_by_coach[coach_id]
-            bonus=int((Decimal(completed_amount)*COMPLETION_BONUS_RATE).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
-            completion_bonus_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"當期課程結束成交未稅金額":completed_amount,"結單4%":bonus})
-        monthly_completion_bonus_df=pd.DataFrame(completion_bonus_rows,columns=["教練","當期課程結束成交未稅金額","結單4%"])
+        for purchase_id,usage in completed_purchase_usage.items():
+            purchase=monthly_purchase_map[purchase_id]
+            coach_id=usage.get("coach_id")
+            if coach_id not in coach_ids: continue
+            rule=_bonus_rule_for_date(bonus_rules,usage["usage_date"])
+            eligible,reason=_bonus_eligibility(rule,purchase,"completion")
+            completed_amount=_tax_display_amount(purchase.get("total_amount"),"未稅")
+            rate=Decimal(str(rule.get("completion_rate") or 0)) if rule else Decimal("0")
+            bonus=int((Decimal(completed_amount)*rate).quantize(Decimal("1"),rounding=ROUND_HALF_UP)) if eligible else 0
+            completion_bonus_rows.append({"課程完成日期":usage["usage_date"],"購買_ID":bonus_purchase_code_map.get(purchase_id,""),
+                "會員名稱":monthly_member_name.get(purchase.get("member_id"),"未知"),"教練":monthly_coach_name.get(coach_id,"未知"),
+                "課程名稱":purchase.get("course_name") or "","購買類型":"首次購買" if purchase.get("purchase_kind")=="first" else "續約" if purchase.get("purchase_kind")=="renewal" else purchase.get("purchase_kind") or "",
+                "醫生轉介":purchase.get("referral") or "","課程結束成交未稅金額":completed_amount,"結單率":float(rate)*100,
+                "結單獎金":bonus,"適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
+        completion_bonus_columns=["課程完成日期","購買_ID","會員名稱","教練","課程名稱","購買類型","醫生轉介","課程結束成交未稅金額","結單率","結單獎金","適用規則","計算狀態"]
+        monthly_completion_bonus_df=pd.DataFrame(completion_bonus_rows,columns=completion_bonus_columns)
 
         monthly_tabs=st.tabs(["每月銷課","每月已儲值專案扣款","每月教練時數","每月教練營收","每月教練談單獎金","每月教練結單獎金"])
-        monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額（未稅）","扣款金額（未稅）","體驗項目金額","單堂銷售金額","專案（未稅）","銷課（未稅）","金額總計（未稅）","成交未稅金額","談單3%","當期課程結束成交未稅金額","結單4%"]}
+        monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額（未稅）","扣款金額（未稅）","體驗項目金額","單堂銷售金額","專案（未稅）","銷課（未稅）","金額總計（未稅）","成交未稅金額","談單獎金","課程結束成交未稅金額","結單獎金"]}
+        monthly_bonus_config={**monthly_money_config,"談單率":st.column_config.NumberColumn(format="%.2f%%"),"結單率":st.column_config.NumberColumn(format="%.2f%%")}
         with monthly_tabs[0]: st.dataframe(monthly_sales_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
         with monthly_tabs[1]: st.dataframe(monthly_stored_project_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
         with monthly_tabs[2]: st.dataframe(monthly_hours_df,hide_index=True,use_container_width=True)
         with monthly_tabs[3]: st.dataframe(monthly_revenue_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
-        with monthly_tabs[4]: st.dataframe(monthly_talk_bonus_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
-        with monthly_tabs[5]: st.dataframe(monthly_completion_bonus_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
+        with monthly_tabs[4]:
+            if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
+            st.dataframe(monthly_talk_bonus_df,hide_index=True,use_container_width=True,column_config=monthly_bonus_config)
+        with monthly_tabs[5]:
+            if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
+            st.dataframe(monthly_completion_bonus_df,hide_index=True,use_container_width=True,column_config=monthly_bonus_config)
         monthly_export=_excel_bytes({"每月銷課":monthly_sales_df,"每月已儲值專案扣款":monthly_stored_project_df,
             "每月教練時數":monthly_hours_df,"每月教練營收":monthly_revenue_df,
             "每月教練談單獎金":monthly_talk_bonus_df,"每月教練結單獎金":monthly_completion_bonus_df})
