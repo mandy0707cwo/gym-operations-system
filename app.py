@@ -2256,6 +2256,15 @@ def financial_report_page(me):
                 "談單獎金":bonus,"適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
         talk_bonus_columns=["成交日期","購買_ID","會員名稱","教練","購買類型","醫生轉介","成交未稅金額","談單率","談單獎金","適用規則","計算狀態"]
         monthly_talk_bonus_df=pd.DataFrame(talk_bonus_rows,columns=talk_bonus_columns)
+        talk_bonus_summary_rows=[]
+        for coach_id in coach_ids:
+            coach_name=monthly_coach_name.get(coach_id,"未知")
+            eligible_rows=[x for x in talk_bonus_rows if x["教練"]==coach_name and x["計算狀態"]=="已計算"]
+            talk_bonus_summary_rows.append({"教練":coach_name,
+                "符合規則成交未稅金額總計":sum(x["成交未稅金額"] for x in eligible_rows),
+                "談單獎金總計":sum(x["談單獎金"] for x in eligible_rows)})
+        monthly_talk_bonus_summary_df=pd.DataFrame(talk_bonus_summary_rows,
+            columns=["教練","符合規則成交未稅金額總計","談單獎金總計"])
 
         completed_purchase_usage={}
         for usage in monthly_usages:
@@ -2280,9 +2289,18 @@ def financial_report_page(me):
                 "結單獎金":bonus,"適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
         completion_bonus_columns=["課程完成日期","購買_ID","會員名稱","教練","課程名稱","購買類型","醫生轉介","課程結束成交未稅金額","結單率","結單獎金","適用規則","計算狀態"]
         monthly_completion_bonus_df=pd.DataFrame(completion_bonus_rows,columns=completion_bonus_columns)
+        completion_bonus_summary_rows=[]
+        for coach_id in coach_ids:
+            coach_name=monthly_coach_name.get(coach_id,"未知")
+            eligible_rows=[x for x in completion_bonus_rows if x["教練"]==coach_name and x["計算狀態"]=="已計算"]
+            completion_bonus_summary_rows.append({"教練":coach_name,
+                "符合規則課程結束成交未稅金額總計":sum(x["課程結束成交未稅金額"] for x in eligible_rows),
+                "結單獎金總計":sum(x["結單獎金"] for x in eligible_rows)})
+        monthly_completion_bonus_summary_df=pd.DataFrame(completion_bonus_summary_rows,
+            columns=["教練","符合規則課程結束成交未稅金額總計","結單獎金總計"])
 
         monthly_tabs=st.tabs(["每月銷課","每月已儲值專案扣款","每月教練時數","每月教練營收","每月教練談單獎金","每月教練結單獎金"])
-        monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額（未稅）","扣款金額（未稅）","體驗項目金額","單堂銷售金額","專案（未稅）","銷課（未稅）","金額總計（未稅）","成交未稅金額","談單獎金","課程結束成交未稅金額","結單獎金"]}
+        monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額（未稅）","扣款金額（未稅）","體驗項目金額","單堂銷售金額","專案（未稅）","銷課（未稅）","金額總計（未稅）","成交未稅金額","談單獎金","課程結束成交未稅金額","結單獎金","符合規則成交未稅金額總計","談單獎金總計","符合規則課程結束成交未稅金額總計","結單獎金總計"]}
         monthly_bonus_config={**monthly_money_config,"談單率":st.column_config.NumberColumn(format="%.2f%%"),"結單率":st.column_config.NumberColumn(format="%.2f%%")}
         with monthly_tabs[0]: st.dataframe(monthly_sales_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
         with monthly_tabs[1]: st.dataframe(monthly_stored_project_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
@@ -2291,12 +2309,17 @@ def financial_report_page(me):
         with monthly_tabs[4]:
             if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
             st.dataframe(monthly_talk_bonus_df,hide_index=True,use_container_width=True,column_config=monthly_bonus_config)
+            st.markdown("**各教練談單獎金總計**")
+            st.dataframe(monthly_talk_bonus_summary_df,hide_index=True,use_container_width=True,column_config=monthly_bonus_config)
         with monthly_tabs[5]:
             if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
             st.dataframe(monthly_completion_bonus_df,hide_index=True,use_container_width=True,column_config=monthly_bonus_config)
+            st.markdown("**各教練結單獎金總計**")
+            st.dataframe(monthly_completion_bonus_summary_df,hide_index=True,use_container_width=True,column_config=monthly_bonus_config)
         monthly_export=_excel_bytes({"每月銷課":monthly_sales_df,"每月已儲值專案扣款":monthly_stored_project_df,
             "每月教練時數":monthly_hours_df,"每月教練營收":monthly_revenue_df,
-            "每月教練談單獎金":monthly_talk_bonus_df,"每月教練結單獎金":monthly_completion_bonus_df})
+            "每月教練談單獎金":monthly_talk_bonus_df,"談單獎金總計":monthly_talk_bonus_summary_df,
+            "每月教練結單獎金":monthly_completion_bonus_df,"結單獎金總計":monthly_completion_bonus_summary_df})
         st.download_button("匯出每月報表",monthly_export,file_name=f"每月報表_{month_start}_{month_end}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
