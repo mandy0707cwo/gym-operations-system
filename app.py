@@ -194,7 +194,7 @@ def daily_page(me):
                     except Exception as exc: st.error(f"新增失敗：{exc}")
             select_fields="entry_date,content,detail_content,hours,amount,note,coach_id,member_name" if catalog_type=="trial" else ("entry_date,content,hours,amount,note,coach_id,member_name" if member_label else "entry_date,content,hours,amount,note,coach_id")
             data=rows(client().table(table_name).select(select_fields).order("entry_date",desc=True).limit(100))
-            data=[x for x in data if x.get("coach_id") in names]
+            data=[x for x in data if x.get("coach_id")==me["id"]] if me["role"]=="coach" else [x for x in data if x.get("coach_id") in names]
             for x in data:
                 x["coach_name"]=names.get(x.pop("coach_id"),"未知")
                 if member_label:
@@ -226,7 +226,7 @@ def daily_page(me):
                     st.success("紀錄已新增。"); st.rerun()
                 except Exception as exc: st.error(f"新增失敗：{exc}")
         data=rows(client().table("event_supports").select("entry_date,content,hours,deducted_hours,deduction_reason,coach_id").order("entry_date",desc=True).limit(100))
-        data=[x for x in data if x.get("coach_id") in names]
+        data=[x for x in data if x.get("coach_id")==me["id"]] if me["role"]=="coach" else [x for x in data if x.get("coach_id") in names]
         for x in data: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
         show_table(data,["entry_date","content","coach_name","hours","deducted_hours","deduction_reason"])
 
@@ -284,6 +284,7 @@ def daily_page(me):
                         st.success("專案紀錄已建立。"); st.rerun()
                     except Exception as exc: st.error(f"新增失敗：{exc}")
             project_rows=rows(client().table("project_entries").select("entry_date,project_name,person_name,coach_id,item_name,item_hours,quantity,unit_price,line_amount,note").order("entry_date",desc=True).limit(100))
+            project_rows=[x for x in project_rows if x.get("coach_id")==me["id"]] if me["role"]=="coach" else [x for x in project_rows if x.get("coach_id") in names]
             for row in project_rows:
                 row["coach_name"]=names.get(row.pop("coach_id"),"未知")
                 row["execution_hours"]=float(row.get("item_hours") or 0)*float(row["quantity"])
@@ -372,7 +373,7 @@ def purchase_page(me):
             except Exception as exc: st.error(f"建立失敗：{exc}")
     purchases=rows(client().table("purchase_balances").select("purchase_id,member_name,course_name,coach_id"))
     operational_ids=set(coaches.values())
-    purchases=[x for x in purchases if x.get("coach_id") in operational_ids]
+    purchases=[x for x in purchases if x.get("coach_id")==me["id"]] if me["role"]=="coach" else [x for x in purchases if x.get("coach_id") in operational_ids]
     installment_rows=rows(client().table("purchases").select("id,total_amount,installment_count").eq("payment_plan","installment"))
     installment_map={x["id"]:x for x in installment_rows}
     installment_ids=set(installment_map)
@@ -422,6 +423,8 @@ def usage_query_tabs(me):
     operational_ids=set(coaches.values())
     balances=rows(client().table("purchase_balances").select("*").order("expiry_date"))
     balances=[x for x in balances if x.get("coach_id") in operational_ids]
+    if me["role"]=="coach":
+        balances=[x for x in balances if x.get("coach_id")==me["id"]]
     purchase_ids=[x["purchase_id"] for x in balances]
     purchases=[]
     payments=[]
@@ -609,11 +612,18 @@ def usage_page(me):
                 st.success("銷課取消紀錄已新增。"); st.rerun()
             except Exception as exc: st.error(f"新增失敗：{exc}")
         cancellations=rows(client().table("session_cancellations").select("cancel_date,coach_id,cancelled_sessions,reason").order("cancel_date",desc=True).limit(100))
-        coach_names={v:k for k,v in coaches.items()}; cancellations=[x for x in cancellations if x.get("coach_id") in coach_names]
+        coach_names={v:k for k,v in coaches.items()}
+        cancellations=[x for x in cancellations if x.get("coach_id")==me["id"]] if me["role"]=="coach" else [x for x in cancellations if x.get("coach_id") in coach_names]
         for x in cancellations: x["coach_name"]=coach_names.get(x.pop("coach_id"),"未知")
         show_table(cancellations,["cancel_date","coach_name","cancelled_sessions","reason"])
     with register_tab:
-        members=rows(client().table("members").select("id,member_name").eq("active",True).order("member_name"))
+        if me["role"]=="coach":
+            owned_balances=rows(client().table("purchase_balances").select("member_id").eq("coach_id",me["id"]))
+            owned_member_ids=list({x["member_id"] for x in owned_balances if x.get("member_id")})
+            members=(rows(client().table("members").select("id,member_name").eq("active",True).in_("id",owned_member_ids).order("member_name"))
+                if owned_member_ids else [])
+        else:
+            members=rows(client().table("members").select("id,member_name").eq("active",True).order("member_name"))
         if not members:
             st.info("請先建立課程購買紀錄。")
         else:
@@ -621,7 +631,7 @@ def usage_page(me):
             member_name=st.selectbox("會員名稱",list(member_map),index=None,placeholder="輸入或選擇會員")
             if member_name:
                 balances=rows(client().table("purchase_balances").select("*").eq("member_id",member_map[member_name]).gt("remaining_sessions",0))
-                balances=[x for x in balances if x.get("coach_id") in set(coaches.values())]
+                balances=[x for x in balances if x.get("coach_id")==me["id"]] if me["role"]=="coach" else [x for x in balances if x.get("coach_id") in set(coaches.values())]
                 balance_purchase_ids=[x["purchase_id"] for x in balances]
                 balance_purchase_dates=rows(client().table("purchases").select("id,purchase_date").in_("id",balance_purchase_ids)) if balance_purchase_ids else []
                 balance_purchase_date_map={x["id"]:x.get("purchase_date") for x in balance_purchase_dates}
