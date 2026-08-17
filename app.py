@@ -1381,6 +1381,14 @@ def member_course_io_page(me):
     st.subheader("匯出資料報表")
     purchases=rows(admin.table("purchases").select("*").order("purchase_date"))
     purchase_code_map=_build_purchase_code_map(purchases)
+    # 銷課匯入可使用對外顯示的「成交日期＋序號」，也保留資料庫 UUID 相容舊檔。
+    purchase_reference_to_id={}
+    for purchase in purchases:
+        purchase_uuid=str(purchase["id"]).strip()
+        purchase_code=str(purchase_code_map.get(purchase["id"],"")).strip()
+        purchase_reference_to_id[purchase_uuid.casefold()]=purchase["id"]
+        if purchase_code:
+            purchase_reference_to_id[purchase_code.casefold()]=purchase["id"]
     payments=rows(admin.table("purchase_payments").select("purchase_id,amount,paid_date"))
     paid_map={}
     paid_date_map={}
@@ -1418,7 +1426,7 @@ def member_course_io_page(me):
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
     st.divider(); st.subheader("匯入會員課程與銷課表")
-    st.caption("請先下載範本。匯入會員課程時 purchase_id 可留空；匯入銷課表時 purchase_id 必須對應系統內的購買紀錄。")
+    st.caption("請先下載範本。匯入會員課程時 purchase_id 可留空；匯入銷課表時 purchase_id 請填購買課程編號（成交日期＋序號，例如 20260817-001），亦相容舊版 UUID。")
     course_template=pd.DataFrame(columns=["purchase_id","member_name","purchase_kind","coach_username","course_name","total_sessions","session_hours","total_amount","purchase_date","expiry_date","payment_plan","installment_count","paid_amount","paid_date","referral","note"])
     usage_template=pd.DataFrame(columns=["purchase_id","usage_date","coach_username","note"])
     st.download_button("下載匯入範本",_excel_bytes({"會員課程":course_template,"銷課表":usage_template}),
@@ -1471,12 +1479,23 @@ def member_course_io_page(me):
                 df=pd.read_excel(book,"銷課表").fillna("")
                 if not set(usage_template.columns).issubset(df.columns): errors.append("銷課表欄位不完整。")
                 else:
+                    workbook_purchase_references={
+                        str(item.get("source_id") or "").strip().casefold()
+                        for item in clean_courses
+                        if str(item.get("source_id") or "").strip()
+                    }
                     for i,row in df.iterrows():
                         try:
+                            purchase_reference=str(row["purchase_id"]).strip()
+                            purchase_key=purchase_reference.casefold()
+                            if not purchase_key:
+                                raise ValueError("purchase_id 不可空白")
+                            if purchase_key not in purchase_reference_to_id and purchase_key not in workbook_purchase_references:
+                                raise ValueError(f"找不到 purchase_id：{purchase_reference}")
                             username=str(row["coach_username"]).strip(); coach_key=username.casefold()
                             if coach_key in ambiguous_coach_references: raise ValueError("教練姓名重複，請改填登入帳號")
                             if coach_key not in coach_reference_to_id: raise ValueError("找不到教練帳號或姓名")
-                            clean_usages.append({"purchase_id":str(row["purchase_id"]).strip(),"usage_date":str(pd.to_datetime(row["usage_date"]).date()),"coach_id":coach_reference_to_id[coach_key],"note":str(row["note"]).strip() or None})
+                            clean_usages.append({"purchase_reference":purchase_reference,"purchase_key":purchase_key,"usage_date":str(pd.to_datetime(row["usage_date"]).date()),"coach_id":coach_reference_to_id[coach_key],"note":str(row["note"]).strip() or None})
                         except Exception as exc: errors.append(f"銷課表第 {i+2} 列：{exc}")
             if errors: st.error("匯入檢查未通過：\n- "+"\n- ".join(errors[:30]))
             else:
@@ -1490,11 +1509,14 @@ def member_course_io_page(me):
                         payload={k:v for k,v in item.items() if k not in ("source_id","member_name","paid_amount","paid_date")}
                         payload.update({"member_id":member_id,"created_by":me["id"]})
                         created=rows(admin.table("purchases").insert(payload))[0]
+                        source_key=str(item.get("source_id") or "").strip().casefold()
+                        if source_key:
+                            purchase_reference_to_id[source_key]=created["id"]
                         if item["paid_amount"]>0: admin.table("purchase_payments").insert({"purchase_id":created["id"],"installment_no":1,"amount":item["paid_amount"],"paid_date":item["paid_date"],"created_by":me["id"]}).execute()
-                    valid_ids={x["id"] for x in rows(admin.table("purchases").select("id"))}
                     for item in clean_usages:
-                        if item["purchase_id"] not in valid_ids: raise ValueError(f'找不到 purchase_id：{item["purchase_id"]}')
-                        client().rpc("consume_session",{"p_purchase_id":item["purchase_id"],"p_usage_date":item["usage_date"],"p_coach_id":item["coach_id"],"p_note":item["note"]}).execute()
+                        purchase_id=purchase_reference_to_id.get(item["purchase_key"])
+                        if not purchase_id: raise ValueError(f'找不到 purchase_id：{item["purchase_reference"]}')
+                        client().rpc("consume_session",{"p_purchase_id":purchase_id,"p_usage_date":item["usage_date"],"p_coach_id":item["coach_id"],"p_note":item["note"]}).execute()
                     st.success("資料匯入完成。")
         except Exception as exc: st.error(f"無法匯入檔案：{exc}")
 
