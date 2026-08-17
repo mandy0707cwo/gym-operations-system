@@ -447,7 +447,7 @@ def usage_query_tabs(me):
         summary["amount"]+=float(payment["amount"])
         summary["count"]+=1
 
-    tab1,tab2,tab3,tab4=st.tabs(["會員課程查詢","執行時數","即將到期／過期","剩餘三堂（含）"])
+    tab1,tab2,tab3,tab4,tab5=st.tabs(["會員課程查詢","執行時數","即將到期／過期","剩餘三堂（含）","銷課明細查詢"])
     with tab1:
         can_filter_coach=me["role"] in ("shared_coach","manager","admin")
         if can_filter_coach:
@@ -596,6 +596,39 @@ def usage_query_tabs(me):
                 column_config={"剩餘金額":st.column_config.NumberColumn(format="$ %.0f")})
         else:
             st.info("目前沒有剩餘三堂（含）以下的有效課程。")
+
+    with tab5:
+        detail_c1,detail_c2=st.columns(2)
+        if can_filter_coach:
+            detail_coach=detail_c1.selectbox("成交教練",["全部教練"]+list(coaches),key="usage_detail_coach")
+        else:
+            detail_c1.caption(f'成交教練：{me["display_name"]}')
+            detail_coach=me["display_name"]
+        detail_member_keyword=detail_c2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="usage_detail_member").strip()
+        detail_balances=balances
+        if detail_coach!="全部教練":
+            detail_coach_id=coaches.get(detail_coach,me["id"])
+            detail_balances=[x for x in detail_balances if x.get("coach_id")==detail_coach_id]
+        if detail_member_keyword:
+            detail_member_key=detail_member_keyword.casefold()
+            detail_balances=[x for x in detail_balances if detail_member_key in str(x.get("member_name") or "").casefold()]
+        detail_balance_map={x["purchase_id"]:x for x in detail_balances}
+        detail_purchase_ids=list(detail_balance_map)
+        detail_usages=(rows(client().table("session_usages").select("purchase_id,usage_date,session_seq")
+            .in_("purchase_id",detail_purchase_ids).order("usage_date",desc=True).order("session_seq",desc=True)) if detail_purchase_ids else [])
+        usage_detail_rows=[]
+        for usage in detail_usages:
+            balance=detail_balance_map.get(usage["purchase_id"],{})
+            purchase=purchase_map.get(usage["purchase_id"],{})
+            usage_detail_rows.append({"成交日":purchase.get("purchase_date"),"會員名稱":balance.get("member_name",""),
+                "課程名稱":balance.get("course_name",""),"銷課日期":usage["usage_date"],"銷課堂數":1,
+                "剩餘堂數":balance.get("remaining_sessions",0),"有效期限":balance.get("expiry_date")})
+        usage_detail_columns=["成交日","會員名稱","課程名稱","銷課日期","銷課堂數","剩餘堂數","有效期限"]
+        if usage_detail_rows:
+            st.dataframe(pd.DataFrame(usage_detail_rows,columns=usage_detail_columns),hide_index=True,use_container_width=True,
+                column_config={"銷課堂數":st.column_config.NumberColumn(format="%d"),"剩餘堂數":st.column_config.NumberColumn(format="%.0f")})
+        else:
+            st.info("目前沒有符合條件的銷課明細。")
 
 def usage_page(me):
     st.header("銷課表")
