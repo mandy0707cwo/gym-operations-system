@@ -142,6 +142,7 @@ def daily_page(me):
     st.header("每日營運")
     coaches = coach_options()
     allowed = coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
+    coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
     names={v:k for k,v in coaches.items()}
     tab1,tab2,tab3,tab4=st.tabs(["體驗項目","單堂銷售","活動支援","專案"])
 
@@ -166,7 +167,7 @@ def daily_page(me):
             default_amount=float(selected_catalog.get("default_amount") or 0) if selected_catalog else None
             default_detail=str(selected_catalog.get("detail_content") or "") if selected_catalog else ""
             with st.form(f"{form_key}_{revision}",clear_on_submit=True,enter_to_submit=False):
-                c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today()); coach_name=c2.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練")
+                c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today(),**coach_date_limit); coach_name=c2.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練")
                 member_name=st.text_input(member_label) if member_label else None
                 detail_content=st.text_input("內容",value=default_detail,disabled=True) if catalog_type=="trial" else None
                 c1,c2=st.columns(2)
@@ -178,6 +179,7 @@ def daily_page(me):
             if save:
                 errors=[]
                 if member_label and not member_name.strip(): errors.append(f"{member_label}不可空白")
+                if me["role"]=="coach" and entry_date<date.today(): errors.append("教練只能填寫今天或未來日期")
                 if coach_name is None: errors.append("請選擇教練")
                 if content is None: errors.append(f"請選擇{content_label}")
                 if hours is None: errors.append("請先選擇內容以帶入時數")
@@ -294,6 +296,7 @@ def daily_page(me):
 def purchase_page(me):
     st.header("課程購買")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
+    coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
     courses=rows(client().table("course_catalog").select("course_name,course_type,session_hours").eq("active",True).order("course_name"))
     course_options={f'{x.get("course_type") or "未分類"}｜{x["course_name"]}':x["course_name"] for x in courses}
     course_names=list(course_options)
@@ -318,7 +321,7 @@ def purchase_page(me):
         session_hours=c2.number_input("每堂課時數",0.25,24.0,value=selected_session_hours,step=0.25,format="%.2f",placeholder="選擇課程後自動帶入",disabled=True)
         amount=c3.number_input("成交總金額",0.0,10000000.0,value=None,step=100.0,format="%.0f",placeholder="請輸入金額")
         c1,c2=st.columns(2)
-        purchased=c1.date_input("購買日期",date.today())
+        purchased=c1.date_input("購買日期",date.today(),**coach_date_limit)
         try:
             default_expiry=purchased.replace(year=purchased.year+1)
         except ValueError:
@@ -331,7 +334,7 @@ def purchase_page(me):
             c1,c2,c3=st.columns(3)
             installment_no=c1.number_input("此次為第幾期",value=1,disabled=True)
             paid=c2.number_input("此次支付金額",0.0,10000000.0,value=None,step=100.0,format="%.0f",placeholder="請輸入支付金額")
-            paid_date=c3.date_input("支付日期",date.today())
+            paid_date=c3.date_input("支付日期",date.today(),**coach_date_limit)
         elif plan=="未分期":
             count=1
             installment_no=1
@@ -351,6 +354,8 @@ def purchase_page(me):
         if amount is None: errors.append("請輸入成交總金額")
         if expiry is None: errors.append("請選擇有效日期")
         elif expiry<purchased: errors.append("有效日期不可早於購買日期")
+        if me["role"]=="coach" and purchased<date.today(): errors.append("教練的購買日期只能填寫今天或未來日期")
+        if me["role"]=="coach" and paid_date is not None and paid_date<date.today(): errors.append("教練的支付日期只能填寫今天或未來日期")
         if plan is None: errors.append("請選擇付款方式")
         if plan=="分期" and count is None: errors.append("請選擇總期數")
         if paid is None or paid<=0: errors.append("此次支付金額須大於 0")
@@ -633,6 +638,7 @@ def usage_query_tabs(me):
 def usage_page(me):
     st.header("銷課表")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
+    coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
     cancel_tab,register_tab,query_tab=st.tabs(["上課預約取消","銷課登錄","教練查詢"])
     with cancel_tab:
         st.markdown('<div style="font-size:1.5rem;font-weight:600;line-height:1.3;margin:0.25rem 0 1rem 0;">上課預約取消 <span style="font-size:0.75rem;font-weight:400;">（前一日及當日臨時請假者）</span></div>',unsafe_allow_html=True)
@@ -679,12 +685,14 @@ def usage_page(me):
                     label=st.selectbox("選擇課程",list(lookup),key=f"usage_course_{member_map[member_name]}")
                     selected=lookup[label]
                     with st.form(f'consume_{selected["purchase_id"]}'):
-                        c1,c2=st.columns(2); usage_date=c1.date_input("銷課日期",date.today()); c2.text_input("授課教練",value=selected["coach_name"],disabled=True)
+                        c1,c2=st.columns(2); usage_date=c1.date_input("銷課日期",date.today(),**coach_date_limit); c2.text_input("授課教練",value=selected["coach_name"],disabled=True)
                         note=st.text_input("備註"); submit=st.form_submit_button("確認扣除 1 堂")
                     per=Decimal(str(selected["remaining_amount"])) if selected["remaining_sessions"]==1 else (Decimal(str(selected["total_amount"]))/selected["total_sessions"]).quantize(Decimal("0.01"))
                     st.caption(f"本次預計扣除：1 堂／$ {per:,.0f}；最後一堂會自動扣完剩餘金額。")
                     if submit:
                         try:
+                            if me["role"]=="coach" and usage_date<date.today():
+                                raise ValueError("教練只能填寫今天或未來的銷課日期")
                             client().rpc("consume_session",{"p_purchase_id":selected["purchase_id"],"p_usage_date":str(usage_date),"p_coach_id":selected["coach_id"],"p_note":note}).execute()
                             st.success("扣課完成。"); st.rerun()
                         except Exception as exc: st.error(f"扣課失敗：{exc}")
