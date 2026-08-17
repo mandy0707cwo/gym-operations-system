@@ -1538,13 +1538,61 @@ def member_course_io_page(me):
                             username=str(row["coach_username"]).strip(); coach_key=username.casefold()
                             if coach_key in ambiguous_coach_references: raise ValueError("教練姓名重複，請改填登入帳號")
                             if coach_key not in coach_reference_to_id: raise ValueError("找不到教練帳號或姓名")
-                            clean_usages.append({"purchase_reference":purchase_reference,"purchase_key":purchase_key,"usage_date":str(pd.to_datetime(row["usage_date"]).date()),"coach_id":coach_reference_to_id[coach_key],"note":str(row["note"]).strip() or None})
+                            clean_usages.append({"source_row":i+2,"purchase_reference":purchase_reference,"purchase_key":purchase_key,
+                                "usage_date":str(pd.to_datetime(row["usage_date"]).date()),"coach_id":coach_reference_to_id[coach_key],
+                                "note":str(row["note"]).strip() or None,"skip_existing":False})
                         except Exception as exc: errors.append(f"銷課表第 {i+2} 列：{exc}")
+            # 以購買課程、日期、教練及備註做多重集合比對；重新上傳同一份檔案時，
+            # 只略過資料庫中已存在的相同筆數，避免先前部分成功後再次重複扣課。
+            existing_usage_counts={}
+            for usage in usages:
+                signature=(str(usage.get("purchase_id") or ""),str(usage.get("usage_date") or ""),
+                    str(usage.get("coach_id") or ""),str(usage.get("note") or "").strip().casefold())
+                existing_usage_counts[signature]=existing_usage_counts.get(signature,0)+1
+            skipped_existing_usages=0
+            for item in clean_usages:
+                existing_purchase_id=purchase_reference_to_id.get(item["purchase_key"])
+                if not existing_purchase_id:
+                    continue
+                signature=(str(existing_purchase_id),item["usage_date"],str(item["coach_id"]),str(item.get("note") or "").strip().casefold())
+                if existing_usage_counts.get(signature,0)>0:
+                    item["skip_existing"]=True
+                    existing_usage_counts[signature]-=1
+                    skipped_existing_usages+=1
+
+            # 匯入前先核對每筆購買課程的可用堂數，避免執行到一半才因堂數不足中止。
+            required_usage_counts={}
+            for item in clean_usages:
+                if not item["skip_existing"]:
+                    required_usage_counts[item["purchase_key"]]=required_usage_counts.get(item["purchase_key"],0)+1
+            purchase_by_id={str(x["id"]):x for x in purchases}
+            existing_used_counts={}
+            for usage in usages:
+                pid=str(usage.get("purchase_id") or "")
+                existing_used_counts[pid]=existing_used_counts.get(pid,0)+1
+            new_course_by_key={str(x.get("source_id") or "").strip().casefold():x for x in clean_courses if str(x.get("source_id") or "").strip()}
+            for purchase_key,required_count in required_usage_counts.items():
+                existing_purchase_id=purchase_reference_to_id.get(purchase_key)
+                if existing_purchase_id:
+                    purchase=purchase_by_id.get(str(existing_purchase_id),{})
+                    available=max(int(purchase.get("total_sessions") or 0)-existing_used_counts.get(str(existing_purchase_id),0),0)
+                    if purchase.get("status")!="active" and required_count>0:
+                        errors.append(f"銷課表 purchase_id {purchase_key}：課程狀態不是有效，尚有 {required_count} 筆未匯入")
+                    elif required_count>available:
+                        errors.append(f"銷課表 purchase_id {purchase_key}：需匯入 {required_count} 筆，但剩餘堂數只有 {available}")
+                else:
+                    new_course=new_course_by_key.get(purchase_key)
+                    available=int(new_course.get("total_sessions") or 0) if new_course else 0
+                    if required_count>available:
+                        errors.append(f"銷課表 purchase_id {purchase_key}：需匯入 {required_count} 筆，但新課程堂數只有 {available}")
             if errors: st.error("匯入檢查未通過：\n- "+"\n- ".join(errors[:30]))
             else:
-                st.success(f"檢查通過：會員課程 {len(clean_courses)} 筆、銷課 {len(clean_usages)} 筆。")
+                pending_usage_count=len(clean_usages)-skipped_existing_usages
+                st.success(f"檢查通過：會員課程 {len(clean_courses)} 筆、待匯入銷課 {pending_usage_count} 筆。")
                 if duplicate_purchase_rows:
                     st.info(f"已略過 purchase_id 重複的會員課程資料 {duplicate_purchase_rows} 筆（包含資料庫既有資料及本次檔案內重複資料）。")
+                if skipped_existing_usages:
+                    st.info(f"已辨識銷課表中 {skipped_existing_usages} 筆資料庫既有紀錄，確認匯入時將自動略過，避免重複扣課。")
                 if st.button("確認匯入",type="primary"):
                     for item in clean_courses:
                         existing=rows(admin.table("members").select("id").eq("member_name",item["member_name"]))
@@ -1556,11 +1604,24 @@ def member_course_io_page(me):
                         if source_key:
                             purchase_reference_to_id[source_key]=created["id"]
                         if item["paid_amount"]>0: admin.table("purchase_payments").insert({"purchase_id":created["id"],"installment_no":1,"amount":item["paid_amount"],"paid_date":item["paid_date"],"created_by":me["id"]}).execute()
+                    imported_usage_count=0
+                    failed_usage_rows=[]
                     for item in clean_usages:
-                        purchase_id=purchase_reference_to_id.get(item["purchase_key"])
-                        if not purchase_id: raise ValueError(f'找不到 purchase_id：{item["purchase_reference"]}')
-                        client().rpc("consume_session",{"p_purchase_id":purchase_id,"p_usage_date":item["usage_date"],"p_coach_id":item["coach_id"],"p_note":item["note"]}).execute()
-                    st.success("資料匯入完成。")
+                        if item["skip_existing"]:
+                            continue
+                        try:
+                            purchase_id=purchase_reference_to_id.get(item["purchase_key"])
+                            if not purchase_id: raise ValueError(f'找不到 purchase_id：{item["purchase_reference"]}')
+                            client().rpc("consume_session",{"p_purchase_id":purchase_id,"p_usage_date":item["usage_date"],"p_coach_id":item["coach_id"],"p_note":item["note"]}).execute()
+                            imported_usage_count+=1
+                        except Exception as exc:
+                            failed_usage_rows.append({"Excel列號":item["source_row"],"purchase_id":item["purchase_reference"],
+                                "銷課日期":item["usage_date"],"失敗原因":str(exc)})
+                    if failed_usage_rows:
+                        st.error(f"匯入完成但有失敗資料：成功 {imported_usage_count} 筆、已略過 {skipped_existing_usages} 筆、失敗 {len(failed_usage_rows)} 筆。")
+                        st.dataframe(pd.DataFrame(failed_usage_rows),hide_index=True,use_container_width=True)
+                    else:
+                        st.success(f"資料匯入完成：成功 {imported_usage_count} 筆、已略過既有紀錄 {skipped_existing_usages} 筆、失敗 0 筆。")
         except Exception as exc: st.error(f"無法匯入檔案：{exc}")
 
 def _sync_daily_classes(admin, operation_date, coach_id):
