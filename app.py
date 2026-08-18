@@ -1715,13 +1715,16 @@ def record_admin_page(me):
         record_purchase_ids=[x["purchase_id"] for x in records]
         purchase_details=rows(admin.table("purchases").select("id,purchase_date,purchase_kind,coach_id").in_("id",record_purchase_ids)) if record_purchase_ids else []
         purchase_detail_map={x["id"]:x for x in purchase_details}
+        all_purchase_keys=rows(admin.table("purchases").select("id,purchase_date,created_at"))
+        record_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
         for item in records:
             detail=purchase_detail_map.get(item["purchase_id"],{})
             item["purchase_date"]=detail.get("purchase_date")
             item["purchase_kind"]=detail.get("purchase_kind")
             item["coach_id"]=detail.get("coach_id") or item.get("coach_id")
+            item["purchase_code"]=record_purchase_code_map.get(item["purchase_id"],item["purchase_id"])
         records.sort(key=lambda x:str(x.get("purchase_date") or ""),reverse=True)
-        labels={f'{x.get("purchase_date") or "日期不明"}｜{x["member_name"]}｜{x["course_name"]}｜{x["total_sessions"]} 堂｜{id_name.get(x.get("coach_id"),x.get("coach_name") or "未知教練")}':x for x in records}
+        labels={f'{x.get("purchase_date") or "日期不明"}｜{x["purchase_code"]}｜{x["member_name"]}｜{x["course_name"]}｜{x["total_sessions"]} 堂｜{id_name.get(x.get("coach_id"),x.get("coach_name") or "未知教練")}':x for x in records}
     else:
         records=rows(admin.table("session_usages").select("*").order("usage_date",desc=True).limit(500))
         usage_purchase_ids=list({x["purchase_id"] for x in records})
