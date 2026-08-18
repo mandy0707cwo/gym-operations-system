@@ -1493,12 +1493,10 @@ def member_course_io_page(me):
             # Compare uploaded purchase IDs against both the current database
             # and earlier valid rows in the same workbook. Blank IDs remain
             # importable because they represent newly created purchases.
-            seen_purchase_ids={
-                str(code).strip().casefold()
-                for code in purchase_code_map.values()
-                if str(code).strip()
-            }
+            database_purchase_ids=set(purchase_reference_to_id)
+            seen_purchase_ids=set(database_purchase_ids)
             duplicate_purchase_rows=0
+            duplicate_purchase_details=[]
             if not any(x in book.sheet_names for x in ("會員課程","銷課表")):
                 errors.append("至少需要『會員課程』或『銷課表』工作表。")
             if "會員課程" in book.sheet_names:
@@ -1512,6 +1510,13 @@ def member_course_io_page(me):
                             source_key=source_id.casefold()
                             if source_key and source_key in seen_purchase_ids:
                                 duplicate_purchase_rows+=1
+                                duplicate_purchase_details.append({
+                                    "Excel列號":i+2,
+                                    "purchase_id":source_id,
+                                    "會員名稱":str(row.get("member_name","")).strip(),
+                                    "課程名稱":str(row.get("course_name","")).strip(),
+                                    "重複來源":"資料庫既有紀錄" if source_key in database_purchase_ids else "本次檔案內重複",
+                                })
                                 continue
                             username=str(row["coach_username"]).strip(); coach_key=username.casefold()
                             if coach_key in ambiguous_coach_references: raise ValueError("教練姓名重複，請改填登入帳號")
@@ -1562,6 +1567,7 @@ def member_course_io_page(me):
                     str(usage.get("coach_id") or ""),str(usage.get("note") or "").strip().casefold())
                 existing_usage_counts[signature]=existing_usage_counts.get(signature,0)+1
             skipped_existing_usages=0
+            duplicate_usage_details=[]
             for item in clean_usages:
                 existing_purchase_id=purchase_reference_to_id.get(item["purchase_key"])
                 if not existing_purchase_id:
@@ -1571,6 +1577,14 @@ def member_course_io_page(me):
                     item["skip_existing"]=True
                     existing_usage_counts[signature]-=1
                     skipped_existing_usages+=1
+                    duplicate_usage_details.append({
+                        "Excel列號":item["source_row"],
+                        "purchase_id":item["purchase_reference"],
+                        "銷課日期":item["usage_date"],
+                        "教練":id_to_display_name.get(item["coach_id"],""),
+                        "備註":item.get("note") or "",
+                        "重複來源":"資料庫既有銷課紀錄",
+                    })
 
             # 匯入前先核對每筆購買課程的可用堂數，避免執行到一半才因堂數不足中止。
             required_usage_counts={}
@@ -1603,8 +1617,19 @@ def member_course_io_page(me):
                 st.success(f"檢查通過：會員課程 {len(clean_courses)} 筆、待匯入銷課 {pending_usage_count} 筆。")
                 if duplicate_purchase_rows:
                     st.info(f"已略過 purchase_id 重複的會員課程資料 {duplicate_purchase_rows} 筆（包含資料庫既有資料及本次檔案內重複資料）。")
+                    st.dataframe(pd.DataFrame(duplicate_purchase_details),hide_index=True,use_container_width=True)
                 if skipped_existing_usages:
                     st.info(f"已辨識銷課表中 {skipped_existing_usages} 筆資料庫既有紀錄，確認匯入時將自動略過，避免重複扣課。")
+                    st.dataframe(pd.DataFrame(duplicate_usage_details),hide_index=True,use_container_width=True)
+                if duplicate_purchase_details or duplicate_usage_details:
+                    duplicate_report={}
+                    if duplicate_purchase_details:
+                        duplicate_report["會員課程重複"] = pd.DataFrame(duplicate_purchase_details)
+                    if duplicate_usage_details:
+                        duplicate_report["銷課表重複"] = pd.DataFrame(duplicate_usage_details)
+                    st.download_button("下載重複資料明細",_excel_bytes(duplicate_report),
+                        file_name=f"匯入重複資料明細_{date.today()}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 if st.button("確認匯入",type="primary"):
                     for item in clean_courses:
                         existing=rows(admin.table("members").select("id").eq("member_name",item["member_name"]))
