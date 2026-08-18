@@ -1881,7 +1881,10 @@ def record_admin_page(me):
                         _sync_daily_classes(admin,usage_date,coach_id)
                 else:
                     affected={(item["usage_date"],item["coach_id"]) for item in delete_records}
+                    affected_purchase_ids=list({item["purchase_id"] for item in delete_records})
                     admin.table("session_usages").delete().in_("id",record_ids).execute()
+                    if affected_purchase_ids:
+                        admin.table("purchases").update({"status":"active"}).in_("id",affected_purchase_ids).eq("status","completed").execute()
                     for usage_date,coach_id in affected: _sync_daily_classes(admin,usage_date,coach_id)
                 st.success(f"已刪除 {len(delete_records)} 筆資料。"); st.rerun()
             except Exception as exc: st.error(f"刪除失敗：{exc}")
