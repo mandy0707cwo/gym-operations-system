@@ -1748,6 +1748,12 @@ def record_admin_page(me):
         ).strip().casefold()
     else:
         search_col2.caption("此資料類型沒有會員名稱欄位。")
+    purchase_id_search=""
+    if data_type in ("課程購買","銷課表"):
+        purchase_id_search=st.text_input(
+            "purchase_id 搜尋",placeholder="可輸入完整或部分購買編號",
+            key=f"record_purchase_id_search_{data_type}"
+        ).strip().casefold()
 
     selected_search_coach_id=coach_map.get(coach_search)
     filtered_labels={}
@@ -1762,6 +1768,16 @@ def record_admin_page(me):
             else:
                 item_member=str(usage_member_map.get(item.get("purchase_id"),""))
             if member_search not in item_member.strip().casefold():
+                continue
+        if purchase_id_search:
+            if data_type=="課程購買":
+                purchase_code=str(item.get("purchase_code") or "")
+            elif data_type=="銷課表":
+                purchase_code=str(usage_purchase_code_map.get(item.get("purchase_id"),item.get("purchase_id") or ""))
+            else:
+                purchase_code=""
+            searchable_purchase_ids=f'{purchase_code} {item.get("purchase_id") or ""}'.casefold()
+            if purchase_id_search not in searchable_purchase_ids:
                 continue
         filtered_labels[label]=item
     labels=filtered_labels
