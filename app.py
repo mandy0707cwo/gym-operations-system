@@ -92,6 +92,43 @@ def collapse_sidebar_on_mobile():
         width=0,
     )
 
+def localize_usage_search_no_results():
+    """只將銷課登錄會員／課程下拉搜尋的 No results 改為中文。"""
+    components.html(
+        """
+        <script>
+        (() => {
+          const doc = window.parent.document;
+          const targetLabels = ["會員名稱", "選擇課程", "輸入或選擇會員"];
+          const isUsageSearch = () => {
+            const active = doc.activeElement;
+            if (!active) return false;
+            const descriptor = [
+              active.getAttribute("aria-label") || "",
+              active.getAttribute("placeholder") || ""
+            ].join(" ");
+            return targetLabels.some(label => descriptor.includes(label));
+          };
+          const translate = () => {
+            if (!isUsageSearch()) return;
+            const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+            let node;
+            while ((node = walker.nextNode())) {
+              if (node.nodeValue && node.nodeValue.trim() === "No results") {
+                node.nodeValue = node.nodeValue.replace("No results", "查無此人及課程");
+              }
+            }
+          };
+          const observer = new MutationObserver(translate);
+          observer.observe(doc.body, {childList: true, subtree: true, characterData: true});
+          doc.addEventListener("input", translate, true);
+          translate();
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
 def login():
     if "user" in st.session_state:
         return st.session_state.user
@@ -660,6 +697,7 @@ def usage_page(me):
         for x in cancellations: x["coach_name"]=coach_names.get(x.pop("coach_id"),"未知")
         show_table(cancellations,["cancel_date","coach_name","cancelled_sessions","reason"])
     with register_tab:
+        localize_usage_search_no_results()
         if me["role"]=="coach":
             owned_balances=rows(client().table("purchase_balances").select("member_id").eq("coach_id",me["id"]))
             owned_member_ids=list({x["member_id"] for x in owned_balances if x.get("member_id")})
@@ -685,7 +723,7 @@ def usage_page(me):
                 if not active:
                     st.warning("此會員沒有可扣課的有效課程。")
                 else:
-                    lookup={f'{x["course_name"]}｜成交教練：{x["coach_name"]}｜剩 {x["remaining_sessions"]} 堂｜餘額 {x["remaining_amount"]}':x for x in active}
+                    lookup={f'會員：{member_name}｜{x["course_name"]}｜成交教練：{x["coach_name"]}｜剩 {x["remaining_sessions"]} 堂｜餘額 {x["remaining_amount"]}':x for x in active}
                     label=st.selectbox("選擇課程",list(lookup),key=f"usage_course_{member_map[member_name]}")
                     selected=lookup[label]
                     with st.form(f'consume_{selected["purchase_id"]}'):
