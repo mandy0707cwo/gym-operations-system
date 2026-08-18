@@ -381,6 +381,8 @@ def purchase_page(me):
     purchases=[x for x in purchases if x.get("coach_id")==me["id"]] if me["role"]=="coach" else [x for x in purchases if x.get("coach_id") in operational_ids]
     installment_rows=rows(client().table("purchases").select("id,total_amount,installment_count").eq("payment_plan","installment"))
     installment_map={x["id"]:x for x in installment_rows}
+    all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at"))
+    installment_code_map=_build_purchase_code_map(all_purchase_keys)
     installment_ids=set(installment_map)
     payment_rows=rows(client().table("purchase_payments").select("purchase_id,installment_no,amount").in_("purchase_id",list(installment_ids))) if installment_ids else []
     payment_summary={}
@@ -397,8 +399,9 @@ def purchase_page(me):
         if paid["amount"]>=float(plan["total_amount"]):
             continue
         unpaid_amount=max(float(plan["total_amount"])-paid["amount"],0)
-        lookup[f'{purchase["member_name"]}｜{purchase["course_name"]}｜{int(plan["installment_count"])} 期｜未付 $ {unpaid_amount:,.0f}']={
-            "id":purchase["purchase_id"],"paid_numbers":paid["numbers"],"unpaid_amount":unpaid_amount}
+        purchase_code=installment_code_map.get(purchase["purchase_id"],purchase["purchase_id"])
+        lookup[f'{purchase_code}｜{purchase["member_name"]}｜{purchase["course_name"]}｜{int(plan["installment_count"])} 期｜未付 $ {unpaid_amount:,.0f}']={
+            "id":purchase["purchase_id"],"purchase_code":purchase_code,"paid_numbers":paid["numbers"],"unpaid_amount":unpaid_amount}
     if lookup:
         st.subheader("登錄後續期款")
         with st.form("payment"):
@@ -409,6 +412,7 @@ def purchase_page(me):
             pay_amount=c2.number_input("支付金額",1.0,10000000.0,step=100.0,format="%.0f")
             pay_date=c3.date_input("付款日期",date.today())
             no=2 if installment_choice=="第 2 期" else 3
+            st.caption(f'本次付款沿用購買課程編號：{selected_payment["purchase_code"]}；不會建立新的 purchase_id。')
             add=st.form_submit_button("新增付款")
         if add:
             try:
