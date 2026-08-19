@@ -1778,11 +1778,12 @@ def record_admin_page(me):
                 break
             usage_offset+=usage_page_size
         usage_purchase_ids=list({x["purchase_id"] for x in records})
-        usage_members=rows(admin.table("purchase_balances").select("purchase_id,member_name").in_("purchase_id",usage_purchase_ids)) if usage_purchase_ids else []
-        usage_member_map={x["purchase_id"]:x.get("member_name") or "會員不明" for x in usage_members}
+        usage_purchases=rows(admin.table("purchase_balances").select("purchase_id,member_name,course_name").in_("purchase_id",usage_purchase_ids)) if usage_purchase_ids else []
+        usage_member_map={x["purchase_id"]:x.get("member_name") or "會員不明" for x in usage_purchases}
+        usage_course_map={x["purchase_id"]:x.get("course_name") or "課程不明" for x in usage_purchases}
         all_usage_purchase_keys=rows(admin.table("purchases").select("id,purchase_date,created_at"))
         usage_purchase_code_map=_build_purchase_code_map(all_usage_purchase_keys)
-        labels={f'{x["usage_date"]}｜purchase_id：{usage_purchase_code_map.get(x["purchase_id"],x["purchase_id"])}｜{usage_member_map.get(x["purchase_id"],"會員不明")}｜{id_name.get(x["coach_id"],"未知")}｜第{x["session_seq"]}堂｜{x["id"][:8]}':x for x in records}
+        labels={f'purchase_id：{usage_purchase_code_map.get(x["purchase_id"],x["purchase_id"])}｜{usage_member_map.get(x["purchase_id"],"會員不明")}｜{id_name.get(x["coach_id"],"未知教練")}｜{usage_course_map.get(x["purchase_id"],"課程不明")}｜第{x["session_seq"]}堂':x for x in records}
 
     st.markdown("#### 搜尋紀錄")
     search_col1,search_col2=st.columns(2)
