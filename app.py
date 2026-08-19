@@ -2048,10 +2048,23 @@ def session_usage_export_query(me):
         st.error("開始日期不可晚於結束日期。")
         return
 
-    query=admin.table("session_usages").select("purchase_id,usage_date,coach_id").gte("usage_date",str(start)).lte("usage_date",str(end)).order("usage_date",desc=True)
-    if selected_coach!="全部教練":
-        query=query.eq("coach_id",coach_options_map[selected_coach])
-    usage_rows=rows(query)
+    # 銷課紀錄可能超過 Data API 單次回傳上限；依日期與教練條件分批讀取完整結果。
+    # 穩定排序可避免相同銷課日期的資料在分頁邊界重複或遺漏。
+    usage_rows=[]
+    usage_page_size=1000
+    usage_offset=0
+    while True:
+        query=(admin.table("session_usages").select("id,purchase_id,usage_date,coach_id,created_at")
+            .gte("usage_date",str(start)).lte("usage_date",str(end))
+            .order("usage_date",desc=True).order("created_at",desc=True).order("id",desc=True)
+            .range(usage_offset,usage_offset+usage_page_size-1))
+        if selected_coach!="全部教練":
+            query=query.eq("coach_id",coach_options_map[selected_coach])
+        usage_page=rows(query)
+        usage_rows.extend(usage_page)
+        if len(usage_page)<usage_page_size:
+            break
+        usage_offset+=usage_page_size
     purchase_ids=list({x["purchase_id"] for x in usage_rows})
     purchases=rows(admin.table("purchases").select("id,member_id,course_name,session_hours").in_("id",purchase_ids)) if purchase_ids else []
     purchase_map={x["id"]:x for x in purchases}
