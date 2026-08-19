@@ -1153,13 +1153,20 @@ def project_admin_page(me):
                         "funding_type":"stored" if funding_label=="已儲值" else "unfunded",
                         "stored_date":str(stored_date) if funding_label=="已儲值" else None,
                         "stored_amount":stored_amount if funding_label=="已儲值" else 0,
-                        "active":True,"created_by":me["id"]}).execute())
+                        "active":True,"created_by":me["id"]}))
+                    if not created_project:
+                        raise ValueError("專案主檔建立後未取得新增資料")
                     if funding_label=="已儲值" and created_project:
-                        admin.table("project_deposits").insert({"project_id":created_project[0]["id"],
-                            "deposit_date":str(stored_date),"amount":stored_amount,"transaction_type":"opening",
-                            "note":"建立專案時的期初儲值","created_by":me["id"]}).execute()
+                        try:
+                            admin.table("project_deposits").insert({"project_id":created_project[0]["id"],
+                                "deposit_date":str(stored_date),"amount":stored_amount,"transaction_type":"opening",
+                                "note":"建立專案時的期初儲值","created_by":me["id"]}).execute()
+                        except Exception as deposit_exc:
+                            # 避免留下已儲值主檔已建立、期初儲值明細卻缺少的半完成資料。
+                            admin.table("projects").delete().eq("id",created_project[0]["id"]).execute()
+                            raise deposit_exc
                     st.success("專案已新增。"); st.rerun()
-                except Exception as exc: st.error(f"新增失敗，請確認專案名稱是否重複：{exc}")
+                except Exception as exc: st.error(f"新增失敗：{exc}")
 
         display_projects=[]
         for x in projects:
