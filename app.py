@@ -1764,7 +1764,19 @@ def record_admin_page(me):
         records.sort(key=lambda x:str(x.get("purchase_date") or ""),reverse=True)
         labels={f'{x.get("purchase_date") or "日期不明"}｜{x["purchase_code"]}｜{x["member_name"]}｜{x["course_name"]}｜{x["total_sessions"]} 堂｜{id_name.get(x.get("coach_id"),x.get("coach_name") or "未知教練")}':x for x in records}
     else:
-        records=rows(admin.table("session_usages").select("*").order("usage_date",desc=True).limit(500))
+        # 銷課紀錄可能超過 Data API 單次回傳上限；分批讀取後再套用會員、教練及 purchase_id 篩選。
+        # 使用穩定的多欄排序，避免相同日期資料在分頁邊界重複或遺漏。
+        records=[]
+        usage_page_size=1000
+        usage_offset=0
+        while True:
+            usage_page=rows(admin.table("session_usages").select("*")
+                .order("usage_date",desc=True).order("created_at",desc=True).order("id",desc=True)
+                .range(usage_offset,usage_offset+usage_page_size-1))
+            records.extend(usage_page)
+            if len(usage_page)<usage_page_size:
+                break
+            usage_offset+=usage_page_size
         usage_purchase_ids=list({x["purchase_id"] for x in records})
         usage_members=rows(admin.table("purchase_balances").select("purchase_id,member_name").in_("purchase_id",usage_purchase_ids)) if usage_purchase_ids else []
         usage_member_map={x["purchase_id"]:x.get("member_name") or "會員不明" for x in usage_members}
