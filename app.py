@@ -1783,7 +1783,7 @@ def record_admin_page(me):
         usage_course_map={x["purchase_id"]:x.get("course_name") or "課程不明" for x in usage_purchases}
         all_usage_purchase_keys=rows(admin.table("purchases").select("id,purchase_date,created_at"))
         usage_purchase_code_map=_build_purchase_code_map(all_usage_purchase_keys)
-        labels={f'purchase_id：{usage_purchase_code_map.get(x["purchase_id"],x["purchase_id"])}｜{usage_member_map.get(x["purchase_id"],"會員不明")}｜{id_name.get(x["coach_id"],"未知教練")}｜{usage_course_map.get(x["purchase_id"],"課程不明")}｜第{x["session_seq"]}堂':x for x in records}
+        labels={f'purchase_id：{usage_purchase_code_map.get(x["purchase_id"],x["purchase_id"])}｜{usage_member_map.get(x["purchase_id"],"會員不明")}｜{id_name.get(x["coach_id"],"未知教練")}｜{usage_course_map.get(x["purchase_id"],"課程不明")}｜第{x["session_seq"]}堂｜銷課日期：{x["usage_date"]}':x for x in records}
 
     st.markdown("#### 搜尋紀錄")
     search_col1,search_col2=st.columns(2)
