@@ -680,7 +680,7 @@ def usage_page(me):
     st.header("銷課表")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
     coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
-    cancel_tab,register_tab,query_tab=st.tabs(["上課預約取消","銷課登錄","教練查詢"])
+    register_tab,cancel_tab,query_tab=st.tabs(["銷課登錄","上課預約取消","教練查詢"])
     with cancel_tab:
         st.markdown('<div style="font-size:1.5rem;font-weight:600;line-height:1.3;margin:0.25rem 0 1rem 0;">上課預約取消 <span style="font-size:0.75rem;font-weight:400;">（前一日及當日臨時請假者）</span></div>',unsafe_allow_html=True)
         with st.form("session_cancellation",clear_on_submit=True):
