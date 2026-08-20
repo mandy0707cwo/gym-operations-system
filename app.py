@@ -466,9 +466,10 @@ def purchase_page(me):
                 st.rerun()
             except Exception as exc: st.error(f"新增失敗（請檢查期次是否重複或超出設定）：{exc}")
 
-def usage_query_tabs(me):
+def usage_query_tabs(me, enable_export=False):
     st.divider()
     st.subheader("教練查詢")
+    export_sheets={}
     coaches=coach_options()
     operational_ids=set(coaches.values())
     balances=rows(client().table("purchase_balances").select("*").order("expiry_date"))
@@ -535,9 +536,11 @@ def usage_query_tabs(me):
                 "付款狀況":payment_status,"課程完成":"是" if float(item["remaining_sessions"])<=0 else "否",
                 "課程完成日期":completion_date_map.get(item["purchase_id"]),
             })
+        detail_columns=["成交日期","會員名稱","教練","課程名稱","成交金額","時數","購買堂數","剩餘堂數","剩餘金額","有效期限","付款狀況","課程完成","課程完成日期"]
+        member_course_df=pd.DataFrame(detail,columns=detail_columns)
+        export_sheets["會員課程查詢"]=member_course_df
         if detail:
-            detail_columns=["成交日期","會員名稱","教練","課程名稱","成交金額","時數","購買堂數","剩餘堂數","剩餘金額","有效期限","付款狀況","課程完成","課程完成日期"]
-            st.dataframe(pd.DataFrame(detail,columns=detail_columns),hide_index=True,use_container_width=True,
+            st.dataframe(member_course_df,hide_index=True,use_container_width=True,
                 column_config={"成交金額":st.column_config.NumberColumn(format="$ %.0f"),
                                "時數":st.column_config.NumberColumn(format="%.2f"),
                                "剩餘金額":st.column_config.NumberColumn(format="$ %.0f")})
@@ -545,6 +548,8 @@ def usage_query_tabs(me):
             st.info("目前沒有可查詢的課程資料。")
 
     with tab2:
+        usage_detail_display=pd.DataFrame(columns=["日期","教練","會員名稱","課程名稱","銷課時數","動磁波時數","銷課金額"])
+        daily_hours_df=pd.DataFrame(columns=["日期","教練","體驗項目時數","單堂銷售時數","專案時數","活動支援時數（扣除後÷2）","每日營運時數合計"])
         c1,c2,c3=st.columns(3)
         query_start=c1.date_input("開始日期",date.today().replace(day=1),key="usage_query_start")
         query_end=c2.date_input("結束日期",date.today(),key="usage_query_end")
@@ -624,9 +629,12 @@ def usage_query_tabs(me):
                         "單堂銷售時數":single_total,"專案時數":project_total,"活動支援時數（扣除後÷2）":event_total,
                         "每日營運時數合計":trial_total+single_total+project_total+event_total})
                 if daily_rows:
+                    daily_hours_df=pd.DataFrame(daily_rows)
                     daily_hour_columns={name:st.column_config.NumberColumn(format="%.2f 小時") for name in ["體驗項目時數","單堂銷售時數","專案時數","活動支援時數（扣除後÷2）","每日營運時數合計"]}
-                    st.dataframe(pd.DataFrame(daily_rows),hide_index=True,use_container_width=True,column_config=daily_hour_columns)
+                    st.dataframe(daily_hours_df,hide_index=True,use_container_width=True,column_config=daily_hour_columns)
                 else: st.info("查詢期間沒有每日營運時數資料。")
+        export_sheets["執行時數_銷課"]=usage_detail_display
+        export_sheets["執行時數_每日營運"]=daily_hours_df
 
     with tab3:
         today=date.today()
@@ -640,9 +648,12 @@ def usage_query_tabs(me):
                     "有效期限":x["expiry_date"],"即將到期":"是" if today<=expiry_date<=deadline else "否",
                     "過期":"是" if expiry_date<today else "否"})
             expiry_columns=["成交日期","會員名稱","教練","有效期限","即將到期","過期"]
-            st.dataframe(pd.DataFrame(expiry_rows,columns=expiry_columns),hide_index=True,use_container_width=True)
+            expiry_df=pd.DataFrame(expiry_rows,columns=expiry_columns)
+            st.dataframe(expiry_df,hide_index=True,use_container_width=True)
         else:
+            expiry_df=pd.DataFrame(columns=["成交日期","會員名稱","教練","有效期限","即將到期","過期"])
             st.info("目前沒有即將到期或過期的課程資料。")
+        export_sheets["即將到期過期"]=expiry_df
 
     with tab4:
         low_balances=[x for x in balances if x["status"]=="active" and 0<x["remaining_sessions"]<=3]
@@ -651,10 +662,13 @@ def usage_query_tabs(me):
                        "購買堂數":x["total_sessions"],"已上堂數":x["used_sessions"],
                        "剩餘堂數":x["remaining_sessions"],"剩餘金額":float(x["remaining_amount"]),
                        "有效期限":x["expiry_date"]} for x in low_balances]
-            st.dataframe(pd.DataFrame(low_rows),hide_index=True,use_container_width=True,
+            low_balance_df=pd.DataFrame(low_rows)
+            st.dataframe(low_balance_df,hide_index=True,use_container_width=True,
                 column_config={"剩餘金額":st.column_config.NumberColumn(format="$ %.0f")})
         else:
+            low_balance_df=pd.DataFrame(columns=["成交日期","會員名稱","課程名稱","成交教練","購買堂數","已上堂數","剩餘堂數","剩餘金額","有效期限"])
             st.info("目前沒有剩餘三堂（含）以下的有效課程。")
+        export_sheets["剩餘三堂"]=low_balance_df
 
     with tab5:
         detail_c1,detail_c2=st.columns(2)
@@ -685,11 +699,18 @@ def usage_query_tabs(me):
                 "剩餘堂數":balance.get("remaining_sessions",0),"有效期限":balance.get("expiry_date"),
                 "備註":usage.get("note") or ""})
         usage_detail_columns=["成交日","會員名稱","教練","課程名稱","銷課日期","銷課堂數","剩餘堂數","有效期限","備註"]
+        usage_history_df=pd.DataFrame(usage_detail_rows,columns=usage_detail_columns)
+        export_sheets["銷課明細查詢"]=usage_history_df
         if usage_detail_rows:
-            st.dataframe(pd.DataFrame(usage_detail_rows,columns=usage_detail_columns),hide_index=True,use_container_width=True,
+            st.dataframe(usage_history_df,hide_index=True,use_container_width=True,
                 column_config={"銷課堂數":st.column_config.NumberColumn(format="%d"),"剩餘堂數":st.column_config.NumberColumn(format="%.0f")})
         else:
             st.info("目前沒有符合條件的銷課明細。")
+
+    if enable_export:
+        coach_query_export=_excel_bytes(export_sheets)
+        st.download_button("下載教練查詢報表",coach_query_export,file_name=f"教練查詢報表_{date.today()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
 def usage_page(me):
     st.header("銷課表")
@@ -2171,7 +2192,7 @@ def financial_report_page(me):
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
         return
-    report_tabs=st.tabs(["會員報表","專案報表","其他報表","每月報表"])
+    report_tabs=st.tabs(["會員報表","專案報表","其他報表","每月報表","教練查詢"])
     with report_tabs[0]:
         st.subheader("會員報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
@@ -2725,6 +2746,9 @@ def financial_report_page(me):
             "每月教練結單獎金":monthly_completion_bonus_df,"結單獎金總計":monthly_completion_bonus_summary_df})
         st.download_button("匯出每月報表",monthly_export,file_name=f"每月報表_{month_start}_{month_end}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+
+    with report_tabs[4]:
+        usage_query_tabs(me,enable_export=True)
 
 user=login(); me=profile(user.id)
 with st.sidebar:
