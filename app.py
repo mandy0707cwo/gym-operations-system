@@ -2726,8 +2726,14 @@ def financial_report_page(me):
         monthly_tabs=st.tabs(["每月銷課","每月已儲值專案扣款","每月教練時數","每月教練營收","每月教練談單獎金","每月教練結單獎金"])
         monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額（未稅）","扣款金額（未稅）","體驗項目金額","單堂銷售金額","專案（未稅）","銷課（未稅）","金額總計（未稅）","成交未稅金額","談單獎金","課程結束成交未稅金額","結單獎金","符合規則成交未稅金額總計","談單獎金總計","符合規則課程結束成交未稅金額總計","結單獎金總計"]}
         monthly_bonus_config={**monthly_money_config,"談單率":st.column_config.NumberColumn(format="%.2f%%"),"結單率":st.column_config.NumberColumn(format="%.2f%%")}
-        with monthly_tabs[0]: st.dataframe(monthly_sales_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
-        with monthly_tabs[1]: st.dataframe(monthly_stored_project_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
+        with monthly_tabs[0]:
+            monthly_sales_total=int(monthly_sales_df["銷課金額（未稅）"].sum()) if not monthly_sales_df.empty else 0
+            st.metric("銷課總金額（未稅）",f"$ {monthly_sales_total:,.0f}")
+            st.dataframe(monthly_sales_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
+        with monthly_tabs[1]:
+            monthly_project_total=int(monthly_stored_project_df["扣款金額（未稅）"].sum()) if not monthly_stored_project_df.empty else 0
+            st.metric("專案總金額（未稅）",f"$ {monthly_project_total:,.0f}")
+            st.dataframe(monthly_stored_project_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
         with monthly_tabs[2]: st.dataframe(monthly_hours_df,hide_index=True,use_container_width=True)
         with monthly_tabs[3]: st.dataframe(monthly_revenue_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
         with monthly_tabs[4]:
