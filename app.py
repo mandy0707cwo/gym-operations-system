@@ -2226,19 +2226,22 @@ def financial_report_page(me):
         # 預收明細以付款日期判斷是否列入，包含查詢期間收到的分期款。
         period_payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").gte("paid_date",str(start)).lte("paid_date",str(end)).order("paid_date",desc=True))
         period_purchase_ids=list({x["purchase_id"] for x in period_payments})
-        purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date").in_("id",period_purchase_ids)) if period_purchase_ids else []
+        purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,payment_plan,installment_count").in_("id",period_purchase_ids)) if period_purchase_ids else []
         if selected_coach_id: purchases=[x for x in purchases if x.get("coach_id")==selected_coach_id]
         if selected_member_id: purchases=[x for x in purchases if x.get("member_id")==selected_member_id]
         purchase_ids=[x["id"] for x in purchases]
         period_payments=[x for x in period_payments if x["purchase_id"] in set(purchase_ids)]
         balance_usages=rows(client().table("session_usages").select("purchase_id,deducted_amount,usage_date").in_("purchase_id",purchase_ids).lte("usage_date",str(end))) if purchase_ids else []
-        balance_payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").in_("purchase_id",purchase_ids).lte("paid_date",str(end))) if purchase_ids else []
+        balance_payments=rows(client().table("purchase_payments").select("purchase_id,installment_no,amount,paid_date").in_("purchase_id",purchase_ids).lte("paid_date",str(end))) if purchase_ids else []
         used_amount_map={}
         for usage in balance_usages:
             used_amount_map[usage["purchase_id"]]=used_amount_map.get(usage["purchase_id"],0)+float(usage["deducted_amount"])
         received_amount_map={}
+        paid_installments_map={}
         for payment in balance_payments:
             received_amount_map[payment["purchase_id"]]=received_amount_map.get(payment["purchase_id"],0)+float(payment["amount"])
+            if payment.get("installment_no") is not None:
+                paid_installments_map.setdefault(payment["purchase_id"],set()).add(int(payment["installment_no"]))
         period_received_map={}
         period_payment_date_map={}
         for payment in period_payments:
@@ -2253,35 +2256,35 @@ def financial_report_page(me):
             used=min(used_amount_map.get(purchase["id"],0),contracted)
             remaining=cumulative_prepaid-used
             purchase_in_period=str(start)<=str(purchase["purchase_date"])<=str(end)
+            if cumulative_prepaid>=contracted:
+                payment_status="付清"
+            elif purchase.get("payment_plan")=="installment":
+                paid_count=len(paid_installments_map.get(purchase["id"],set()))
+                payment_status=f'已付 {paid_count}/{int(purchase.get("installment_count") or 0)} 期'
+            else:
+                payment_status="未付清"
             balance_rows.append({"日期":period_payment_date_map.get(purchase["id"]),"購買_ID":financial_purchase_code_map.get(purchase["id"],""),
                 "會員名稱":member_name_map.get(purchase["member_id"],""),"課程名稱":purchase.get("course_name") or "","堂數":int(purchase.get("total_sessions") or 0),
+                "分期期數／付清":payment_status,
                 "成交總金額":_tax_display_amount(contracted,detail_tax_mode) if purchase_in_period else None,"實際預收金額":_tax_display_amount(period_prepaid,detail_tax_mode),
                 "銷課金額":_tax_display_amount(used,detail_tax_mode),"剩餘金額":_tax_display_amount(remaining,detail_tax_mode),
                 "_含稅成交":contracted if purchase_in_period else 0,"_含稅預收":period_prepaid,"_含稅銷課":used,"_含稅剩餘":remaining})
         balance_rows.sort(key=lambda x:str(x.get("日期") or ""),reverse=True)
         balance_df=pd.DataFrame(balance_rows,columns=["日期","會員名稱","成交總金額","實際預收金額","銷課金額","剩餘金額"])
-        balance_subtotal_df=pd.DataFrame([{
-            "項目":"金額小計",
-            "成交總金額":int(balance_df["成交總金額"].sum()) if not balance_df.empty else 0,
-            "實際預收金額":int(balance_df["實際預收金額"].sum()) if not balance_df.empty else 0,
-            "銷課金額":int(balance_df["銷課金額"].sum()) if not balance_df.empty else 0,
-            "剩餘金額":int(balance_df["剩餘金額"].sum()) if not balance_df.empty else 0
-        }])
         totals_df=pd.DataFrame([{"成交總金額":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
-            "實際預收總金額":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode),
-            "銷課總金額":_tax_display_amount(sum(x["_含稅銷課"] for x in balance_rows),total_tax_mode),
-            "剩餘總金額":_tax_display_amount(sum(x["_含稅剩餘"] for x in balance_rows),total_tax_mode)}])
+            "實際預收總金額":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode)}])
         prepaid_total_rows=[{
             "購買_ID":x["購買_ID"],"會員名稱":x["會員名稱"],"課程名稱":x["課程名稱"],"堂數":x["堂數"],
+            "分期期數／付清":x["分期期數／付清"],
             "成交金額":_tax_display_amount(x["_含稅成交"],total_tax_mode) if x["_含稅成交"] else None,
             "實際預收金額":_tax_display_amount(x["_含稅預收"],total_tax_mode),
         } for x in balance_rows]
         prepaid_total_rows.append({
-            "購買_ID":"合計","會員名稱":"","課程名稱":"","堂數":sum(x["堂數"] for x in balance_rows),
+            "購買_ID":"合計","會員名稱":"","課程名稱":"","堂數":sum(x["堂數"] for x in balance_rows),"分期期數／付清":"",
             "成交金額":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
             "實際預收金額":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode),
         })
-        prepaid_total_df=pd.DataFrame(prepaid_total_rows,columns=["購買_ID","會員名稱","課程名稱","堂數","成交金額","實際預收金額"])
+        prepaid_total_df=pd.DataFrame(prepaid_total_rows,columns=["購買_ID","會員名稱","課程名稱","堂數","分期期數／付清","成交金額","實際預收金額"])
 
         money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","成交金額","成交總金額","實際預收金額","銷課金額","剩餘金額","實際預收總金額","銷課總金額","剩餘總金額"]}
         def center_member_report_columns(frame,columns):
@@ -2291,18 +2294,16 @@ def financial_report_page(me):
             return styler.set_table_styles(header_styles,overwrite=False)
         with detail_tabs[0]:
             total_values=totals_df.iloc[0]
-            total_cols=st.columns(4)
-            for col,name in zip(total_cols,["成交總金額","實際預收總金額","銷課總金額","剩餘總金額"]):
+            total_cols=st.columns(2)
+            for col,name in zip(total_cols,["成交總金額","實際預收總金額"]):
                 col.metric(name,f'$ {float(total_values[name]):,.0f}')
-            st.caption(f"以上總金額顯示為{total_tax_mode}；成交總金額只計算本期間成交資料，實際預收總金額為本期間實際收款，銷課與剩餘總金額累計至 {end}。")
+            st.caption(f"以上總金額顯示為{total_tax_mode}；成交總金額只計算本期間成交資料，實際預收總金額為本期間實際收款。")
             st.markdown("**購買課程明細**")
             st.caption("每列為查詢期間內有實際收款的購買課程，包含分期款；非本期間成交者，成交金額留白。")
             st.dataframe(center_member_report_columns(prepaid_total_df,["實際預收金額"]),hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[1]:
             st.caption(f"日期依查詢期間內最後一筆付款日期；只要期間內有實際收款即列入，包含分期款。非本期間成交者，成交總金額留白。實際預收金額為期間收款；銷課與剩餘金額累計至 {end}。目前顯示：{detail_tax_mode}金額。")
             st.dataframe(center_member_report_columns(balance_df,["實際預收金額"]),hide_index=True,use_container_width=True,column_config=money_config)
-            st.markdown("**金額小計**")
-            st.dataframe(center_member_report_columns(balance_subtotal_df,["實際預收金額"]),hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[2]:
             st.caption(f"日期依銷課日期；堂數以目前堂次／購買總堂數顯示，例如 12/12；最後一堂標示為已完成，其餘為進行中。教練篩選依授課教練。目前銷課金額顯示：{sales_tax_mode}。未稅金額按含稅金額 ÷ 1.05 四捨五入至整數。")
             st.dataframe(sales_df,hide_index=True,use_container_width=True,column_config=money_config)
