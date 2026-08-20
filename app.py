@@ -2226,7 +2226,7 @@ def financial_report_page(me):
         # 預收明細以付款日期判斷是否列入，包含查詢期間收到的分期款。
         period_payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").gte("paid_date",str(start)).lte("paid_date",str(end)).order("paid_date",desc=True))
         period_purchase_ids=list({x["purchase_id"] for x in period_payments})
-        purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_amount,purchase_date").in_("id",period_purchase_ids)) if period_purchase_ids else []
+        purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date").in_("id",period_purchase_ids)) if period_purchase_ids else []
         if selected_coach_id: purchases=[x for x in purchases if x.get("coach_id")==selected_coach_id]
         if selected_member_id: purchases=[x for x in purchases if x.get("member_id")==selected_member_id]
         purchase_ids=[x["id"] for x in purchases]
@@ -2253,7 +2253,8 @@ def financial_report_page(me):
             used=min(used_amount_map.get(purchase["id"],0),contracted)
             remaining=cumulative_prepaid-used
             purchase_in_period=str(start)<=str(purchase["purchase_date"])<=str(end)
-            balance_rows.append({"日期":period_payment_date_map.get(purchase["id"]),"會員名稱":member_name_map.get(purchase["member_id"],""),
+            balance_rows.append({"日期":period_payment_date_map.get(purchase["id"]),"購買_ID":financial_purchase_code_map.get(purchase["id"],""),
+                "會員名稱":member_name_map.get(purchase["member_id"],""),"課程名稱":purchase.get("course_name") or "","堂數":int(purchase.get("total_sessions") or 0),
                 "成交總金額":_tax_display_amount(contracted,detail_tax_mode) if purchase_in_period else None,"實際預收金額":_tax_display_amount(period_prepaid,detail_tax_mode),
                 "銷課金額":_tax_display_amount(used,detail_tax_mode),"剩餘金額":_tax_display_amount(remaining,detail_tax_mode),
                 "_含稅成交":contracted if purchase_in_period else 0,"_含稅預收":period_prepaid,"_含稅銷課":used,"_含稅剩餘":remaining})
@@ -2266,20 +2267,37 @@ def financial_report_page(me):
             "銷課金額":int(balance_df["銷課金額"].sum()) if not balance_df.empty else 0,
             "剩餘金額":int(balance_df["剩餘金額"].sum()) if not balance_df.empty else 0
         }])
-        totals_df=pd.DataFrame([{"成交總金額總計":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
-            "實際預收金額總計":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode),
-            "銷課金額總計":_tax_display_amount(sum(x["_含稅銷課"] for x in balance_rows),total_tax_mode),
-            "剩餘金額總計":_tax_display_amount(sum(x["_含稅剩餘"] for x in balance_rows),total_tax_mode)}])
+        totals_df=pd.DataFrame([{"成交總金額":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
+            "實際預收總金額":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode),
+            "銷課總金額":_tax_display_amount(sum(x["_含稅銷課"] for x in balance_rows),total_tax_mode),
+            "剩餘總金額":_tax_display_amount(sum(x["_含稅剩餘"] for x in balance_rows),total_tax_mode)}])
+        prepaid_total_rows=[{
+            "購買_ID":x["購買_ID"],"會員名稱":x["會員名稱"],"課程名稱":x["課程名稱"],"堂數":x["堂數"],
+            "成交金額":_tax_display_amount(x["_含稅成交"],total_tax_mode) if x["_含稅成交"] else None,
+            "實際預收金額":_tax_display_amount(x["_含稅預收"],total_tax_mode),
+        } for x in balance_rows]
+        prepaid_total_rows.append({
+            "購買_ID":"合計","會員名稱":"","課程名稱":"","堂數":sum(x["堂數"] for x in balance_rows),
+            "成交金額":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
+            "實際預收金額":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode),
+        })
+        prepaid_total_df=pd.DataFrame(prepaid_total_rows,columns=["購買_ID","會員名稱","課程名稱","堂數","成交金額","實際預收金額"])
 
-        money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","成交總金額","實際預收金額","銷課金額","剩餘金額","成交總金額總計","實際預收金額總計","銷課金額總計","剩餘金額總計"]}
+        money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","成交金額","成交總金額","實際預收金額","銷課金額","剩餘金額","實際預收總金額","銷課總金額","剩餘總金額"]}
         def center_member_report_columns(frame,columns):
             centered=[name for name in columns if name in frame.columns]
             styler=frame.style.set_properties(subset=centered,**{"text-align":"center"})
             header_styles=[{"selector":f"th.col_heading.level0.col{frame.columns.get_loc(name)}","props":[("text-align","center")]} for name in centered]
             return styler.set_table_styles(header_styles,overwrite=False)
         with detail_tabs[0]:
-            st.caption(f"實際預收金額總計為查詢期間實際收款；成交總金額總計只計算本期間成交資料。銷課與剩餘金額為列入會員課程截至 {end} 的累計數。目前顯示：{total_tax_mode}金額。")
-            st.dataframe(center_member_report_columns(totals_df,["實際預收金額總計"]),hide_index=True,use_container_width=True,column_config=money_config)
+            total_values=totals_df.iloc[0]
+            total_cols=st.columns(4)
+            for col,name in zip(total_cols,["成交總金額","實際預收總金額","銷課總金額","剩餘總金額"]):
+                col.metric(name,f'$ {float(total_values[name]):,.0f}')
+            st.caption(f"以上總金額顯示為{total_tax_mode}；成交總金額只計算本期間成交資料，實際預收總金額為本期間實際收款，銷課與剩餘總金額累計至 {end}。")
+            st.markdown("**購買課程明細**")
+            st.caption("每列為查詢期間內有實際收款的購買課程，包含分期款；非本期間成交者，成交金額留白。")
+            st.dataframe(center_member_report_columns(prepaid_total_df,["實際預收金額"]),hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[1]:
             st.caption(f"日期依查詢期間內最後一筆付款日期；只要期間內有實際收款即列入，包含分期款。非本期間成交者，成交總金額留白。實際預收金額為期間收款；銷課與剩餘金額累計至 {end}。目前顯示：{detail_tax_mode}金額。")
             st.dataframe(center_member_report_columns(balance_df,["實際預收金額"]),hide_index=True,use_container_width=True,column_config=money_config)
@@ -2290,7 +2308,7 @@ def financial_report_page(me):
             st.dataframe(sales_df,hide_index=True,use_container_width=True,column_config=money_config)
             st.markdown("**金額小計**")
             st.dataframe(sales_subtotal_df,hide_index=True,use_container_width=True,column_config=money_config)
-        export_data=_excel_bytes({"預收餘額總表":totals_df,"預收餘額明細":balance_df,"銷課明細":sales_df})
+        export_data=_excel_bytes({"預收餘額總表":prepaid_total_df,"預收餘額彙總":totals_df,"預收餘額明細":balance_df,"銷課明細":sales_df})
         st.download_button("匯出會員財務報表",export_data,file_name=f"會員財務報表_{start}_{end}_銷課{sales_tax_mode}_明細{detail_tax_mode}_總額{total_tax_mode}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
