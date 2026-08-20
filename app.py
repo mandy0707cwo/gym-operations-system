@@ -2458,17 +2458,15 @@ def financial_report_page(me):
                 course_type_rows.append({
                     "課程屬性":course_type,
                     "成交未稅金額":_tax_display_amount(totals["purchase"],"未稅"),
-                    "成交含稅金額":_tax_display_amount(totals["purchase"],"含稅"),
                     "銷課未稅金額":_tax_display_amount(totals["usage"],"未稅"),
-                    "銷課含稅金額":_tax_display_amount(totals["usage"],"含稅"),
                 })
-            course_type_columns=["課程屬性","成交未稅金額","成交含稅金額","銷課未稅金額","銷課含稅金額"]
+            course_type_columns=["課程屬性","成交未稅金額","銷課未稅金額"]
             course_type_df=pd.DataFrame(course_type_rows,columns=course_type_columns)
             with other_tabs[0]:
                 st.caption("日期依課程購買日期；成交總金額為含稅金額。首購與續約欄位為購買筆數。")
                 st.dataframe(referral_df,hide_index=True,use_container_width=True,column_config={"成交總金額":st.column_config.NumberColumn(format="$ %.0f")})
             with other_tabs[1]:
-                st.caption("成交金額依購買日期及成交教練；銷課金額依銷課日期及實際授課教練。未稅金額均以含稅金額 ÷ 1.05 計算。")
+                st.caption("成交未稅金額依購買日期及成交教練；銷課未稅金額依銷課日期及實際授課教練。未稅金額均以原含稅金額 ÷ 1.05 計算。")
                 if course_type_df.empty:
                     st.info("查詢期間沒有成交或銷課資料。")
                 else:
