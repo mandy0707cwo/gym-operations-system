@@ -673,7 +673,7 @@ def usage_query_tabs(me):
             detail_balances=[x for x in detail_balances if detail_member_key in str(x.get("member_name") or "").casefold()]
         detail_balance_map={x["purchase_id"]:x for x in detail_balances}
         detail_purchase_ids=list(detail_balance_map)
-        detail_usages=(rows(client().table("session_usages").select("purchase_id,usage_date,session_seq,coach_id")
+        detail_usages=(rows(client().table("session_usages").select("purchase_id,usage_date,session_seq,coach_id,note")
             .in_("purchase_id",detail_purchase_ids).order("usage_date",desc=True).order("session_seq",desc=True)) if detail_purchase_ids else [])
         usage_detail_rows=[]
         for usage in detail_usages:
@@ -682,8 +682,9 @@ def usage_query_tabs(me):
             usage_detail_rows.append({"成交日":purchase.get("purchase_date"),"會員名稱":balance.get("member_name",""),
                 "教練":next((name for name,coach_id in coaches.items() if coach_id==usage.get("coach_id")),"未知教練"),
                 "課程名稱":balance.get("course_name",""),"銷課日期":usage["usage_date"],"銷課堂數":1,
-                "剩餘堂數":balance.get("remaining_sessions",0),"有效期限":balance.get("expiry_date")})
-        usage_detail_columns=["成交日","會員名稱","教練","課程名稱","銷課日期","銷課堂數","剩餘堂數","有效期限"]
+                "剩餘堂數":balance.get("remaining_sessions",0),"有效期限":balance.get("expiry_date"),
+                "備註":usage.get("note") or ""})
+        usage_detail_columns=["成交日","會員名稱","教練","課程名稱","銷課日期","銷課堂數","剩餘堂數","有效期限","備註"]
         if usage_detail_rows:
             st.dataframe(pd.DataFrame(usage_detail_rows,columns=usage_detail_columns),hide_index=True,use_container_width=True,
                 column_config={"銷課堂數":st.column_config.NumberColumn(format="%d"),"剩餘堂數":st.column_config.NumberColumn(format="%.0f")})
@@ -742,7 +743,7 @@ def usage_page(me):
                     selected=lookup[label]
                     with st.form(f'consume_{selected["purchase_id"]}'):
                         c1,c2=st.columns(2); usage_date=c1.date_input("銷課日期",date.today(),**coach_date_limit); c2.text_input("授課教練",value=selected["coach_name"],disabled=True)
-                        note=st.text_input("備註"); submit=st.form_submit_button("確認扣除 1 堂")
+                        note=st.text_area("備註",placeholder="可輸入本次銷課備註"); submit=st.form_submit_button("確認扣除 1 堂")
                     per=Decimal(str(selected["remaining_amount"])) if selected["remaining_sessions"]==1 else (Decimal(str(selected["total_amount"]))/selected["total_sessions"]).quantize(Decimal("0.01"))
                     st.caption(f"本次預計扣除：1 堂／$ {per:,.0f}；最後一堂會自動扣完剩餘金額。")
                     if submit:
@@ -2394,15 +2395,16 @@ def financial_report_page(me):
         other_end=c2.date_input("結束日期",date.today(),key="finance_other_end")
         other_coach=c3.selectbox("教練",["全部教練"]+list(coaches),key="finance_other_coach")
         other_member=c4.selectbox("會員名稱",["全部會員"]+list(member_id_map),key="finance_other_member")
-        other_tabs=st.tabs(["醫生轉介","第二分頁（待建置）","第三分頁（待建置）"])
+        other_tabs=st.tabs(["醫生轉介","課程屬性","第三分頁（待建置）"])
         if other_start>other_end:
             st.error("開始日期不可晚於結束日期。")
         else:
-            referral_purchases=rows(client().table("purchases").select("member_id,coach_id,purchase_kind,total_amount,purchase_date,referral").gte("purchase_date",str(other_start)).lte("purchase_date",str(other_end)).order("purchase_date",desc=True))
+            other_purchases=rows(client().table("purchases").select("member_id,coach_id,purchase_kind,total_amount,purchase_date,referral,course_name").gte("purchase_date",str(other_start)).lte("purchase_date",str(other_end)).order("purchase_date",desc=True))
             selected_other_coach_id=coaches.get(other_coach)
             selected_other_member_id=member_id_map.get(other_member)
-            if selected_other_coach_id: referral_purchases=[x for x in referral_purchases if x.get("coach_id")==selected_other_coach_id]
-            if selected_other_member_id: referral_purchases=[x for x in referral_purchases if x.get("member_id")==selected_other_member_id]
+            if selected_other_coach_id: other_purchases=[x for x in other_purchases if x.get("coach_id")==selected_other_coach_id]
+            if selected_other_member_id: other_purchases=[x for x in other_purchases if x.get("member_id")==selected_other_member_id]
+            referral_purchases=other_purchases
             referral_groups={}
             for purchase in referral_purchases:
                 referral=str(purchase.get("referral") or "").strip()
@@ -2415,12 +2417,67 @@ def financial_report_page(me):
             referral_rows=[{"醫生轉介":referral,"會員名稱":member_name_map.get(mid,"未知"),**values} for (referral,mid),values in referral_groups.items()]
             referral_rows.sort(key=lambda x:(x["醫生轉介"],x["會員名稱"]))
             referral_df=pd.DataFrame(referral_rows,columns=["醫生轉介","會員名稱","首購","續約","成交總金額"])
+            course_catalog=rows(client().table("course_catalog").select("course_name,course_type"))
+            course_type_map={str(x.get("course_name") or "").strip():str(x.get("course_type") or "未分類").strip() or "未分類" for x in course_catalog}
+            course_type_totals={}
+            for purchase in other_purchases:
+                course_name=str(purchase.get("course_name") or "").strip()
+                course_type=course_type_map.get(course_name,"未分類")
+                totals=course_type_totals.setdefault(course_type,{"purchase":0.0,"usage":0.0})
+                totals["purchase"]+=float(purchase.get("total_amount") or 0)
+
+            # 銷課依實際銷課日期、授課教練篩選；會員與課程屬性則由原購買紀錄關聯。
+            usage_purchase_records=rows(client().table("purchases").select("id,member_id,course_name"))
+            usage_purchase_map={x["id"]:x for x in usage_purchase_records}
+            course_type_usages=[]
+            usage_page_size=1000
+            usage_offset=0
+            while True:
+                usage_query=(client().table("session_usages").select("purchase_id,coach_id,deducted_amount,usage_date,id")
+                    .gte("usage_date",str(other_start)).lte("usage_date",str(other_end))
+                    .order("usage_date",desc=True).order("id",desc=True)
+                    .range(usage_offset,usage_offset+usage_page_size-1))
+                if selected_other_coach_id:
+                    usage_query=usage_query.eq("coach_id",selected_other_coach_id)
+                usage_page=rows(usage_query)
+                course_type_usages.extend(usage_page)
+                if len(usage_page)<usage_page_size:
+                    break
+                usage_offset+=usage_page_size
+            if selected_other_member_id:
+                course_type_usages=[x for x in course_type_usages
+                    if usage_purchase_map.get(x.get("purchase_id"),{}).get("member_id")==selected_other_member_id]
+            for usage in course_type_usages:
+                purchase=usage_purchase_map.get(usage.get("purchase_id"),{})
+                course_name=str(purchase.get("course_name") or "").strip()
+                course_type=course_type_map.get(course_name,"未分類")
+                totals=course_type_totals.setdefault(course_type,{"purchase":0.0,"usage":0.0})
+                totals["usage"]+=float(usage.get("deducted_amount") or 0)
+            course_type_rows=[]
+            for course_type,totals in sorted(course_type_totals.items()):
+                course_type_rows.append({
+                    "課程屬性":course_type,
+                    "成交未稅金額":_tax_display_amount(totals["purchase"],"未稅"),
+                    "成交含稅金額":_tax_display_amount(totals["purchase"],"含稅"),
+                    "銷課未稅金額":_tax_display_amount(totals["usage"],"未稅"),
+                    "銷課含稅金額":_tax_display_amount(totals["usage"],"含稅"),
+                })
+            course_type_columns=["課程屬性","成交未稅金額","成交含稅金額","銷課未稅金額","銷課含稅金額"]
+            course_type_df=pd.DataFrame(course_type_rows,columns=course_type_columns)
             with other_tabs[0]:
                 st.caption("日期依課程購買日期；成交總金額為含稅金額。首購與續約欄位為購買筆數。")
                 st.dataframe(referral_df,hide_index=True,use_container_width=True,column_config={"成交總金額":st.column_config.NumberColumn(format="$ %.0f")})
-            for other_placeholder in other_tabs[1:]:
-                with other_placeholder: st.info("此分頁將依後續需求建置。")
-            other_export=_excel_bytes({"醫生轉介":referral_df})
+            with other_tabs[1]:
+                st.caption("成交金額依購買日期及成交教練；銷課金額依銷課日期及實際授課教練。未稅金額均以含稅金額 ÷ 1.05 計算。")
+                if course_type_df.empty:
+                    st.info("查詢期間沒有成交或銷課資料。")
+                else:
+                    st.dataframe(course_type_df,hide_index=True,use_container_width=True,column_config={
+                        name:st.column_config.NumberColumn(format="$ %.0f") for name in course_type_columns[1:]
+                    })
+            with other_tabs[2]:
+                st.info("此分頁將依後續需求建置。")
+            other_export=_excel_bytes({"醫生轉介":referral_df,"課程屬性":course_type_df})
             st.download_button("匯出其他報表",other_export,file_name=f"其他報表_{other_start}_{other_end}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
@@ -2670,3 +2727,4 @@ try:
     {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")
+
