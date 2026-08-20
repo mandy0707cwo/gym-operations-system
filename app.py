@@ -529,14 +529,14 @@ def usage_query_tabs(me):
             else:
                 payment_status=f'尚欠 $ {total_amount-payment["amount"]:,.0f}'
             detail.append({
-                "成交日期":purchase.get("purchase_date"),"會員名稱":item["member_name"],"課程名稱":item["course_name"],
+                "成交日期":purchase.get("purchase_date"),"會員名稱":item["member_name"],"教練":item.get("coach_name") or "未知教練","課程名稱":item["course_name"],
                 "成交金額":total_amount,"時數":float(purchase.get("session_hours") or 1),"購買堂數":item["total_sessions"],
                 "剩餘堂數":item["remaining_sessions"],"剩餘金額":float(item["remaining_amount"]),"有效期限":item["expiry_date"],
                 "付款狀況":payment_status,"課程完成":"是" if float(item["remaining_sessions"])<=0 else "否",
                 "課程完成日期":completion_date_map.get(item["purchase_id"]),
             })
         if detail:
-            detail_columns=["成交日期","會員名稱","課程名稱","成交金額","時數","購買堂數","剩餘堂數","剩餘金額","有效期限","付款狀況","課程完成","課程完成日期"]
+            detail_columns=["成交日期","會員名稱","教練","課程名稱","成交金額","時數","購買堂數","剩餘堂數","剩餘金額","有效期限","付款狀況","課程完成","課程完成日期"]
             st.dataframe(pd.DataFrame(detail,columns=detail_columns),hide_index=True,use_container_width=True,
                 column_config={"成交金額":st.column_config.NumberColumn(format="$ %.0f"),
                                "時數":st.column_config.NumberColumn(format="%.2f"),
@@ -673,16 +673,17 @@ def usage_query_tabs(me):
             detail_balances=[x for x in detail_balances if detail_member_key in str(x.get("member_name") or "").casefold()]
         detail_balance_map={x["purchase_id"]:x for x in detail_balances}
         detail_purchase_ids=list(detail_balance_map)
-        detail_usages=(rows(client().table("session_usages").select("purchase_id,usage_date,session_seq")
+        detail_usages=(rows(client().table("session_usages").select("purchase_id,usage_date,session_seq,coach_id")
             .in_("purchase_id",detail_purchase_ids).order("usage_date",desc=True).order("session_seq",desc=True)) if detail_purchase_ids else [])
         usage_detail_rows=[]
         for usage in detail_usages:
             balance=detail_balance_map.get(usage["purchase_id"],{})
             purchase=purchase_map.get(usage["purchase_id"],{})
             usage_detail_rows.append({"成交日":purchase.get("purchase_date"),"會員名稱":balance.get("member_name",""),
+                "教練":next((name for name,coach_id in coaches.items() if coach_id==usage.get("coach_id")),"未知教練"),
                 "課程名稱":balance.get("course_name",""),"銷課日期":usage["usage_date"],"銷課堂數":1,
                 "剩餘堂數":balance.get("remaining_sessions",0),"有效期限":balance.get("expiry_date")})
-        usage_detail_columns=["成交日","會員名稱","課程名稱","銷課日期","銷課堂數","剩餘堂數","有效期限"]
+        usage_detail_columns=["成交日","會員名稱","教練","課程名稱","銷課日期","銷課堂數","剩餘堂數","有效期限"]
         if usage_detail_rows:
             st.dataframe(pd.DataFrame(usage_detail_rows,columns=usage_detail_columns),hide_index=True,use_container_width=True,
                 column_config={"銷課堂數":st.column_config.NumberColumn(format="%d"),"剩餘堂數":st.column_config.NumberColumn(format="%.0f")})
@@ -2212,9 +2213,10 @@ def financial_report_page(me):
             session_display=f"{session_seq}/{total_sessions}" if total_sessions else str(session_seq)
             course_status="已完成" if total_sessions and session_seq>=total_sessions else "進行中"
             sales_rows.append({"日期":usage["usage_date"],"會員名稱":member_name_map.get(purchase.get("member_id"),""),
+                "教練":coach_name_map.get(usage.get("coach_id"),"未知教練"),
                 sales_amount_column:_tax_display_amount(usage["deducted_amount"],sales_tax_mode),"購買_ID":financial_purchase_code_map.get(usage["purchase_id"],""),
                 "課程項目":purchase.get("course_name","") ,"堂數":session_display,"課程狀態":course_status})
-        sales_df=pd.DataFrame(sales_rows,columns=["日期","會員名稱","銷課金額","購買_ID","課程項目","堂數","課程狀態"])
+        sales_df=pd.DataFrame(sales_rows,columns=["日期","會員名稱","教練","銷課金額","購買_ID","課程項目","堂數","課程狀態"])
         sales_subtotal_df=pd.DataFrame([{
             "項目":"金額小計",
             sales_amount_column:int(sales_df[sales_amount_column].sum()) if not sales_df.empty else 0
