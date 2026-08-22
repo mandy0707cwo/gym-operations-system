@@ -787,6 +787,7 @@ def dashboard_page(me):
     coaches=coach_options(); c1,c2,c3=st.columns(3)
     start=c1.date_input("開始日期",date.today().replace(day=1)); end=c2.date_input("結束日期",date.today())
     selected=c3.multiselect("教練",list(coaches),default=list(coaches))
+    st.caption("※金額皆為含稅")
     if start>end: st.error("開始日期不可晚於結束日期。") ; return
     ids=[coaches[x] for x in selected]
     cancellations=rows(client().table("session_cancellations").select("coach_id,cancelled_sessions,cancel_date").gte("cancel_date",str(start)).lte("cancel_date",str(end)))
@@ -820,7 +821,7 @@ def dashboard_page(me):
             +sum(float(x["hours"])-float(x.get("deducted_hours") or 0) for x in event_supports if x["coach_id"]==cid)
             +sum(float(x.get("item_hours") or 0)*float(x["quantity"]) for x in project_entries if x.get("coach_id")==cid))
         result.append({"教練":names[cid],"銷課堂數":used_sessions,"銷課金額":used_amount,
-                       "銷課取消率":cancelled/(used_sessions+cancelled) if used_sessions+cancelled else None,
+                       "上課取消率":cancelled/(used_sessions+cancelled) if used_sessions+cancelled else None,
                        "體驗人次":trial_count,"體驗成交率":first_count/trial_count if trial_count else None,
                        "續約率":renewal_count/len(p) if p else None,"成交堂數":sessions,
                        "成交總金額":amount,"實際預收金額":received,
@@ -870,7 +871,7 @@ def dashboard_page(me):
     dashboard_metrics=[
         ("銷課堂數",f'{totals["銷課堂數"]:,.0f}'),
         ("銷課金額",f'$ {totals["銷課金額"]:,.0f}'),
-        ("銷課取消率",f'{overall_cancel_rate:.1%}' if overall_cancel_rate is not None else "—"),
+        ("上課取消率",f'{overall_cancel_rate:.1%}' if overall_cancel_rate is not None else "—"),
         ("體驗人次",f'{total_trial_count:,.0f}'),
         ("體驗成交率",f'{overall_trial_conversion:.1%}' if overall_trial_conversion is not None else "—"),
         ("續約率",f'{overall_renewal:.1%}' if overall_renewal is not None else "—"),
@@ -886,11 +887,11 @@ def dashboard_page(me):
         for metric_column,(metric_label,metric_value) in zip(metric_columns,metric_group):
             metric_column.metric(metric_label,metric_value)
     display_df=df.copy()
-    display_df["銷課取消率"]=display_df["銷課取消率"]*100
+    display_df["上課取消率"]=display_df["上課取消率"]*100
     display_df["體驗成交率"]=display_df["體驗成交率"]*100
     display_df["續約率"]=display_df["續約率"]*100
-    display_df=display_df[["教練","總執行時數","銷課堂數","銷課金額","銷課取消率","體驗人次","體驗成交率","續約率","成交堂數","成交總金額","實際預收金額","平均每堂單價"]]
-    st.dataframe(display_df,hide_index=True,use_container_width=True,column_config={"總執行時數":st.column_config.NumberColumn(format="%.2f 小時"),"銷課取消率":st.column_config.NumberColumn(format="%.1f%%"),"體驗成交率":st.column_config.NumberColumn(format="%.1f%%"),"續約率":st.column_config.NumberColumn(format="%.1f%%"),"成交總金額":st.column_config.NumberColumn(format="$ %.0f"),"實際預收金額":st.column_config.NumberColumn(format="$ %.0f"),"銷課金額":st.column_config.NumberColumn(format="$ %.0f"),"平均每堂單價":st.column_config.NumberColumn(format="$ %.0f")})
+    display_df=display_df[["教練","總執行時數","銷課堂數","銷課金額","上課取消率","體驗人次","體驗成交率","續約率","成交堂數","成交總金額","實際預收金額","平均每堂單價"]]
+    st.dataframe(display_df,hide_index=True,use_container_width=True,column_config={"總執行時數":st.column_config.NumberColumn(format="%.2f 小時"),"上課取消率":st.column_config.NumberColumn(format="%.1f%%"),"體驗成交率":st.column_config.NumberColumn(format="%.1f%%"),"續約率":st.column_config.NumberColumn(format="%.1f%%"),"成交總金額":st.column_config.NumberColumn(format="$ %.0f"),"實際預收金額":st.column_config.NumberColumn(format="$ %.0f"),"銷課金額":st.column_config.NumberColumn(format="$ %.0f"),"平均每堂單價":st.column_config.NumberColumn(format="$ %.0f")})
     left,right=st.columns(2)
     count_metric=left.selectbox("數量指標",["成交堂數","銷課堂數","體驗人次"],key="dashboard_count_metric")
     amount_metric=right.selectbox("金額類型",["成交總金額","銷課金額"],key="dashboard_amount_metric")
