@@ -2418,13 +2418,15 @@ def financial_report_page(me):
         with detail_tabs[0]:
             total_values=totals_df.iloc[0]
             total_cols=st.columns(2)
-            for col,name in zip(total_cols,["成交總金額","實際預收總金額"]):
+            for col,name in zip(total_cols,["實際預收總金額","成交總金額"]):
                 col.metric(name,f'$ {float(total_values[name]):,.0f}')
             st.caption(f"以上總金額顯示為{total_tax_mode}；成交總金額只計算本期間成交資料，實際預收總金額為本期間實際收款。")
             st.markdown("**購買課程明細**")
             st.caption("每列為查詢期間內有實際收款的購買課程，包含分期款；非本期間成交者，成交金額留白。")
             st.dataframe(center_member_report_columns(prepaid_total_df,["實際預收金額"]),hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[1]:
+            actual_prepaid_balance_total=_tax_display_amount(sum(x["_含稅剩餘"] for x in balance_rows),detail_tax_mode)
+            st.metric(f"實際預收餘額總計（{detail_tax_mode}）",f"$ {actual_prepaid_balance_total:,.0f}")
             st.caption(f"日期依查詢期間內最後一筆付款日期；只要期間內有實際收款即列入，包含分期款。非本期間成交者，成交總金額留白。實際預收金額為期間收款；銷課與剩餘金額累計至 {end}。目前顯示：{detail_tax_mode}金額。")
             st.dataframe(center_member_report_columns(balance_df,["實際預收金額"]),hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[2]:
@@ -2675,20 +2677,37 @@ def financial_report_page(me):
                         "已使用金額":round(used),"剩餘金額":round(stored-used)})
                 funding_df=pd.DataFrame(funding_rows,columns=["專案名稱","儲值金額","已使用金額","剩餘金額"])
 
-                project_report_tabs=st.tabs(["已儲值","未儲值"])
                 project_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["金額","儲值金額","已使用金額","剩餘金額"]}
-                with project_report_tabs[0]:
-                    st.markdown("#### 儲值明細")
-                    st.dataframe(deposit_df,hide_index=True,use_container_width=True,column_config=project_money_config)
-                    st.markdown("#### 使用明細")
-                    st.dataframe(stored_detail_df,hide_index=True,use_container_width=True,column_config=project_money_config)
-                    st.markdown(f"#### 儲值狀況（累計至 {project_end}）")
-                    st.dataframe(funding_df,hide_index=True,use_container_width=True,column_config=project_money_config)
-                with project_report_tabs[1]:
-                    st.dataframe(unfunded_detail_df,hide_index=True,use_container_width=True,column_config=project_money_config)
+                project_main_tabs=st.tabs(["儲值狀況","專案報表","儲值明細"])
+                with project_main_tabs[0]:
+                    st.caption(f"儲值、已使用及剩餘金額累計至 {project_end}。")
+                    st.dataframe(funding_df,hide_index=True,width="stretch",column_config=project_money_config)
+                    funding_export=_excel_bytes({"儲值狀況":funding_df})
+                    st.download_button("下載儲值狀況",funding_export,file_name=f"專案儲值狀況_{project_start}_{project_end}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
+                with project_main_tabs[1]:
+                    project_usage_tabs=st.tabs(["已儲值","未儲值"])
+                    with project_usage_tabs[0]:
+                        st.markdown("#### 已儲值專案使用明細")
+                        st.dataframe(stored_detail_df,hide_index=True,width="stretch",column_config=project_money_config)
+                        stored_export=_excel_bytes({"已儲值使用明細":stored_detail_df})
+                        st.download_button("下載已儲值使用明細",stored_export,file_name=f"已儲值專案使用明細_{project_start}_{project_end}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
+                    with project_usage_tabs[1]:
+                        st.markdown("#### 未儲值專案使用明細")
+                        st.dataframe(unfunded_detail_df,hide_index=True,width="stretch",column_config=project_money_config)
+                        unfunded_export=_excel_bytes({"未儲值使用明細":unfunded_detail_df})
+                        st.download_button("下載未儲值使用明細",unfunded_export,file_name=f"未儲值專案使用明細_{project_start}_{project_end}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
+                with project_main_tabs[2]:
+                    st.caption("呈現查詢期間內的期初儲值、後續儲值及沖銷紀錄。")
+                    st.dataframe(deposit_df,hide_index=True,width="stretch",column_config=project_money_config)
+                    deposit_export=_excel_bytes({"儲值明細":deposit_df})
+                    st.download_button("下載儲值明細",deposit_export,file_name=f"專案儲值明細_{project_start}_{project_end}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
                 project_export=_excel_bytes({"儲值明細":deposit_df,"已儲值使用明細":stored_detail_df,"儲值狀況":funding_df,"未儲值使用明細":unfunded_detail_df})
-                st.download_button("匯出專案財務報表",project_export,file_name=f"專案財務報表_{project_start}_{project_end}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+                st.download_button("下載完整專案財務報表",project_export,file_name=f"專案財務報表_{project_start}_{project_end}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
 
     with report_tabs[3]:
         st.subheader("每月報表")
