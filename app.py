@@ -199,7 +199,7 @@ def daily_page(me):
 
     def standard_entry(tab, table_name, form_key, content_label, catalog_type, member_label=None):
         with tab:
-            catalog_query=client().table("operation_item_catalog").select("id,item_name,detail_content,session_hours,default_amount,active").eq("item_type",catalog_type)
+            catalog_query=client().table("operation_item_catalog").select("id,item_name,detail_content,course_type,session_hours,default_amount,active").eq("item_type",catalog_type)
             if catalog_type=="trial": catalog_query=catalog_query.eq("active",True)
             catalog=rows(catalog_query.order("item_name"))
             option_map={
@@ -214,6 +214,7 @@ def daily_page(me):
             selected_option=st.selectbox(content_label,list(option_map),index=None,placeholder=f"請選擇{content_label}",key=f"{form_key}_content_{revision}")
             selected_catalog=option_map.get(selected_option) if selected_option else None
             content=selected_catalog.get("item_name") if selected_catalog else None
+            course_type=(selected_catalog.get("course_type") or "").strip() if selected_catalog else None
             default_hours=float(selected_catalog.get("session_hours") or 1) if selected_catalog else None
             default_amount=float(selected_catalog.get("default_amount") or 0) if selected_catalog else None
             default_detail=str(selected_catalog.get("detail_content") or "") if selected_catalog else ""
@@ -233,12 +234,13 @@ def daily_page(me):
                 if me["role"]=="coach" and entry_date<date.today(): errors.append("教練只能填寫今天或未來日期")
                 if coach_name is None: errors.append("請選擇教練")
                 if content is None: errors.append(f"請選擇{content_label}")
+                if content is not None and not course_type: errors.append("此項目尚未設定課程屬性，請由系統管理員先完成設定")
                 if hours is None: errors.append("請先選擇內容以帶入時數")
                 if errors:
                     st.error("；".join(errors)+"。")
                 else:
                     try:
-                        payload={"entry_date":str(entry_date),"content":content,"hours":hours,"amount":amount,"note":note.strip() or None,"coach_id":allowed[coach_name],"created_by":me["id"]}
+                        payload={"entry_date":str(entry_date),"content":content,"course_type":course_type,"hours":hours,"amount":amount,"note":note.strip() or None,"coach_id":allowed[coach_name],"created_by":me["id"]}
                         if catalog_type=="trial": payload["detail_content"]=detail_content.strip() or None
                         if member_label: payload["member_name"]=member_name.strip()
                         client().table(table_name).insert(payload).execute()
@@ -2313,7 +2315,7 @@ def financial_report_page(me):
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
         return
-    report_tabs=st.tabs(["會員報表","專案報表","其他報表","每月報表","教練查詢","課程中止"])
+    report_tabs=st.tabs(["會員報表","專案報表","每日營運報表","其他報表","每月報表","教練查詢","課程中止"])
     with report_tabs[0]:
         st.subheader("會員報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
@@ -2575,7 +2577,7 @@ def financial_report_page(me):
             st.download_button("匯出教練財務報表",coach_export,file_name=f"教練財務報表_{coach_start}_{coach_end}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
-    with report_tabs[2]:
+    with report_tabs[3]:
         st.subheader("其他報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
         member_name_map={x["id"]:x["member_name"] for x in members}
@@ -2753,7 +2755,70 @@ def financial_report_page(me):
                 st.download_button("下載完整專案財務報表",project_export,file_name=f"專案財務報表_{project_start}_{project_end}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
 
-    with report_tabs[3]:
+    with report_tabs[2]:
+        st.subheader("每日營運報表")
+        daily_coaches=coach_options()
+        c1,c2,c3,c4=st.columns(4)
+        daily_report_start=c1.date_input("開始日期",date.today().replace(day=1),key="finance_daily_start")
+        daily_report_end=c2.date_input("結束日期",date.today(),key="finance_daily_end")
+        daily_report_coach=c3.selectbox("教練",["全部教練"]+list(daily_coaches),key="finance_daily_coach")
+        daily_report_member=c4.text_input("會員名稱",placeholder="可輸入完整或部分姓名",key="finance_daily_member").strip().casefold()
+        if daily_report_start>daily_report_end:
+            st.error("開始日期不可晚於結束日期。")
+        else:
+            daily_trial_records=paged_rows(lambda: client().table("trial_items")
+                .select("id,entry_date,coach_id,member_name,course_type,amount")
+                .gte("entry_date",str(daily_report_start)).lte("entry_date",str(daily_report_end))
+                .order("entry_date",desc=True).order("id",desc=True))
+            daily_single_records=paged_rows(lambda: client().table("single_sales")
+                .select("id,entry_date,coach_id,member_name,course_type,amount")
+                .gte("entry_date",str(daily_report_start)).lte("entry_date",str(daily_report_end))
+                .order("entry_date",desc=True).order("id",desc=True))
+            selected_daily_coach_id=daily_coaches.get(daily_report_coach)
+            if selected_daily_coach_id:
+                daily_trial_records=[x for x in daily_trial_records if x.get("coach_id")==selected_daily_coach_id]
+                daily_single_records=[x for x in daily_single_records if x.get("coach_id")==selected_daily_coach_id]
+            if daily_report_member:
+                daily_trial_records=[x for x in daily_trial_records if daily_report_member in str(x.get("member_name") or "").casefold()]
+                daily_single_records=[x for x in daily_single_records if daily_report_member in str(x.get("member_name") or "").casefold()]
+
+            def operation_finance_summary(records):
+                amount_by_key={}
+                for record in records:
+                    report_key=(str(record.get("entry_date") or ""),str(record.get("course_type") or "未分類").strip() or "未分類")
+                    amount_by_key[report_key]=amount_by_key.get(report_key,Decimal("0"))+Decimal(str(record.get("amount") or 0))
+                summary_rows=[]
+                for (entry_date,course_type),amount in sorted(amount_by_key.items(),key=lambda item:(item[0][0],item[0][1]),reverse=True):
+                    summary_rows.append({"日期":entry_date,"課程屬性":course_type,
+                        "金額未稅":int(amount.quantize(Decimal("1"),rounding=ROUND_HALF_UP))})
+                return pd.DataFrame(summary_rows,columns=["日期","課程屬性","金額未稅"])
+
+            daily_trial_df=operation_finance_summary(daily_trial_records)
+            daily_single_df=operation_finance_summary(daily_single_records)
+            daily_money_config={"金額未稅":st.column_config.NumberColumn(format="$ %.0f")}
+            daily_operation_tabs=st.tabs(["體驗項目報表","單堂銷售報表"])
+            with daily_operation_tabs[0]:
+                daily_trial_total=int(daily_trial_df["金額未稅"].sum()) if not daily_trial_df.empty else 0
+                st.metric("體驗總計（未稅）",f"$ {daily_trial_total:,.0f}")
+                st.dataframe(daily_trial_df,hide_index=True,width="stretch",column_config=daily_money_config)
+                daily_trial_export=_excel_bytes({"體驗項目報表":daily_trial_df})
+                st.download_button("下載體驗項目報表",daily_trial_export,
+                    file_name=f"體驗項目報表_{daily_report_start}_{daily_report_end}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
+            with daily_operation_tabs[1]:
+                daily_single_total=int(daily_single_df["金額未稅"].sum()) if not daily_single_df.empty else 0
+                st.metric("單堂銷售總計（未稅）",f"$ {daily_single_total:,.0f}")
+                st.dataframe(daily_single_df,hide_index=True,width="stretch",column_config=daily_money_config)
+                daily_single_export=_excel_bytes({"單堂銷售報表":daily_single_df})
+                st.download_button("下載單堂銷售報表",daily_single_export,
+                    file_name=f"單堂銷售報表_{daily_report_start}_{daily_report_end}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
+            daily_operation_export=_excel_bytes({"體驗項目報表":daily_trial_df,"單堂銷售報表":daily_single_df})
+            st.download_button("下載每日營運報表",daily_operation_export,
+                file_name=f"每日營運報表_{daily_report_start}_{daily_report_end}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
+
+    with report_tabs[4]:
         st.subheader("每月報表")
         default_month_start=date.today().replace(day=1)
         default_month_end=(pd.Timestamp(default_month_start)+pd.offsets.MonthEnd(1)).date()
@@ -2828,7 +2893,7 @@ def financial_report_page(me):
             single_revenue=sum(float(x.get("amount") or 0) for x in monthly_single if x.get("coach_id")==coach_id)
             project_revenue=sum(_tax_display_amount(x.get("line_amount"),"未稅") for x in monthly_projects if x.get("coach_id")==coach_id)
             usage_revenue=sum(_tax_display_amount(x.get("deducted_amount"),"未稅") for x in monthly_usages if x.get("coach_id")==coach_id)
-            coach_revenue_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"體驗項目金額":round(trial_revenue),"單堂銷售金額":round(single_revenue),
+            coach_revenue_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"體驗項目金額（未稅）":round(trial_revenue),"單堂銷售金額（未稅）":round(single_revenue),
                 "專案（未稅）":round(project_revenue),"銷課（未稅）":round(usage_revenue),"金額總計（未稅）":round(trial_revenue+single_revenue+project_revenue+usage_revenue)})
         monthly_hours_df=pd.DataFrame(coach_hour_rows)
         monthly_revenue_df=pd.DataFrame(coach_revenue_rows)
@@ -2920,29 +2985,29 @@ def financial_report_page(me):
         monthly_completion_bonus_summary_df=pd.DataFrame(completion_bonus_summary_rows,
             columns=["教練","符合規則課程結束成交未稅金額總計","結單獎金總計"])
 
-        monthly_tabs=st.tabs(["每月銷課","每月已儲值專案扣款","每月教練時數","每月教練營收","每月教練談單獎金","每月教練結單獎金","每月課程中止"])
-        monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額（未稅）","扣款金額（未稅）","體驗項目金額","單堂銷售金額","專案（未稅）","銷課（未稅）","金額總計（未稅）","成交未稅金額","談單獎金","課程結束成交未稅金額","結單獎金","符合規則成交未稅金額總計","談單獎金總計","符合規則課程結束成交未稅金額總計","結單獎金總計","退費前剩餘金額（未稅）","逾期入帳金額（未稅）","退費手續費（未稅）","實際退費金額（未稅）"]}
+        monthly_tabs=st.tabs(["每月銷課","每月教練時數","每月專案銷課","每月教練營收","每月教練談單獎金","每月教練結單獎金","每月課程中止"])
+        monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額（未稅）","扣款金額（未稅）","體驗項目金額（未稅）","單堂銷售金額（未稅）","專案（未稅）","銷課（未稅）","金額總計（未稅）","成交未稅金額","談單獎金","課程結束成交未稅金額","結單獎金","符合規則成交未稅金額總計","談單獎金總計","符合規則課程結束成交未稅金額總計","結單獎金總計","退費前剩餘金額（未稅）","逾期入帳金額（未稅）","退費手續費（未稅）","實際退費金額（未稅）"]}
         monthly_bonus_config={**monthly_money_config,"談單率":st.column_config.NumberColumn(format="%.2f%%"),"結單率":st.column_config.NumberColumn(format="%.2f%%")}
         with monthly_tabs[0]:
             monthly_sales_total=int(monthly_sales_df["銷課金額（未稅）"].sum()) if not monthly_sales_df.empty else 0
             st.metric("銷課總金額（未稅）",f"$ {monthly_sales_total:,.0f}")
-            st.dataframe(monthly_sales_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
-        with monthly_tabs[1]:
+            st.dataframe(monthly_sales_df,hide_index=True,width="stretch",column_config=monthly_money_config)
+        with monthly_tabs[1]: st.dataframe(monthly_hours_df,hide_index=True,width="stretch")
+        with monthly_tabs[2]:
             monthly_project_total=int(monthly_stored_project_df["扣款金額（未稅）"].sum()) if not monthly_stored_project_df.empty else 0
             st.metric("專案總金額（未稅）",f"$ {monthly_project_total:,.0f}")
-            st.dataframe(monthly_stored_project_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
-        with monthly_tabs[2]: st.dataframe(monthly_hours_df,hide_index=True,use_container_width=True)
-        with monthly_tabs[3]: st.dataframe(monthly_revenue_df,hide_index=True,use_container_width=True,column_config=monthly_money_config)
+            st.dataframe(monthly_stored_project_df,hide_index=True,width="stretch",column_config=monthly_money_config)
+        with monthly_tabs[3]: st.dataframe(monthly_revenue_df,hide_index=True,width="stretch",column_config=monthly_money_config)
         with monthly_tabs[4]:
             if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
-            st.dataframe(monthly_talk_bonus_df,hide_index=True,use_container_width=True,column_config=monthly_bonus_config)
+            st.dataframe(monthly_talk_bonus_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
             st.markdown("**各教練談單獎金總計**")
-            st.dataframe(monthly_talk_bonus_summary_df,hide_index=True,use_container_width=True,column_config=monthly_bonus_config)
+            st.dataframe(monthly_talk_bonus_summary_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
         with monthly_tabs[5]:
             if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
-            st.dataframe(monthly_completion_bonus_df,hide_index=True,use_container_width=True,column_config=monthly_bonus_config)
+            st.dataframe(monthly_completion_bonus_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
             st.markdown("**各教練結單獎金總計**")
-            st.dataframe(monthly_completion_bonus_summary_df,hide_index=True,use_container_width=True,column_config=monthly_bonus_config)
+            st.dataframe(monthly_completion_bonus_summary_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
         with monthly_tabs[6]:
             expired_total=int(monthly_termination_df["逾期入帳金額（未稅）"].sum()) if not monthly_termination_df.empty else 0
             fee_total=int(monthly_termination_df["退費手續費（未稅）"].sum()) if not monthly_termination_df.empty else 0
@@ -2952,18 +3017,18 @@ def financial_report_page(me):
             c2.metric("退費手續費總額（未稅）",f"$ {fee_total:,.0f}")
             c3.metric("實際退費總額（未稅）",f"$ {refund_total:,.0f}")
             st.dataframe(monthly_termination_df,hide_index=True,width="stretch",column_config=monthly_money_config)
-        monthly_export=_excel_bytes({"每月銷課":monthly_sales_df,"每月已儲值專案扣款":monthly_stored_project_df,
-            "每月教練時數":monthly_hours_df,"每月教練營收":monthly_revenue_df,
+        monthly_export=_excel_bytes({"每月銷課":monthly_sales_df,"每月教練時數":monthly_hours_df,
+            "每月專案銷課":monthly_stored_project_df,"每月教練營收":monthly_revenue_df,
             "每月教練談單獎金":monthly_talk_bonus_df,"談單獎金總計":monthly_talk_bonus_summary_df,
             "每月教練結單獎金":monthly_completion_bonus_df,"結單獎金總計":monthly_completion_bonus_summary_df,
             "每月課程中止":monthly_termination_df})
         st.download_button("匯出每月報表",monthly_export,file_name=f"每月報表_{month_start}_{month_end}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
-
-    with report_tabs[4]:
-        usage_query_tabs(me,enable_export=True)
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
 
     with report_tabs[5]:
+        usage_query_tabs(me,enable_export=True)
+
+    with report_tabs[6]:
         course_termination_report_page(me)
 
 user=login(); me=profile(user.id)
