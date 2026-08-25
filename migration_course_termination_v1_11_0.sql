@@ -128,7 +128,7 @@ begin
 end; $$;
 
 revoke all on function public.terminate_course(uuid,date,text,boolean,boolean,uuid,text,text) from public;
+revoke execute on function public.terminate_course(uuid,date,text,boolean,boolean,uuid,text,text) from anon;
 grant execute on function public.terminate_course(uuid,date,text,boolean,boolean,uuid,text,text) to authenticated;
 grant select on public.course_terminations to authenticated;
-
 
