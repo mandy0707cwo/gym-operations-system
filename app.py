@@ -2783,32 +2783,32 @@ def financial_report_page(me):
                 daily_single_records=[x for x in daily_single_records if daily_report_member in str(x.get("member_name") or "").casefold()]
 
             def operation_finance_summary(records):
-                amount_by_key={}
+                amount_by_course_type={}
                 for record in records:
-                    report_key=(str(record.get("entry_date") or ""),str(record.get("course_type") or "未分類").strip() or "未分類")
-                    amount_by_key[report_key]=amount_by_key.get(report_key,Decimal("0"))+Decimal(str(record.get("amount") or 0))
+                    course_type=str(record.get("course_type") or "未分類").strip() or "未分類"
+                    amount_by_course_type[course_type]=amount_by_course_type.get(course_type,Decimal("0"))+Decimal(str(record.get("amount") or 0))
                 summary_rows=[]
-                for (entry_date,course_type),amount in sorted(amount_by_key.items(),key=lambda item:(item[0][0],item[0][1]),reverse=True):
-                    summary_rows.append({"日期":entry_date,"課程屬性":course_type,
-                        "金額未稅":int(amount.quantize(Decimal("1"),rounding=ROUND_HALF_UP))})
-                return pd.DataFrame(summary_rows,columns=["日期","課程屬性","金額未稅"])
+                for course_type,amount in sorted(amount_by_course_type.items()):
+                    summary_rows.append({"課程屬性":course_type,
+                        "未稅金額":int(amount.quantize(Decimal("1"),rounding=ROUND_HALF_UP))})
+                return pd.DataFrame(summary_rows,columns=["課程屬性","未稅金額"])
 
             daily_trial_df=operation_finance_summary(daily_trial_records)
             daily_single_df=operation_finance_summary(daily_single_records)
-            daily_money_config={"金額未稅":st.column_config.NumberColumn(format="$ %.0f")}
+            daily_money_config={"未稅金額":st.column_config.NumberColumn(format="$ %.0f")}
             daily_operation_tabs=st.tabs(["體驗項目報表","單堂銷售報表"])
             with daily_operation_tabs[0]:
-                daily_trial_total=int(daily_trial_df["金額未稅"].sum()) if not daily_trial_df.empty else 0
+                daily_trial_total=int(daily_trial_df["未稅金額"].sum()) if not daily_trial_df.empty else 0
                 st.metric("體驗總計（未稅）",f"$ {daily_trial_total:,.0f}")
-                st.dataframe(daily_trial_df,hide_index=True,width="stretch",column_config=daily_money_config)
+                st.dataframe(daily_trial_df,hide_index=True,width="stretch",height="auto",row_height=28,column_config=daily_money_config)
                 daily_trial_export=_excel_bytes({"體驗項目報表":daily_trial_df})
                 st.download_button("下載體驗項目報表",daily_trial_export,
                     file_name=f"體驗項目報表_{daily_report_start}_{daily_report_end}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
             with daily_operation_tabs[1]:
-                daily_single_total=int(daily_single_df["金額未稅"].sum()) if not daily_single_df.empty else 0
+                daily_single_total=int(daily_single_df["未稅金額"].sum()) if not daily_single_df.empty else 0
                 st.metric("單堂銷售總計（未稅）",f"$ {daily_single_total:,.0f}")
-                st.dataframe(daily_single_df,hide_index=True,width="stretch",column_config=daily_money_config)
+                st.dataframe(daily_single_df,hide_index=True,width="stretch",height="auto",row_height=28,column_config=daily_money_config)
                 daily_single_export=_excel_bytes({"單堂銷售報表":daily_single_df})
                 st.download_button("下載單堂銷售報表",daily_single_export,
                     file_name=f"單堂銷售報表_{daily_report_start}_{daily_report_end}.xlsx",
