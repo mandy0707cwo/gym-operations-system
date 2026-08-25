@@ -476,7 +476,7 @@ def purchase_page(me):
                 st.rerun()
             except Exception as exc: st.error(f"新增失敗（請檢查期次是否重複或超出設定）：{exc}")
 
-def usage_query_tabs(me, enable_export=False):
+def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
     st.divider()
     st.subheader("教練查詢")
     export_sheets={}
@@ -493,12 +493,10 @@ def usage_query_tabs(me, enable_export=False):
         purchases=rows(client().table("purchases").select("id,payment_plan,installment_count,session_hours,purchase_date,course_name").in_("id",purchase_ids))
         payments=rows(client().table("purchase_payments").select("purchase_id,installment_no,amount").in_("purchase_id",purchase_ids))
     purchase_map={x["id"]:x for x in purchases}
-    completed_purchase_ids=[x["purchase_id"] for x in balances if float(x.get("remaining_sessions") or 0)<=0]
-    completion_usages=(rows(client().table("session_usages").select("purchase_id,usage_date").in_("purchase_id",completed_purchase_ids).order("usage_date",desc=True))
-        if completed_purchase_ids else [])
-    completion_date_map={}
-    for usage in completion_usages:
-        completion_date_map.setdefault(usage["purchase_id"],usage["usage_date"])
+    if purchase_code_map is None:
+        all_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_date,created_at")
+            .order("purchase_date").order("created_at").order("id"))
+        purchase_code_map=_build_purchase_code_map(all_purchase_keys)
     for balance in balances:
         balance["purchase_date"]=purchase_map.get(balance["purchase_id"],{}).get("purchase_date")
     balances.sort(key=lambda x:str(x.get("purchase_date") or ""),reverse=True)
@@ -533,24 +531,29 @@ def usage_query_tabs(me, enable_export=False):
             purchase=purchase_map.get(item["purchase_id"],{})
             payment=payment_map.get(item["purchase_id"],{"amount":0.0,"count":0})
             total_amount=float(item["total_amount"])
+            used_sessions=int(item.get("used_sessions") or 0)
+            total_sessions=int(item.get("total_sessions") or 0)
             if payment["amount"] >= total_amount:
                 payment_status="已付清"
             elif purchase.get("payment_plan")=="installment":
                 payment_status=f'已付 {payment["count"]}/{purchase.get("installment_count", "-")} 期，$ {payment["amount"]:,.0f}'
             else:
                 payment_status=f'尚欠 $ {total_amount-payment["amount"]:,.0f}'
+            course_status={"active":"進行中","completed":"已完成","expired":"逾期中止","cancelled":"退費中止"}.get(item.get("status"),"未知")
+            if used_sessions>=total_sessions and total_sessions>0 and course_status=="進行中":
+                course_status="已完成"
             detail.append({
-                "成交日期":purchase.get("purchase_date"),"會員名稱":item["member_name"],"教練":item.get("coach_name") or "未知教練","課程名稱":item["course_name"],
-                "成交金額":total_amount,"時數":float(purchase.get("session_hours") or 1),"購買堂數":item["total_sessions"],
-                "剩餘堂數":item["remaining_sessions"],"剩餘金額":float(item["remaining_amount"]),"有效期限":item["expiry_date"],
-                "付款狀況":payment_status,"課程完成":"是" if float(item["remaining_sessions"])<=0 else "否",
-                "課程完成日期":completion_date_map.get(item["purchase_id"]),
+                "購買_ID":purchase_code_map.get(item["purchase_id"],item["purchase_id"]),
+                "教練":item.get("coach_name") or "未知教練","會員名稱":item["member_name"],"課程名稱":item["course_name"],
+                "時數":float(purchase.get("session_hours") or 1),"成交金額":total_amount,
+                "剩餘金額":float(item["remaining_amount"]),"堂數":f"{used_sessions}／{total_sessions}",
+                "有效期限":item["expiry_date"],"付款狀況":payment_status,"課程狀況":course_status,
             })
-        detail_columns=["成交日期","會員名稱","教練","課程名稱","成交金額","時數","購買堂數","剩餘堂數","剩餘金額","有效期限","付款狀況","課程完成","課程完成日期"]
+        detail_columns=["購買_ID","教練","會員名稱","課程名稱","時數","成交金額","剩餘金額","堂數","有效期限","付款狀況","課程狀況"]
         member_course_df=pd.DataFrame(detail,columns=detail_columns)
         export_sheets["會員課程查詢"]=member_course_df
         if detail:
-            st.dataframe(member_course_df,hide_index=True,use_container_width=True,
+            st.dataframe(member_course_df,hide_index=True,width="stretch",
                 column_config={"成交金額":st.column_config.NumberColumn(format="$ %.0f"),
                                "時數":st.column_config.NumberColumn(format="%.2f"),
                                "剩餘金額":st.column_config.NumberColumn(format="$ %.0f")})
@@ -654,14 +657,15 @@ def usage_query_tabs(me, enable_export=False):
             expiry_rows=[]
             for x in expiring:
                 expiry_date=pd.to_datetime(x["expiry_date"]).date()
-                expiry_rows.append({"成交日期":x.get("purchase_date"),"會員名稱":x["member_name"],"教練":x["coach_name"],
+                expiry_rows.append({"購買_ID":purchase_code_map.get(x["purchase_id"],x["purchase_id"]),
+                    "教練":x["coach_name"],"會員名稱":x["member_name"],"課程名稱":x["course_name"],
                     "有效期限":x["expiry_date"],"即將到期":"是" if today<=expiry_date<=deadline else "否",
                     "過期":"是" if expiry_date<today else "否"})
-            expiry_columns=["成交日期","會員名稱","教練","有效期限","即將到期","過期"]
+            expiry_columns=["購買_ID","教練","會員名稱","課程名稱","有效期限","即將到期","過期"]
             expiry_df=pd.DataFrame(expiry_rows,columns=expiry_columns)
-            st.dataframe(expiry_df,hide_index=True,use_container_width=True)
+            st.dataframe(expiry_df,hide_index=True,width="stretch")
         else:
-            expiry_df=pd.DataFrame(columns=["成交日期","會員名稱","教練","有效期限","即將到期","過期"])
+            expiry_df=pd.DataFrame(columns=["購買_ID","教練","會員名稱","課程名稱","有效期限","即將到期","過期"])
             st.info("目前沒有即將到期或過期的課程資料。")
         export_sheets["即將到期過期"]=expiry_df
 
@@ -702,18 +706,18 @@ def usage_query_tabs(me, enable_export=False):
         usage_detail_rows=[]
         for usage in detail_usages:
             balance=detail_balance_map.get(usage["purchase_id"],{})
-            purchase=purchase_map.get(usage["purchase_id"],{})
-            usage_detail_rows.append({"成交日":purchase.get("purchase_date"),"會員名稱":balance.get("member_name",""),
+            used_session_count=int(usage.get("session_seq") or 0)
+            total_session_count=int(balance.get("total_sessions") or 0)
+            usage_detail_rows.append({"購買_ID":purchase_code_map.get(usage["purchase_id"],usage["purchase_id"]),
                 "教練":next((name for name,coach_id in coaches.items() if coach_id==usage.get("coach_id")),"未知教練"),
-                "課程名稱":balance.get("course_name",""),"銷課日期":usage["usage_date"],"銷課堂數":1,
-                "剩餘堂數":balance.get("remaining_sessions",0),"有效期限":balance.get("expiry_date"),
-                "備註":usage.get("note") or ""})
-        usage_detail_columns=["成交日","會員名稱","教練","課程名稱","銷課日期","銷課堂數","剩餘堂數","有效期限","備註"]
+                "會員名稱":balance.get("member_name",""),"課程名稱":balance.get("course_name",""),
+                "銷課日期":usage["usage_date"],"堂數":f"{used_session_count}／{total_session_count}",
+                "有效期限":balance.get("expiry_date")})
+        usage_detail_columns=["購買_ID","教練","會員名稱","課程名稱","銷課日期","堂數","有效期限"]
         usage_history_df=pd.DataFrame(usage_detail_rows,columns=usage_detail_columns)
         export_sheets["銷課明細查詢"]=usage_history_df
         if usage_detail_rows:
-            st.dataframe(usage_history_df,hide_index=True,use_container_width=True,
-                column_config={"銷課堂數":st.column_config.NumberColumn(format="%d"),"剩餘堂數":st.column_config.NumberColumn(format="%.0f")})
+            st.dataframe(usage_history_df,hide_index=True,width="stretch")
         else:
             st.info("目前沒有符合條件的銷課明細。")
 
@@ -725,6 +729,9 @@ def usage_query_tabs(me, enable_export=False):
 def usage_page(me):
     st.header("銷課表")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
+    all_usage_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_date,created_at")
+        .order("purchase_date").order("created_at").order("id"))
+    usage_purchase_code_map=_build_purchase_code_map(all_usage_purchase_keys)
     coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
     register_tab,cancel_tab,query_tab=st.tabs(["銷課登錄","上課預約取消","教練查詢"])
     with cancel_tab:
@@ -769,7 +776,7 @@ def usage_page(me):
                 if not active:
                     st.warning("此會員沒有可扣課的有效課程。")
                 else:
-                    lookup={f'會員：{member_name}｜{x["course_name"]}｜成交教練：{x["coach_name"]}｜剩 {x["remaining_sessions"]} 堂｜餘額 {x["remaining_amount"]}':x for x in active}
+                    lookup={f'{usage_purchase_code_map.get(x["purchase_id"],x["purchase_id"])}｜{member_name}｜{x["course_name"]}｜{int(x["total_sessions"])} 堂｜{x["coach_name"]}｜剩餘 {int(x["remaining_sessions"])} 堂｜餘額 $ {float(x["remaining_amount"]):,.0f}':x for x in active}
                     label=st.selectbox("選擇課程",list(lookup),key=f"usage_course_{member_map[member_name]}")
                     selected=lookup[label]
                     with st.form(f'consume_{selected["purchase_id"]}'):
@@ -789,7 +796,7 @@ def usage_page(me):
                     for x in history: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
                     st.subheader("扣課紀錄"); show_table(history,["usage_date","coach_name","session_seq","deducted_amount","note"])
     with query_tab:
-        usage_query_tabs(me)
+        usage_query_tabs(me,purchase_code_map=usage_purchase_code_map)
 
 def dashboard_page(me):
     st.header("主管 Dashboard")
