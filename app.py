@@ -1092,7 +1092,7 @@ def operation_item_admin_page(me, item_type, title):
     if admin is None:
         st.error("尚未設定 SUPABASE_SECRET_KEY。")
         return
-    items=rows(admin.table("operation_item_catalog").select("id,item_name,detail_content,session_hours,default_amount,active,created_at").eq("item_type",item_type).order("item_name"))
+    items=rows(admin.table("operation_item_catalog").select("id,item_name,detail_content,course_type,session_hours,default_amount,active,created_at").eq("item_type",item_type).order("item_name"))
     item_map={
         (f'{x["item_name"]}｜{x.get("detail_content") or ""}' if item_type=="trial" else x["item_name"]):x
         for x in items
@@ -1105,12 +1105,13 @@ def operation_item_admin_page(me, item_type, title):
             new_hours=c2.number_input("每堂課時數",0.25,24.0,1.0,step=0.25)
             new_amount=c3.number_input("預設金額（未稅）",0.0,1000000000.0,0.0,step=100.0,format="%.0f")
             new_detail=st.text_input("內容").strip() if item_type=="trial" else ""
+            new_course_type=st.text_input("課程屬性").strip()
             add_item=st.form_submit_button("新增項目",type="primary")
         if add_item:
-            if not new_name or (item_type=="trial" and not new_detail): st.error("體驗項目與內容不可空白。" if item_type=="trial" else "項目名稱不可空白。")
+            if not new_name or not new_course_type or (item_type=="trial" and not new_detail): st.error("體驗項目、內容與課程屬性不可空白。" if item_type=="trial" else "項目名稱與課程屬性不可空白。")
             else:
                 try:
-                    admin.table("operation_item_catalog").insert({"item_type":item_type,"item_name":new_name,"detail_content":new_detail or None,"session_hours":new_hours,"default_amount":new_amount,"active":True}).execute()
+                    admin.table("operation_item_catalog").insert({"item_type":item_type,"item_name":new_name,"detail_content":new_detail or None,"course_type":new_course_type or None,"session_hours":new_hours,"default_amount":new_amount,"active":True}).execute()
                     st.success(f"已新增：{new_name}"); st.rerun()
                 except Exception as exc: st.error(f"新增失敗，請確認體驗項目與內容的組合是否重複：{exc}" if item_type=="trial" else f"新增失敗，請確認名稱是否重複：{exc}")
     with delete_tab:
@@ -1130,24 +1131,25 @@ def operation_item_admin_page(me, item_type, title):
     with edit_tab:
         if not items: st.info("目前尚未建立項目。")
         else:
-            admin_columns=["item_name","detail_content","session_hours","default_amount","active","created_at"] if item_type=="trial" else ["item_name","session_hours","default_amount","created_at"]
-            display_items=[{**x,"active":"啟用" if x.get("active",True) else "停用"} for x in items]
+            admin_columns=["item_name","detail_content","課程屬性","session_hours","default_amount","active","created_at"] if item_type=="trial" else ["item_name","課程屬性","session_hours","default_amount","created_at"]
+            display_items=[{**x,"課程屬性":x.get("course_type") or "","active":"啟用" if x.get("active",True) else "停用"} for x in items]
             show_table(display_items,admin_columns)
             selected=st.selectbox("選擇要修改的項目",list(item_map),key=f"edit_select_{item_type}")
             current=item_map[selected]
             with st.form(f"edit_operation_item_{item_type}"):
                 edited_name=st.text_input("修改後名稱",value=current["item_name"]).strip()
                 edited_detail=st.text_input("修改後內容",value=current.get("detail_content") or "").strip() if item_type=="trial" else ""
+                edited_course_type=st.text_input("修改後課程屬性",value=current.get("course_type") or "").strip()
                 c1,c2=st.columns(2)
                 edited_hours=c1.number_input("修改後每堂課時數",0.25,24.0,float(current.get("session_hours") or 1),step=0.25)
                 edited_amount=c2.number_input("修改後預設金額（未稅）",0.0,1000000000.0,float(current.get("default_amount") or 0),step=100.0,format="%.0f")
                 edited_active=st.checkbox("啟用體驗項目",value=bool(current.get("active",True))) if item_type=="trial" else True
                 update_item=st.form_submit_button("儲存修改",type="primary")
             if update_item:
-                if not edited_name or (item_type=="trial" and not edited_detail): st.error("體驗項目與內容不可空白。" if item_type=="trial" else "項目名稱不可空白。")
+                if not edited_name or not edited_course_type or (item_type=="trial" and not edited_detail): st.error("體驗項目、內容與課程屬性不可空白。" if item_type=="trial" else "項目名稱與課程屬性不可空白。")
                 else:
                     try:
-                        payload={"item_name":edited_name,"detail_content":edited_detail or None,"session_hours":edited_hours,"default_amount":edited_amount}
+                        payload={"item_name":edited_name,"detail_content":edited_detail or None,"course_type":edited_course_type or None,"session_hours":edited_hours,"default_amount":edited_amount}
                         if item_type=="trial": payload["active"]=edited_active
                         admin.table("operation_item_catalog").update(payload).eq("id",current["id"]).execute()
                         st.success("項目已修改。既有歷史紀錄仍保留原內容。"); st.rerun()
