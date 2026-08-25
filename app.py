@@ -2188,12 +2188,113 @@ def _build_purchase_code_map(purchases):
         code_map[purchase["id"]]=f'{purchase_date_key.replace("-","")}-{daily_sequences[purchase_date_key]:03d}'
     return code_map
 
+def course_termination_report_page(me):
+    st.subheader("課程中止")
+    st.caption("逾期餘額轉列入帳；退費金額為剩餘金額扣除選擇性 20% 手續費。兩者均不計入銷課及執行時數。")
+    coaches=coach_options(); coach_name_map={v:k for k,v in coaches.items()}
+    members=rows(client().table("members").select("id,member_name"))
+    member_name_map={x["id"]:x["member_name"] for x in members}
+    all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at").order("purchase_date"))
+    purchase_code_map=_build_purchase_code_map(all_purchase_keys)
+
+    try:
+        balances=rows(client().table("purchase_balances").select("*").eq("status","active").gt("remaining_sessions",0).order("expiry_date"))
+        active_ids=[x["purchase_id"] for x in balances]
+        active_purchases=rows(client().table("purchases").select("id,purchase_date,member_id,course_name,total_amount,total_sessions").in_("id",active_ids)) if active_ids else []
+        active_purchase_map={x["id"]:x for x in active_purchases}
+        option_map={}
+        for balance in balances:
+            purchase=active_purchase_map.get(balance["purchase_id"],{})
+            label=(f'{purchase.get("purchase_date") or "日期不明"}｜{purchase_code_map.get(balance["purchase_id"],"")}｜'
+                   f'{balance["member_name"]}｜{balance["course_name"]}｜剩 {balance["remaining_sessions"]} 堂｜$ {float(balance["remaining_amount"]):,.0f}')
+            option_map[label]=balance
+    except Exception:
+        st.error("尚未建立課程中止資料表，請先執行 migration_course_termination_v1_11_0.sql。")
+        return
+
+    entry_tab,history_tab=st.tabs(["新增中止","中止紀錄"])
+    with entry_tab:
+        if not option_map:
+            st.info("目前沒有可中止的有效課程。")
+        else:
+            selected_label=st.selectbox("選擇會員課程",list(option_map),index=None,placeholder="請選擇尚有餘額的課程")
+            selected=option_map.get(selected_label) if selected_label else None
+            termination_label=st.segmented_control("中止類型",["逾期中止","退費中止"],default="逾期中止")
+            charge_fee=False; bonus_eligible=False; bonus_coach=None
+            if termination_label=="退費中止":
+                charge_fee=st.checkbox("收取剩餘金額 20% 手續費",value=True)
+            else:
+                bonus_eligible=st.checkbox("計算結單獎金",value=False)
+                if bonus_eligible:
+                    bonus_coach=st.selectbox("結單獎金歸屬教練",list(coaches),index=None,placeholder="請選擇教練")
+            if selected:
+                remaining=Decimal(str(selected.get("remaining_amount") or 0))
+                fee=(remaining*Decimal("0.20")).quantize(Decimal("0.01"),rounding=ROUND_HALF_UP) if charge_fee else Decimal("0")
+                refund=remaining-fee if termination_label=="退費中止" else Decimal("0")
+                c1,c2,c3=st.columns(3)
+                c1.metric("退費前剩餘金額",f"$ {remaining:,.0f}")
+                c2.metric("手續費",f"$ {fee:,.0f}")
+                c3.metric("實際退費金額",f"$ {refund:,.0f}")
+            with st.form("course_termination_form",enter_to_submit=False):
+                termination_date=st.date_input("中止日期",date.today())
+                reason=st.text_input("中止原因")
+                note=st.text_area("備註")
+                submitted=st.form_submit_button("確認中止課程",type="primary",width="stretch")
+            if submitted:
+                errors=[]
+                if selected is None: errors.append("請選擇會員課程")
+                if not reason.strip(): errors.append("請填寫中止原因")
+                if termination_label=="逾期中止" and bonus_eligible and bonus_coach is None: errors.append("請選擇結單獎金歸屬教練")
+                if errors:
+                    st.error("；".join(errors)+"。")
+                else:
+                    try:
+                        client().rpc("terminate_course",{
+                            "p_purchase_id":selected["purchase_id"],"p_termination_date":str(termination_date),
+                            "p_termination_type":"expired" if termination_label=="逾期中止" else "refund",
+                            "p_charge_fee":charge_fee,"p_completion_bonus_eligible":bonus_eligible,
+                            "p_completion_bonus_coach_id":coaches.get(bonus_coach),"p_reason":reason.strip(),
+                            "p_note":note.strip() or None}).execute()
+                        st.success("課程已中止，帳務金額已記錄；本筆不會增加執行時數。")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"課程中止失敗：{exc}")
+
+    with history_tab:
+        c1,c2,c3=st.columns(3)
+        start=c1.date_input("開始日期",date.today().replace(day=1),key="termination_history_start")
+        end=c2.date_input("結束日期",date.today(),key="termination_history_end")
+        kind=c3.selectbox("中止類型",["全部","逾期中止","退費中止"],key="termination_history_kind")
+        query=(client().table("course_terminations").select("*")
+               .gte("termination_date",str(start)).lte("termination_date",str(end)).order("termination_date",desc=True))
+        terminations=rows(query)
+        if kind!="全部": terminations=[x for x in terminations if x["termination_type"]==("expired" if kind=="逾期中止" else "refund")]
+        history_purchase_ids=list({x["purchase_id"] for x in terminations})
+        history_purchases=rows(client().table("purchases").select("id,member_id,course_name").in_("id",history_purchase_ids)) if history_purchase_ids else []
+        history_purchase_map={x["id"]:x for x in history_purchases}
+        history_rows=[]
+        for item in terminations:
+            purchase=history_purchase_map.get(item["purchase_id"],{})
+            history_rows.append({"中止日期":item["termination_date"],"購買_ID":purchase_code_map.get(item["purchase_id"],""),
+                "會員名稱":member_name_map.get(purchase.get("member_id"),"未知"),"課程名稱":purchase.get("course_name","") ,
+                "中止類型":"逾期中止" if item["termination_type"]=="expired" else "退費中止",
+                "剩餘堂數":item["remaining_sessions"],"退費前剩餘金額":float(item["remaining_amount"]),
+                "手續費":float(item["fee_amount"]),"實際退費金額":float(item["refund_amount"]),
+                "轉列入帳金額":float(item["recognized_amount"]),"結單獎金":"計算" if item["completion_bonus_eligible"] else "不計算",
+                "獎金歸屬教練":coach_name_map.get(item.get("completion_bonus_coach_id"),""),"中止原因":item.get("reason") or "","備註":item.get("note") or ""})
+        history_df=pd.DataFrame(history_rows,columns=["中止日期","購買_ID","會員名稱","課程名稱","中止類型","剩餘堂數","退費前剩餘金額","手續費","實際退費金額","轉列入帳金額","結單獎金","獎金歸屬教練","中止原因","備註"])
+        money_config={x:st.column_config.NumberColumn(format="$ %.0f") for x in ["退費前剩餘金額","手續費","實際退費金額","轉列入帳金額"]}
+        st.dataframe(history_df,hide_index=True,width="stretch",column_config=money_config)
+        export=_excel_bytes({"課程中止紀錄":history_df})
+        st.download_button("匯出課程中止紀錄",export,file_name=f"課程中止紀錄_{start}_{end}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
+
 def financial_report_page(me):
     st.header("財務報表")
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
         return
-    report_tabs=st.tabs(["會員報表","專案報表","其他報表","每月報表","教練查詢"])
+    report_tabs=st.tabs(["會員報表","專案報表","其他報表","每月報表","教練查詢","課程中止"])
     with report_tabs[0]:
         st.subheader("會員報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
@@ -2604,7 +2705,12 @@ def financial_report_page(me):
         monthly_coaches=coach_options(); monthly_coach_name={v:k for k,v in monthly_coaches.items()}
         monthly_usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,session_seq,deducted_amount")
             .gte("usage_date",str(month_start)).lte("usage_date",str(month_end)).order("usage_date"))
-        monthly_purchase_ids=list({x["purchase_id"] for x in monthly_usages})
+        try:
+            monthly_terminations=rows(client().table("course_terminations").select("purchase_id,termination_date,termination_type,completion_bonus_eligible,completion_bonus_coach_id")
+                .gte("termination_date",str(month_start)).lte("termination_date",str(month_end)).order("termination_date"))
+        except Exception:
+            monthly_terminations=[]
+        monthly_purchase_ids=list({x["purchase_id"] for x in monthly_usages+monthly_terminations})
         monthly_purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,session_hours,total_sessions,total_amount,purchase_date,purchase_kind,referral,created_at").in_("id",monthly_purchase_ids)) if monthly_purchase_ids else []
         monthly_purchase_map={x["id"]:x for x in monthly_purchases}
         monthly_member_ids=list({x.get("member_id") for x in monthly_purchases if x.get("member_id")})
@@ -2712,6 +2818,21 @@ def financial_report_page(me):
                 "課程名稱":purchase.get("course_name") or "","購買類型":"首次購買" if purchase.get("purchase_kind")=="first" else "續約" if purchase.get("purchase_kind")=="renewal" else purchase.get("purchase_kind") or "",
                 "醫生轉介":purchase.get("referral") or "","課程結束成交未稅金額":completed_amount,"結單率":float(rate)*100,
                 "結單獎金":bonus,"適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
+        for termination in monthly_terminations:
+            purchase=monthly_purchase_map.get(termination["purchase_id"],{})
+            coach_id=termination.get("completion_bonus_coach_id")
+            if termination.get("termination_type")!="expired" or not termination.get("completion_bonus_eligible") or coach_id not in coach_ids:
+                continue
+            rule=_bonus_rule_for_date(bonus_rules,termination["termination_date"])
+            eligible,reason=_bonus_eligibility(rule,purchase,"completion")
+            completed_amount=_tax_display_amount(purchase.get("total_amount"),"未稅")
+            rate=Decimal(str(rule.get("completion_rate") or 0)) if rule else Decimal("0")
+            bonus=int((Decimal(completed_amount)*rate).quantize(Decimal("1"),rounding=ROUND_HALF_UP)) if eligible else 0
+            completion_bonus_rows.append({"課程完成日期":termination["termination_date"],"購買_ID":bonus_purchase_code_map.get(termination["purchase_id"],""),
+                "會員名稱":monthly_member_name.get(purchase.get("member_id"),"未知"),"教練":monthly_coach_name.get(coach_id,"未知"),
+                "課程名稱":purchase.get("course_name") or "","購買類型":"首次購買" if purchase.get("purchase_kind")=="first" else "續約" if purchase.get("purchase_kind")=="renewal" else purchase.get("purchase_kind") or "",
+                "醫生轉介":purchase.get("referral") or "","課程結束成交未稅金額":completed_amount,"結單率":float(rate)*100,
+                "結單獎金":bonus,"適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
         completion_bonus_columns=["課程完成日期","購買_ID","會員名稱","教練","課程名稱","購買類型","醫生轉介","課程結束成交未稅金額","結單率","結單獎金","適用規則","計算狀態"]
         monthly_completion_bonus_df=pd.DataFrame(completion_bonus_rows,columns=completion_bonus_columns)
         completion_bonus_summary_rows=[]
@@ -2756,6 +2877,9 @@ def financial_report_page(me):
 
     with report_tabs[4]:
         usage_query_tabs(me,enable_export=True)
+
+    with report_tabs[5]:
+        course_termination_report_page(me)
 
 user=login(); me=profile(user.id)
 with st.sidebar:
