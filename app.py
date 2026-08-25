@@ -2985,30 +2985,18 @@ def financial_report_page(me):
         monthly_completion_bonus_summary_df=pd.DataFrame(completion_bonus_summary_rows,
             columns=["教練","符合規則課程結束成交未稅金額總計","結單獎金總計"])
 
-        monthly_tabs=st.tabs(["每月銷課","每月教練時數","每月專案銷課","每月教練營收","每月教練談單獎金","每月教練結單獎金","每月課程中止"])
+        monthly_tabs=st.tabs(["每月銷課","每月專案銷課","每月課程中止","每月教練時數","每月教練營收","每月教練談單獎金","每月教練結單獎金"])
         monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額（未稅）","扣款金額（未稅）","體驗項目金額（未稅）","單堂銷售金額（未稅）","專案（未稅）","銷課（未稅）","金額總計（未稅）","成交未稅金額","談單獎金","課程結束成交未稅金額","結單獎金","符合規則成交未稅金額總計","談單獎金總計","符合規則課程結束成交未稅金額總計","結單獎金總計","退費前剩餘金額（未稅）","逾期入帳金額（未稅）","退費手續費（未稅）","實際退費金額（未稅）"]}
         monthly_bonus_config={**monthly_money_config,"談單率":st.column_config.NumberColumn(format="%.2f%%"),"結單率":st.column_config.NumberColumn(format="%.2f%%")}
         with monthly_tabs[0]:
             monthly_sales_total=int(monthly_sales_df["銷課金額（未稅）"].sum()) if not monthly_sales_df.empty else 0
             st.metric("銷課總金額（未稅）",f"$ {monthly_sales_total:,.0f}")
             st.dataframe(monthly_sales_df,hide_index=True,width="stretch",column_config=monthly_money_config)
-        with monthly_tabs[1]: st.dataframe(monthly_hours_df,hide_index=True,width="stretch")
-        with monthly_tabs[2]:
+        with monthly_tabs[1]:
             monthly_project_total=int(monthly_stored_project_df["扣款金額（未稅）"].sum()) if not monthly_stored_project_df.empty else 0
             st.metric("專案總金額（未稅）",f"$ {monthly_project_total:,.0f}")
             st.dataframe(monthly_stored_project_df,hide_index=True,width="stretch",column_config=monthly_money_config)
-        with monthly_tabs[3]: st.dataframe(monthly_revenue_df,hide_index=True,width="stretch",column_config=monthly_money_config)
-        with monthly_tabs[4]:
-            if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
-            st.dataframe(monthly_talk_bonus_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
-            st.markdown("**各教練談單獎金總計**")
-            st.dataframe(monthly_talk_bonus_summary_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
-        with monthly_tabs[5]:
-            if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
-            st.dataframe(monthly_completion_bonus_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
-            st.markdown("**各教練結單獎金總計**")
-            st.dataframe(monthly_completion_bonus_summary_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
-        with monthly_tabs[6]:
+        with monthly_tabs[2]:
             expired_total=int(monthly_termination_df["逾期入帳金額（未稅）"].sum()) if not monthly_termination_df.empty else 0
             fee_total=int(monthly_termination_df["退費手續費（未稅）"].sum()) if not monthly_termination_df.empty else 0
             refund_total=int(monthly_termination_df["實際退費金額（未稅）"].sum()) if not monthly_termination_df.empty else 0
@@ -3017,11 +3005,22 @@ def financial_report_page(me):
             c2.metric("退費手續費總額（未稅）",f"$ {fee_total:,.0f}")
             c3.metric("實際退費總額（未稅）",f"$ {refund_total:,.0f}")
             st.dataframe(monthly_termination_df,hide_index=True,width="stretch",column_config=monthly_money_config)
-        monthly_export=_excel_bytes({"每月銷課":monthly_sales_df,"每月教練時數":monthly_hours_df,
-            "每月專案銷課":monthly_stored_project_df,"每月教練營收":monthly_revenue_df,
+        with monthly_tabs[3]: st.dataframe(monthly_hours_df,hide_index=True,width="stretch")
+        with monthly_tabs[4]: st.dataframe(monthly_revenue_df,hide_index=True,width="stretch",column_config=monthly_money_config)
+        with monthly_tabs[5]:
+            if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
+            st.dataframe(monthly_talk_bonus_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
+            st.markdown("**各教練談單獎金總計**")
+            st.dataframe(monthly_talk_bonus_summary_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
+        with monthly_tabs[6]:
+            if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
+            st.dataframe(monthly_completion_bonus_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
+            st.markdown("**各教練結單獎金總計**")
+            st.dataframe(monthly_completion_bonus_summary_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
+        monthly_export=_excel_bytes({"每月銷課":monthly_sales_df,"每月專案銷課":monthly_stored_project_df,
+            "每月課程中止":monthly_termination_df,"每月教練時數":monthly_hours_df,"每月教練營收":monthly_revenue_df,
             "每月教練談單獎金":monthly_talk_bonus_df,"談單獎金總計":monthly_talk_bonus_summary_df,
-            "每月教練結單獎金":monthly_completion_bonus_df,"結單獎金總計":monthly_completion_bonus_summary_df,
-            "每月課程中止":monthly_termination_df})
+            "每月教練結單獎金":monthly_completion_bonus_df,"結單獎金總計":monthly_completion_bonus_summary_df})
         st.download_button("匯出每月報表",monthly_export,file_name=f"每月報表_{month_start}_{month_end}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
 
