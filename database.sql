@@ -35,6 +35,7 @@ create table public.operation_item_catalog (
   id uuid primary key default gen_random_uuid(),
   item_type text not null check (item_type in ('trial','single_sale')),
   item_name text not null check (length(trim(item_name)) > 0),
+  course_type text,
   session_hours numeric(5,2) not null default 1 check (session_hours > 0),
   created_at timestamptz not null default now(),
   unique (item_type, item_name)
@@ -287,3 +288,4 @@ create policy cancellation_insert on public.session_cancellations for insert to 
 
 grant select on public.purchase_balances to authenticated;
 grant execute on function public.consume_session(uuid,date,uuid,text) to authenticated;
+
