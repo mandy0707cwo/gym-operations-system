@@ -674,15 +674,18 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
     with tab4:
         low_balances=[x for x in balances if x["status"]=="active" and 0<x["remaining_sessions"]<=3]
         if low_balances:
-            low_rows=[{"成交日期":x.get("purchase_date"),"會員名稱":x["member_name"],"課程名稱":x["course_name"],"成交教練":x["coach_name"],
-                       "購買堂數":x["total_sessions"],"已上堂數":x["used_sessions"],
-                       "剩餘堂數":x["remaining_sessions"],"剩餘金額":float(x["remaining_amount"]),
-                       "有效期限":x["expiry_date"]} for x in low_balances]
-            low_balance_df=pd.DataFrame(low_rows)
-            st.dataframe(low_balance_df,hide_index=True,use_container_width=True,
-                column_config={"剩餘金額":st.column_config.NumberColumn(format="$ %.0f")})
+            low_rows=[{
+                "購買_ID":purchase_code_map.get(x["purchase_id"],x["purchase_id"]),
+                "教練":x.get("coach_name") or "未知教練",
+                "會員名稱":x["member_name"],
+                "課程名稱":x["course_name"],
+                "堂數":f'{int(x.get("used_sessions") or 0)}／{int(x.get("total_sessions") or 0)}',
+                "有效期限":x["expiry_date"],
+            } for x in low_balances]
+            low_balance_df=pd.DataFrame(low_rows,columns=["購買_ID","教練","會員名稱","課程名稱","堂數","有效期限"])
+            st.dataframe(low_balance_df,hide_index=True,width="stretch")
         else:
-            low_balance_df=pd.DataFrame(columns=["成交日期","會員名稱","課程名稱","成交教練","購買堂數","已上堂數","剩餘堂數","剩餘金額","有效期限"])
+            low_balance_df=pd.DataFrame(columns=["購買_ID","教練","會員名稱","課程名稱","堂數","有效期限"])
             st.info("目前沒有剩餘三堂（含）以下的有效課程。")
         export_sheets["剩餘三堂"]=low_balance_df
 
