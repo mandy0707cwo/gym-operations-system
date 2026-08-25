@@ -2432,12 +2432,12 @@ def financial_report_page(me):
             if prepaid_balance<=0 or remaining_sessions<=0: continue
             outstanding_rows.append({"成交日期":purchase.get("purchase_date"),"購買_ID":financial_purchase_code_map.get(purchase["id"],""),
                 "會員名稱":member_name_map.get(purchase.get("member_id"),""),"課程名稱":purchase.get("course_name") or "",
-                "累計實際預收金額":_tax_display_amount(received,detail_tax_mode),"累計銷課金額":_tax_display_amount(used,detail_tax_mode),
+                "實際預收金額":_tax_display_amount(received,detail_tax_mode),"累計銷課金額":_tax_display_amount(used,detail_tax_mode),
                 "實際預收剩餘金額":_tax_display_amount(prepaid_balance,detail_tax_mode),"剩餘堂數":remaining_sessions,
                 "有效期限":purchase.get("expiry_date"),"_含稅預收餘額":prepaid_balance})
-        outstanding_balance_df=pd.DataFrame(outstanding_rows,columns=["成交日期","購買_ID","會員名稱","課程名稱","累計實際預收金額","累計銷課金額","實際預收剩餘金額","剩餘堂數","有效期限"])
+        outstanding_balance_df=pd.DataFrame(outstanding_rows,columns=["成交日期","購買_ID","會員名稱","課程名稱","實際預收金額","累計銷課金額","實際預收剩餘金額","剩餘堂數","有效期限"])
 
-        money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","成交金額","成交總金額","實際預收金額","銷課金額","剩餘金額","實際預收總金額","銷課總金額","剩餘總金額","累計實際預收金額","累計銷課金額","實際預收剩餘金額"]}
+        money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","成交金額","成交總金額","實際預收金額","銷課金額","剩餘金額","實際預收總金額","銷課總金額","剩餘總金額","累計銷課金額","實際預收剩餘金額"]}
         def center_member_report_columns(frame,columns):
             centered=[name for name in columns if name in frame.columns]
             styler=frame.style.set_properties(subset=centered,**{"text-align":"center"})
@@ -2454,9 +2454,9 @@ def financial_report_page(me):
             st.dataframe(center_member_report_columns(prepaid_total_df,["實際預收金額"]),hide_index=True,use_container_width=True,column_config=money_config)
         with detail_tabs[1]:
             actual_prepaid_balance_total=_tax_display_amount(sum(x["_含稅預收餘額"] for x in outstanding_rows),detail_tax_mode)
-            st.metric(f"實際預收餘額總計（{detail_tax_mode}）",f"$ {actual_prepaid_balance_total:,.0f}")
+            st.metric(f"目前預收餘額（{detail_tax_mode}）",f"$ {actual_prepaid_balance_total:,.0f}")
             st.caption(f"本表不受上方日期區間限制，顯示所有有效課程截至 {date.today()} 的實際預收餘額；只列累計實收減累計銷課後大於 0 且尚有剩餘堂數的課程。教練及會員篩選仍然有效。目前顯示：{detail_tax_mode}金額。")
-            st.dataframe(center_member_report_columns(outstanding_balance_df,["累計實際預收金額","實際預收剩餘金額"]),hide_index=True,width="stretch",column_config=money_config)
+            st.dataframe(center_member_report_columns(outstanding_balance_df,["實際預收金額","實際預收剩餘金額"]),hide_index=True,width="stretch",column_config=money_config)
         with detail_tabs[2]:
             st.caption(f"本表顯示所有購買課程，不受上方日期區間限制；教練篩選依成交教練，會員篩選仍然有效。堂數以已銷課堂數／課程堂數顯示。目前成交金額顯示：{sales_tax_mode}。")
             st.dataframe(course_status_df,hide_index=True,width="stretch",column_config=money_config)
@@ -2686,13 +2686,13 @@ def financial_report_page(me):
                 stored_projects=[x for x in report_projects if x["funding_type"]=="stored" and (not selected_project_id or x["id"]==selected_project_id)]
                 stored_ids=[x["id"] for x in stored_projects]
                 deposit_records=rows(client().table("project_deposits").select("project_id,deposit_date,amount,transaction_type,note")
-                    .in_("project_id",stored_ids).gte("deposit_date",str(project_start)).lte("deposit_date",str(project_end))
+                    .in_("project_id",stored_ids).lte("deposit_date",str(date.today()))
                     .order("deposit_date",desc=True)) if stored_ids else []
                 deposit_df=pd.DataFrame([{"儲值日期":x["deposit_date"],"專案名稱":project_by_id.get(x["project_id"],{}).get("project_name","未知"),
                     "類型":{"opening":"期初儲值","deposit":"後續儲值","reversal":"沖銷"}.get(x["transaction_type"],x["transaction_type"]),
                     "儲值金額":round(float(x.get("amount") or 0)),"備註":x.get("note") or ""} for x in deposit_records],
                     columns=["儲值日期","專案名稱","類型","儲值金額","備註"])
-                cumulative=rows(client().table("project_entries").select("project_id,line_amount,entry_date").in_("project_id",stored_ids).lte("entry_date",str(project_end))) if stored_ids else []
+                cumulative=rows(client().table("project_entries").select("project_id,line_amount,entry_date").in_("project_id",stored_ids).lte("entry_date",str(date.today()))) if stored_ids else []
                 used_by_project={}
                 for x in cumulative:
                     used_by_project[x["project_id"]]=used_by_project.get(x["project_id"],0)+float(x.get("line_amount") or 0)
@@ -2704,12 +2704,15 @@ def financial_report_page(me):
                 funding_df=pd.DataFrame(funding_rows,columns=["專案名稱","儲值金額","已使用金額","剩餘金額"])
 
                 project_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["金額","儲值金額","已使用金額","剩餘金額"]}
-                project_main_tabs=st.tabs(["儲值狀況","專案報表","儲值明細"])
+                project_main_tabs=st.tabs(["儲值明細","專案報表"])
                 with project_main_tabs[0]:
-                    st.caption(f"儲值、已使用及剩餘金額累計至 {project_end}。")
+                    st.caption(f"儲值狀況與儲值交易明細固定統計至 {date.today()}，不受上方開始／結束日期影響；專案名稱篩選仍然有效。")
+                    st.markdown("#### 儲值狀況")
                     st.dataframe(funding_df,hide_index=True,width="stretch",column_config=project_money_config)
-                    funding_export=_excel_bytes({"儲值狀況":funding_df})
-                    st.download_button("下載儲值狀況",funding_export,file_name=f"專案儲值狀況_{project_start}_{project_end}.xlsx",
+                    st.markdown("#### 儲值明細")
+                    st.dataframe(deposit_df,hide_index=True,width="stretch",column_config=project_money_config)
+                    deposit_export=_excel_bytes({"儲值狀況":funding_df,"儲值明細":deposit_df})
+                    st.download_button("下載儲值明細",deposit_export,file_name=f"專案儲值明細_截至_{date.today()}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
                 with project_main_tabs[1]:
                     project_usage_tabs=st.tabs(["已儲值","未儲值"])
@@ -2725,12 +2728,6 @@ def financial_report_page(me):
                         unfunded_export=_excel_bytes({"未儲值使用明細":unfunded_detail_df})
                         st.download_button("下載未儲值使用明細",unfunded_export,file_name=f"未儲值專案使用明細_{project_start}_{project_end}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
-                with project_main_tabs[2]:
-                    st.caption("呈現查詢期間內的期初儲值、後續儲值及沖銷紀錄。")
-                    st.dataframe(deposit_df,hide_index=True,width="stretch",column_config=project_money_config)
-                    deposit_export=_excel_bytes({"儲值明細":deposit_df})
-                    st.download_button("下載儲值明細",deposit_export,file_name=f"專案儲值明細_{project_start}_{project_end}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
                 project_export=_excel_bytes({"儲值明細":deposit_df,"已儲值使用明細":stored_detail_df,"儲值狀況":funding_df,"未儲值使用明細":unfunded_detail_df})
                 st.download_button("下載完整專案財務報表",project_export,file_name=f"專案財務報表_{project_start}_{project_end}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
