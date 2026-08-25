@@ -2706,7 +2706,7 @@ def financial_report_page(me):
         monthly_usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,session_seq,deducted_amount")
             .gte("usage_date",str(month_start)).lte("usage_date",str(month_end)).order("usage_date"))
         try:
-            monthly_terminations=rows(client().table("course_terminations").select("purchase_id,termination_date,termination_type,completion_bonus_eligible,completion_bonus_coach_id")
+            monthly_terminations=rows(client().table("course_terminations").select("purchase_id,termination_date,termination_type,remaining_amount,fee_amount,refund_amount,recognized_amount,completion_bonus_eligible,completion_bonus_coach_id,reason")
                 .gte("termination_date",str(month_start)).lte("termination_date",str(month_end)).order("termination_date"))
         except Exception:
             monthly_terminations=[]
@@ -2730,6 +2730,21 @@ def financial_report_page(me):
         monthly_stored_project_df=pd.DataFrame([{"專案":x["project_name"],"日期":x["entry_date"],"姓名":x.get("person_name") or "",
             "扣款金額（未稅）":_tax_display_amount(x.get("line_amount"),"未稅")} for x in monthly_projects if monthly_project_type.get(x.get("project_id"))=="stored"],
             columns=["專案","日期","姓名","扣款金額（未稅）"])
+        all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at").order("purchase_date"))
+        bonus_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
+        monthly_termination_rows=[]
+        for item in monthly_terminations:
+            purchase=monthly_purchase_map.get(item["purchase_id"],{})
+            is_expired=item.get("termination_type")=="expired"
+            monthly_termination_rows.append({"日期":item["termination_date"],"購買_ID":bonus_purchase_code_map.get(item["purchase_id"],""),
+                "會員名稱":monthly_member_name.get(purchase.get("member_id"),"未知"),"課程名稱":purchase.get("course_name") or "",
+                "中止類型":"逾期中止" if is_expired else "退費中止",
+                "退費前剩餘金額（未稅）":_tax_display_amount(item.get("remaining_amount"),"未稅"),
+                "逾期入帳金額（未稅）":_tax_display_amount(item.get("recognized_amount"),"未稅") if is_expired else 0,
+                "退費手續費（未稅）":_tax_display_amount(item.get("fee_amount"),"未稅") if not is_expired else 0,
+                "實際退費金額（未稅）":_tax_display_amount(item.get("refund_amount"),"未稅") if not is_expired else 0,
+                "中止原因":item.get("reason") or ""})
+        monthly_termination_df=pd.DataFrame(monthly_termination_rows,columns=["日期","購買_ID","會員名稱","課程名稱","中止類型","退費前剩餘金額（未稅）","逾期入帳金額（未稅）","退費手續費（未稅）","實際退費金額（未稅）","中止原因"])
 
         coach_ids=list(monthly_coaches.values())
         coach_hour_rows=[]; coach_revenue_rows=[]
@@ -2768,9 +2783,6 @@ def financial_report_page(me):
         if missing_member_ids:
             for member in rows(client().table("members").select("id,member_name").in_("id",missing_member_ids)):
                 monthly_member_name[member["id"]]=member["member_name"]
-        all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at").order("purchase_date"))
-        bonus_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
-
         talk_bonus_rows=[]
         for purchase in talk_purchases:
             coach_id=purchase.get("coach_id")
@@ -2845,8 +2857,8 @@ def financial_report_page(me):
         monthly_completion_bonus_summary_df=pd.DataFrame(completion_bonus_summary_rows,
             columns=["教練","符合規則課程結束成交未稅金額總計","結單獎金總計"])
 
-        monthly_tabs=st.tabs(["每月銷課","每月已儲值專案扣款","每月教練時數","每月教練營收","每月教練談單獎金","每月教練結單獎金"])
-        monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額（未稅）","扣款金額（未稅）","體驗項目金額","單堂銷售金額","專案（未稅）","銷課（未稅）","金額總計（未稅）","成交未稅金額","談單獎金","課程結束成交未稅金額","結單獎金","符合規則成交未稅金額總計","談單獎金總計","符合規則課程結束成交未稅金額總計","結單獎金總計"]}
+        monthly_tabs=st.tabs(["每月銷課","每月已儲值專案扣款","每月教練時數","每月教練營收","每月教練談單獎金","每月教練結單獎金","每月課程中止"])
+        monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額（未稅）","扣款金額（未稅）","體驗項目金額","單堂銷售金額","專案（未稅）","銷課（未稅）","金額總計（未稅）","成交未稅金額","談單獎金","課程結束成交未稅金額","結單獎金","符合規則成交未稅金額總計","談單獎金總計","符合規則課程結束成交未稅金額總計","結單獎金總計","退費前剩餘金額（未稅）","逾期入帳金額（未稅）","退費手續費（未稅）","實際退費金額（未稅）"]}
         monthly_bonus_config={**monthly_money_config,"談單率":st.column_config.NumberColumn(format="%.2f%%"),"結單率":st.column_config.NumberColumn(format="%.2f%%")}
         with monthly_tabs[0]:
             monthly_sales_total=int(monthly_sales_df["銷課金額（未稅）"].sum()) if not monthly_sales_df.empty else 0
@@ -2868,10 +2880,20 @@ def financial_report_page(me):
             st.dataframe(monthly_completion_bonus_df,hide_index=True,use_container_width=True,column_config=monthly_bonus_config)
             st.markdown("**各教練結單獎金總計**")
             st.dataframe(monthly_completion_bonus_summary_df,hide_index=True,use_container_width=True,column_config=monthly_bonus_config)
+        with monthly_tabs[6]:
+            expired_total=int(monthly_termination_df["逾期入帳金額（未稅）"].sum()) if not monthly_termination_df.empty else 0
+            fee_total=int(monthly_termination_df["退費手續費（未稅）"].sum()) if not monthly_termination_df.empty else 0
+            refund_total=int(monthly_termination_df["實際退費金額（未稅）"].sum()) if not monthly_termination_df.empty else 0
+            c1,c2,c3=st.columns(3)
+            c1.metric("逾期入帳總額（未稅）",f"$ {expired_total:,.0f}")
+            c2.metric("退費手續費總額（未稅）",f"$ {fee_total:,.0f}")
+            c3.metric("實際退費總額（未稅）",f"$ {refund_total:,.0f}")
+            st.dataframe(monthly_termination_df,hide_index=True,width="stretch",column_config=monthly_money_config)
         monthly_export=_excel_bytes({"每月銷課":monthly_sales_df,"每月已儲值專案扣款":monthly_stored_project_df,
             "每月教練時數":monthly_hours_df,"每月教練營收":monthly_revenue_df,
             "每月教練談單獎金":monthly_talk_bonus_df,"談單獎金總計":monthly_talk_bonus_summary_df,
-            "每月教練結單獎金":monthly_completion_bonus_df,"結單獎金總計":monthly_completion_bonus_summary_df})
+            "每月教練結單獎金":monthly_completion_bonus_df,"結單獎金總計":monthly_completion_bonus_summary_df,
+            "每月課程中止":monthly_termination_df})
         st.download_button("匯出每月報表",monthly_export,file_name=f"每月報表_{month_start}_{month_end}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
