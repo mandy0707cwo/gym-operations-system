@@ -70,6 +70,16 @@ def admin_client():
 def rows(query):
     return query.execute().data or []
 
+def paged_rows(query_builder,page_size=1000):
+    """分批讀取完整查詢結果，避免 Supabase Data API 單次回傳上限造成舊資料遺漏。"""
+    result=[]; offset=0
+    while True:
+        page=rows(query_builder().range(offset,offset+page_size-1))
+        result.extend(page)
+        if len(page)<page_size: break
+        offset+=page_size
+    return result
+
 def is_magnetic_wave_course(course_name):
     """課程名稱包含「動磁波」時，時數與一般銷課時數分開列示。"""
     return "動磁波" in str(course_name or "")
@@ -2411,10 +2421,12 @@ def financial_report_page(me):
         if selected_coach_id: outstanding_purchases=[x for x in outstanding_purchases if x.get("coach_id")==selected_coach_id]
         if selected_member_id: outstanding_purchases=[x for x in outstanding_purchases if x.get("member_id")==selected_member_id]
         outstanding_ids=[x["id"] for x in outstanding_purchases]
-        outstanding_payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date")
-            .in_("purchase_id",outstanding_ids).lte("paid_date",str(date.today()))) if outstanding_ids else []
-        outstanding_usages=rows(client().table("session_usages").select("purchase_id,deducted_amount,usage_date")
-            .in_("purchase_id",outstanding_ids).lte("usage_date",str(date.today()))) if outstanding_ids else []
+        outstanding_payments=paged_rows(lambda: client().table("purchase_payments").select("id,purchase_id,amount,paid_date,created_at")
+            .in_("purchase_id",outstanding_ids).lte("paid_date",str(date.today()))
+            .order("paid_date").order("created_at").order("id")) if outstanding_ids else []
+        outstanding_usages=paged_rows(lambda: client().table("session_usages").select("id,purchase_id,deducted_amount,usage_date,created_at")
+            .in_("purchase_id",outstanding_ids).lte("usage_date",str(date.today()))
+            .order("usage_date").order("created_at").order("id")) if outstanding_ids else []
         outstanding_paid_map={}; outstanding_used_map={}; outstanding_used_sessions_map={}
         for payment in outstanding_payments:
             outstanding_paid_map[payment["purchase_id"]]=outstanding_paid_map.get(payment["purchase_id"],0)+float(payment.get("amount") or 0)
