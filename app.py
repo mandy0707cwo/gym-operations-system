@@ -2335,36 +2335,14 @@ def financial_report_page(me):
             return
         selected_coach_id=coaches.get(selected_coach)
         selected_member_id=member_id_map.get(selected_member)
-        detail_tabs=st.tabs(["成交預收總表","預收餘額明細","會員課程狀態"])
+        detail_tabs=st.tabs(["成交預收總表","預收餘額明細"])
         with detail_tabs[0]:
             total_tax_mode=st.radio("預收總額顯示方式",["未稅","含稅"],horizontal=True,key="finance_member_total_tax_mode")
         with detail_tabs[1]:
             detail_tax_mode=st.radio("預收明細金額顯示方式",["未稅","含稅"],horizontal=True,key="finance_member_detail_tax_mode")
-        with detail_tabs[2]:
-            sales_tax_mode=st.radio("成交金額顯示方式",["未稅","含稅"],horizontal=True,key="finance_sales_tax_mode")
 
-        # 會員課程狀態顯示所有購買課程，不受上方日期區間限制；教練條件採成交教練。
         all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at").order("purchase_date"))
         financial_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
-        status_purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,status").order("purchase_date",desc=True))
-        if selected_coach_id: status_purchases=[x for x in status_purchases if x.get("coach_id")==selected_coach_id]
-        if selected_member_id: status_purchases=[x for x in status_purchases if x.get("member_id")==selected_member_id]
-        status_purchase_ids=[x["id"] for x in status_purchases]
-        status_usages=rows(client().table("session_usages").select("purchase_id").in_("purchase_id",status_purchase_ids)) if status_purchase_ids else []
-        usage_count_map={}
-        for usage in status_usages:
-            usage_count_map[usage["purchase_id"]]=usage_count_map.get(usage["purchase_id"],0)+1
-        status_label_map={"active":"進行中","completed":"已完成","expired":"逾期中止","cancelled":"退費中止"}
-        course_status_rows=[]
-        for purchase in status_purchases:
-            total_sessions=int(purchase.get("total_sessions") or 0)
-            used_sessions=min(usage_count_map.get(purchase["id"],0),total_sessions)
-            course_status_rows.append({"購買_ID":financial_purchase_code_map.get(purchase["id"],""),"成交日":purchase.get("purchase_date"),
-                "教練":coach_name_map.get(purchase.get("coach_id"),"未知教練"),"會員名稱":member_name_map.get(purchase.get("member_id"),""),
-                "課程名稱":purchase.get("course_name") or "","課程堂數":total_sessions,
-                "成交金額":_tax_display_amount(purchase.get("total_amount"),sales_tax_mode),
-                "堂數":f"{used_sessions}/{total_sessions}","課程狀態":status_label_map.get(purchase.get("status"),purchase.get("status") or "")})
-        course_status_df=pd.DataFrame(course_status_rows,columns=["購買_ID","成交日","教練","會員名稱","課程名稱","課程堂數","成交金額","堂數","課程狀態"])
 
         # 預收明細以付款日期判斷是否列入，包含查詢期間收到的分期款。
         period_payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").gte("paid_date",str(start)).lte("paid_date",str(end)).order("paid_date",desc=True))
@@ -2448,20 +2426,24 @@ def financial_report_page(me):
             outstanding_used_map[usage["purchase_id"]]=outstanding_used_map.get(usage["purchase_id"],0)+float(usage.get("deducted_amount") or 0)
             outstanding_used_sessions_map[usage["purchase_id"]]=outstanding_used_sessions_map.get(usage["purchase_id"],0)+1
         outstanding_rows=[]
+        status_label_map={"active":"進行中","completed":"已完成","expired":"逾期中止","cancelled":"退費中止"}
         for purchase in outstanding_purchases:
             contracted=float(purchase.get("total_amount") or 0)
             received=min(outstanding_paid_map.get(purchase["id"],0),contracted)
             used=min(outstanding_used_map.get(purchase["id"],0),contracted)
             used_sessions=outstanding_used_sessions_map.get(purchase["id"],0)
-            remaining_sessions=max(int(purchase.get("total_sessions") or 0)-used_sessions,0)
+            total_sessions=int(purchase.get("total_sessions") or 0)
+            remaining_sessions=max(total_sessions-used_sessions,0)
             prepaid_balance=received-used
             if prepaid_balance<=0 or remaining_sessions<=0: continue
             outstanding_rows.append({"成交日期":purchase.get("purchase_date"),"購買_ID":financial_purchase_code_map.get(purchase["id"],""),
                 "會員名稱":member_name_map.get(purchase.get("member_id"),""),"課程名稱":purchase.get("course_name") or "",
                 "實際預收金額":_tax_display_amount(received,detail_tax_mode),"累計銷課金額":_tax_display_amount(used,detail_tax_mode),
-                "實際預收剩餘金額":_tax_display_amount(prepaid_balance,detail_tax_mode),"剩餘堂數":remaining_sessions,
-                "有效期限":purchase.get("expiry_date"),"_含稅預收餘額":prepaid_balance})
-        outstanding_balance_df=pd.DataFrame(outstanding_rows,columns=["成交日期","購買_ID","會員名稱","課程名稱","實際預收金額","累計銷課金額","實際預收剩餘金額","剩餘堂數","有效期限"])
+                "實際預收剩餘金額":_tax_display_amount(prepaid_balance,detail_tax_mode),"堂數":f"{used_sessions}／{total_sessions}",
+                "有效期限":purchase.get("expiry_date"),
+                "課程狀態":status_label_map.get(purchase.get("status"),purchase.get("status") or ""),
+                "_含稅預收餘額":prepaid_balance})
+        outstanding_balance_df=pd.DataFrame(outstanding_rows,columns=["成交日期","購買_ID","會員名稱","課程名稱","實際預收金額","累計銷課金額","實際預收剩餘金額","堂數","有效期限","課程狀態"])
 
         money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","成交金額","成交總金額","實際預收金額","銷課金額","剩餘金額","實際預收總金額","銷課總金額","剩餘總金額","累計銷課金額","實際預收剩餘金額"]}
         def center_member_report_columns(frame,columns):
@@ -2477,18 +2459,15 @@ def financial_report_page(me):
             st.caption(f"以上總金額顯示為{total_tax_mode}；成交總金額只計算本期間成交資料，實際預收總金額為本期間實際收款。")
             st.markdown("**購買課程明細**")
             st.caption("每列為查詢期間內有實際收款的購買課程，包含分期款；非本期間成交者，成交金額留白。")
-            st.dataframe(center_member_report_columns(prepaid_total_df,["實際預收金額"]),hide_index=True,use_container_width=True,column_config=money_config)
+            st.dataframe(center_member_report_columns(prepaid_total_df,["實際預收金額"]),hide_index=True,width="stretch",column_config=money_config)
         with detail_tabs[1]:
             actual_prepaid_balance_total=_tax_display_amount(sum(x["_含稅預收餘額"] for x in outstanding_rows),detail_tax_mode)
             st.metric(f"目前預收餘額（{detail_tax_mode}）",f"$ {actual_prepaid_balance_total:,.0f}")
             st.caption(f"本表不受上方日期區間限制，顯示所有有效課程截至 {date.today()} 的實際預收餘額；只列累計實收減累計銷課後大於 0 且尚有剩餘堂數的課程。教練及會員篩選仍然有效。目前顯示：{detail_tax_mode}金額。")
             st.dataframe(center_member_report_columns(outstanding_balance_df,["實際預收金額","實際預收剩餘金額"]),hide_index=True,width="stretch",column_config=money_config)
-        with detail_tabs[2]:
-            st.caption(f"本表顯示所有購買課程，不受上方日期區間限制；教練篩選依成交教練，會員篩選仍然有效。堂數以已銷課堂數／課程堂數顯示。目前成交金額顯示：{sales_tax_mode}。")
-            st.dataframe(course_status_df,hide_index=True,width="stretch",column_config=money_config)
-        export_data=_excel_bytes({"成交預收總表":prepaid_total_df,"成交預收彙總":totals_df,"預收餘額明細":outstanding_balance_df,"會員課程狀態":course_status_df})
-        st.download_button("匯出會員財務報表",export_data,file_name=f"會員財務報表_{start}_{end}_成交{sales_tax_mode}_明細{detail_tax_mode}_總額{total_tax_mode}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+        export_data=_excel_bytes({"成交預收總表":prepaid_total_df,"成交預收彙總":totals_df,"預收餘額明細":outstanding_balance_df})
+        st.download_button("匯出會員財務報表",export_data,file_name=f"會員財務報表_{start}_{end}_明細{detail_tax_mode}_總額{total_tax_mode}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
 
     if False:  # v1.7.6 起移除教練報表畫面，保留舊程式供歷史版本比對。
         st.subheader("教練報表")
