@@ -800,6 +800,46 @@ def usage_page(me):
                     names={v:k for k,v in coaches.items()}; history=[x for x in history if x.get("coach_id") in names]
                     for x in history: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
                     st.subheader("扣課紀錄"); show_table(history,["usage_date","coach_name","session_seq","deducted_amount","note"])
+
+        st.divider()
+        st.subheader("近期銷課紀錄")
+        recent_start=date.today()-timedelta(days=6)
+        recent_end=date.today()
+        recent_coach_id=me["id"] if me["role"]=="coach" else None
+        recent_columns=["銷課日期","購買_ID","教練","會員名稱","課程名稱","堂次","備註"]
+        def recent_usage_query():
+            query=(client().table("session_usages").select("id,purchase_id,usage_date,coach_id,session_seq,note,created_at")
+                .gte("usage_date",str(recent_start)).lte("usage_date",str(recent_end))
+                .order("usage_date",desc=True).order("created_at",desc=True).order("id",desc=True))
+            return query.eq("coach_id",recent_coach_id) if recent_coach_id else query.in_("coach_id",list(coaches.values()))
+        recent_usages=paged_rows(recent_usage_query)
+        recent_purchase_ids=list({x["purchase_id"] for x in recent_usages})
+        recent_purchases=(rows(client().table("purchases").select("id,member_id,course_name").in_("id",recent_purchase_ids))
+            if recent_purchase_ids else [])
+        recent_purchase_map={x["id"]:x for x in recent_purchases}
+        recent_member_ids=list({x["member_id"] for x in recent_purchases if x.get("member_id")})
+        recent_members=(rows(client().table("members").select("id,member_name").in_("id",recent_member_ids))
+            if recent_member_ids else [])
+        recent_member_name_map={x["id"]:x["member_name"] for x in recent_members}
+        recent_coach_name_map={coach_id:coach_name for coach_name,coach_id in coaches.items()}
+        recent_rows=[]
+        for usage in recent_usages:
+            purchase=recent_purchase_map.get(usage["purchase_id"],{})
+            recent_rows.append({
+                "銷課日期":usage.get("usage_date"),
+                "購買_ID":usage_purchase_code_map.get(usage["purchase_id"],usage["purchase_id"]),
+                "教練":recent_coach_name_map.get(usage.get("coach_id"),"未知教練"),
+                "會員名稱":recent_member_name_map.get(purchase.get("member_id"),""),
+                "課程名稱":purchase.get("course_name") or "",
+                "堂次":int(usage.get("session_seq") or 0),
+                "備註":usage.get("note") or "",
+            })
+        recent_usage_df=pd.DataFrame(recent_rows,columns=recent_columns)
+        st.caption(f"固定顯示 {recent_start} 至 {recent_end} 的銷課紀錄，並依日期由新至舊排列。")
+        if recent_usage_df.empty:
+            st.info("最近 7 天沒有銷課紀錄。")
+        else:
+            st.dataframe(recent_usage_df,hide_index=True,width="stretch")
     with query_tab:
         usage_query_tabs(me,purchase_code_map=usage_purchase_code_map)
 
