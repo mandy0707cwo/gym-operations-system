@@ -1,7 +1,7 @@
 import os
 import re
 from io import BytesIO
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 import pandas as pd
@@ -508,6 +508,13 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
         summary["amount"]+=float(payment["amount"])
         summary["count"]+=1
 
+    def course_is_completed(item):
+        remaining_sessions=float(item.get("remaining_sessions") or 0)
+        used_sessions=int(item.get("used_sessions") or 0)
+        total_sessions=int(item.get("total_sessions") or 0)
+        return (item.get("status")=="completed" or remaining_sessions<=0
+            or (total_sessions>0 and used_sessions>=total_sessions))
+
     tab1,tab2,tab3,tab4,tab5=st.tabs(["會員課程查詢","執行時數","即將到期／過期","剩餘三堂（含）","銷課明細查詢"])
     with tab1:
         can_filter_coach=me["role"] in ("shared_coach","manager","admin")
@@ -654,7 +661,8 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
     with tab3:
         today=date.today()
         deadline=today+timedelta(days=30)
-        expiring=[x for x in balances if x.get("expiry_date") and pd.to_datetime(x["expiry_date"]).date()<=deadline]
+        expiring=[x for x in balances if not course_is_completed(x) and x.get("expiry_date")
+            and pd.to_datetime(x["expiry_date"]).date()<=deadline]
         if expiring:
             expiry_rows=[]
             for x in expiring:
@@ -672,7 +680,8 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
         export_sheets["即將到期過期"]=expiry_df
 
     with tab4:
-        low_balances=[x for x in balances if x["status"]=="active" and 0<x["remaining_sessions"]<=3]
+        low_balances=[x for x in balances if not course_is_completed(x) and x["status"]=="active"
+            and 0<float(x["remaining_sessions"])<=3]
         if low_balances:
             low_rows=[{
                 "購買_ID":purchase_code_map.get(x["purchase_id"],x["purchase_id"]),
@@ -1438,6 +1447,53 @@ def _excel_bytes(sheet_frames):
                 width = min(max([len(str(column))] + values.map(len).tolist()) + 2, 32)
                 worksheet.set_column(col_no, col_no, width)
     return output.getvalue()
+
+def _full_system_backup_bytes(admin):
+    table_sheets={
+        "profiles":"帳號權限",
+        "members":"會員名單",
+        "course_catalog":"課程名稱",
+        "operation_item_catalog":"營運項目",
+        "daily_operations":"每日營運",
+        "trial_items":"體驗項目",
+        "single_sales":"單堂銷售",
+        "event_supports":"活動支援",
+        "session_cancellations":"上課預約取消",
+        "purchases":"課程購買",
+        "purchase_payments":"付款紀錄",
+        "session_usages":"銷課紀錄",
+        "projects":"專案主檔",
+        "project_catalog":"專案操作項目",
+        "project_entries":"專案執行紀錄",
+        "project_deposits":"專案儲值紀錄",
+        "project_wallet_transactions":"舊專案錢包交易",
+        "project_receipt_transactions":"舊專案請款交易",
+        "project_members":"舊專案會員",
+        "bonus_rules":"獎金規則",
+        "course_terminations":"課程中止",
+    }
+    backup_frames={}
+    summary_rows=[]
+    errors=[]
+    for table_name,sheet_name in table_sheets.items():
+        try:
+            order_column="member_id" if table_name=="project_members" else "id"
+            table_rows=paged_rows(lambda table_name=table_name,order_column=order_column:
+                admin.table(table_name).select("*").order(order_column))
+            backup_frames[sheet_name]=pd.DataFrame(table_rows)
+            summary_rows.append({"資料表":table_name,"工作表":sheet_name,"資料筆數":len(table_rows),"備份狀態":"完成"})
+        except Exception as exc:
+            errors.append(f"{table_name}: {exc}")
+    if errors:
+        raise RuntimeError("完整備份失敗，未產生部分備份："+"；".join(errors))
+    backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    backup_frames={"備份說明":pd.DataFrame([
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.1"},
+        {"項目":"備份時間","內容":backup_time},
+        {"項目":"備份範圍","內容":"系統主要資料表完整資料；保留UUID及關聯欄位"},
+        {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
+    ]),"資料筆數檢核":pd.DataFrame(summary_rows),**backup_frames}
+    return _excel_bytes(backup_frames)
 
 def data_io_page(me):
     st.header("資料匯入／匯出")
@@ -2212,9 +2268,18 @@ def data_management_page(me):
     with tab4: project_admin_page(me)
     with tab5: bonus_rule_admin_page(me)
     with tab6:
-        io_tab,usage_query_tab=st.tabs(["資料匯入／匯出","銷課查詢"])
+        io_tab,usage_query_tab,backup_tab=st.tabs(["資料匯入／匯出","銷課查詢","一鍵下載備份"])
         with io_tab: member_course_io_page(me)
         with usage_query_tab: session_usage_export_query(me)
+        with backup_tab:
+            st.subheader("一鍵下載完整資料備份")
+            st.caption("備份包含系統主要資料表、原始UUID與關聯欄位；不包含登入密碼、API金鑰及Streamlit Secrets。")
+            backup_admin=admin_client()
+            backup_stamp=datetime.now().strftime("%Y%m%d_%H%M%S")
+            st.download_button("下載完整資料備份",data=lambda: _full_system_backup_bytes(backup_admin),
+                file_name=f"秀傳運醫營運系統_完整資料備份_{backup_stamp}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                icon=":material/download:",type="primary",width="stretch",on_click="ignore")
     with tab7: record_admin_page(me)
 
 def _tax_display_amount(amount, tax_mode):
@@ -3070,4 +3135,3 @@ try:
     {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")
-

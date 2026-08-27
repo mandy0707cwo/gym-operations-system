@@ -2,6 +2,10 @@
 
 以 Streamlit + Supabase（PostgreSQL / Auth）建立，可供多人以系統帳號與密碼遠端登入。包含每日營運、課程購買與最多三期付款、原子化銷課、主管 Dashboard，以及 admin 帳號與權限管理。
 
+院內Windows本機落地請參考 `LOCAL_DEPLOYMENT.md`。v1.12.0起提供16GB記憶體規格的Docker部署、健康檢查、每日備份與USB備份工具；本機驗收完成前應保留線上系統。
+
+系統管理員可在「資料管理 → 資料匯入／匯出 → 一鍵下載備份」下載完整Excel資料備份。檔案保留資料庫UUID與關聯欄位，但基於安全限制不包含登入密碼、API金鑰及Streamlit Secrets；此功能不能取代Supabase資料庫層級備份。
+
 ## 一、建立資料庫
 
 1. 到 Supabase 建立新 Project。

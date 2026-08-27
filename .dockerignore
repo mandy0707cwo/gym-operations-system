@@ -1,0 +1,11 @@
+.git
+.github
+.venv
+__pycache__
+*.pyc
+.env
+.streamlit/secrets.toml
+backups
+local-deployment
+*.sql
+*.md
