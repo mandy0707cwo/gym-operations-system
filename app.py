@@ -1448,6 +1448,181 @@ def _excel_bytes(sheet_frames):
                 worksheet.set_column(col_no, col_no, width)
     return output.getvalue()
 
+def _financial_backup_frames(table_data):
+    """依現有財務報表規則，產生截至今日、不套用畫面篩選的完整財務工作表。"""
+    today=str(date.today())
+    profiles=table_data.get("profiles",[])
+    members=table_data.get("members",[])
+    purchases=[x for x in table_data.get("purchases",[]) if str(x.get("purchase_date") or "")<=today]
+    payments=[x for x in table_data.get("purchase_payments",[]) if str(x.get("paid_date") or "")<=today]
+    usages=[x for x in table_data.get("session_usages",[]) if str(x.get("usage_date") or "")<=today]
+    projects=table_data.get("projects",[])
+    project_entries=[x for x in table_data.get("project_entries",[]) if str(x.get("entry_date") or "")<=today]
+    deposits=[x for x in table_data.get("project_deposits",[]) if str(x.get("deposit_date") or "")<=today]
+    terminations=[x for x in table_data.get("course_terminations",[]) if str(x.get("termination_date") or "")<=today]
+    member_name={x.get("id"):x.get("member_name") or "" for x in members}
+    coach_name={x.get("id"):x.get("display_name") or x.get("username") or "" for x in profiles if x.get("role")=="coach"}
+    purchase_map={x.get("id"):x for x in purchases}
+    project_map={x.get("id"):x for x in projects}
+    purchase_codes=_build_purchase_code_map(purchases)
+    paid_map={}; used_map={}; used_sessions={}; paid_installments={}
+    for x in payments:
+        pid=x.get("purchase_id"); paid_map[pid]=paid_map.get(pid,0)+float(x.get("amount") or 0)
+        if x.get("installment_no") is not None: paid_installments.setdefault(pid,set()).add(int(x["installment_no"]))
+    for x in usages:
+        pid=x.get("purchase_id"); used_map[pid]=used_map.get(pid,0)+float(x.get("deducted_amount") or 0)
+        used_sessions[pid]=used_sessions.get(pid,0)+1
+    status_labels={"active":"進行中","completed":"已完成","expired":"逾期中止","cancelled":"退費中止"}
+
+    prepaid_rows=[]; outstanding_rows=[]
+    for p in sorted(purchases,key=lambda x:str(x.get("purchase_date") or ""),reverse=True):
+        pid=p.get("id"); total=float(p.get("total_amount") or 0); received=min(paid_map.get(pid,0),total)
+        used=min(used_map.get(pid,0),total); total_sessions=int(p.get("total_sessions") or 0); session_count=used_sessions.get(pid,0)
+        if received>=total: payment_status="付清"
+        elif p.get("payment_plan")=="installment": payment_status=f'已付 {len(paid_installments.get(pid,set()))}/{int(p.get("installment_count") or 0)} 期'
+        else: payment_status="未付清"
+        prepaid_rows.append({"購買_ID":purchase_codes.get(pid,""),"成交日期":p.get("purchase_date"),"會員名稱":member_name.get(p.get("member_id"),""),
+            "教練":coach_name.get(p.get("coach_id"),""),"課程名稱":p.get("course_name") or "","堂數":total_sessions,
+            "分期期數／付清":payment_status,"成交金額":round(total),"實際預收金額":round(received)})
+        raw_balance=max(received-used,0); balance=raw_balance if p.get("status")=="active" else 0
+        outstanding_rows.append({"成交日期":p.get("purchase_date"),"購買_ID":purchase_codes.get(pid,""),"會員名稱":member_name.get(p.get("member_id"),""),
+            "教練":coach_name.get(p.get("coach_id"),""),"課程名稱":p.get("course_name") or "","實際預收金額":round(received),
+            "累計銷課金額":round(used),"實際預收剩餘金額":round(balance),"堂數":f"{session_count}／{total_sessions}",
+            "有效期限":p.get("expiry_date"),"課程狀態":status_labels.get(p.get("status"),p.get("status") or "")})
+
+    project_usage_rows=[]
+    for x in sorted(project_entries,key=lambda r:str(r.get("entry_date") or ""),reverse=True):
+        project=project_map.get(x.get("project_id"),{})
+        project_usage_rows.append({"日期":x.get("entry_date"),"專案名稱":x.get("project_name") or project.get("project_name") or "",
+            "使用者":x.get("person_name") or "","教練":coach_name.get(x.get("coach_id"),""),"操作項目":x.get("item_name") or "",
+            "時數":float(x.get("item_hours") or 0)*float(x.get("quantity") or 0),"金額":round(float(x.get("line_amount") or 0)),
+            "備註":x.get("note") or "","_type":project.get("funding_type")})
+    deposit_rows=[{"儲值日期":x.get("deposit_date"),"專案名稱":project_map.get(x.get("project_id"),{}).get("project_name",""),
+        "類型":{"opening":"期初儲值","deposit":"後續儲值","reversal":"沖銷"}.get(x.get("transaction_type"),x.get("transaction_type") or ""),
+        "儲值金額":round(float(x.get("amount") or 0)),"備註":x.get("note") or ""} for x in sorted(deposits,key=lambda r:str(r.get("deposit_date") or ""),reverse=True)]
+    used_project={}
+    for x in project_entries: used_project[x.get("project_id")]=used_project.get(x.get("project_id"),0)+float(x.get("line_amount") or 0)
+    funding_rows=[{"專案名稱":p.get("project_name") or "","儲值金額":round(float(p.get("stored_amount") or 0)),
+        "已使用金額":round(used_project.get(p.get("id"),0)),"剩餘金額":round(float(p.get("stored_amount") or 0)-used_project.get(p.get("id"),0))}
+        for p in projects if p.get("funding_type")=="stored"]
+
+    def operation_summary(records):
+        totals={}
+        for x in records:
+            course_type=str(x.get("course_type") or "未分類").strip() or "未分類"
+            totals[course_type]=totals.get(course_type,0)+float(x.get("amount") or 0)
+        return pd.DataFrame([{"課程屬性":k,"未稅金額":round(v)} for k,v in sorted(totals.items())],columns=["課程屬性","未稅金額"])
+
+    referral_groups={}
+    for p in purchases:
+        referral=str(p.get("referral") or "").strip()
+        if not referral: continue
+        key=(referral,p.get("member_id")); item=referral_groups.setdefault(key,{"首購":0,"續約":0,"成交總金額":0})
+        if p.get("purchase_kind")=="first": item["首購"]+=1
+        elif p.get("purchase_kind")=="renewal": item["續約"]+=1
+        item["成交總金額"]+=float(p.get("total_amount") or 0)
+    referral_rows=[{"醫生轉介":k[0],"會員名稱":member_name.get(k[1],""),**v} for k,v in sorted(referral_groups.items())]
+    course_type_map={str(x.get("course_name") or "").strip():str(x.get("course_type") or "未分類").strip() or "未分類" for x in table_data.get("course_catalog",[])}
+    course_type_totals={}
+    for p in purchases:
+        ct=course_type_map.get(str(p.get("course_name") or "").strip(),"未分類"); course_type_totals.setdefault(ct,{"purchase":0,"usage":0})["purchase"]+=float(p.get("total_amount") or 0)
+    for x in usages:
+        p=purchase_map.get(x.get("purchase_id"),{}); ct=course_type_map.get(str(p.get("course_name") or "").strip(),"未分類")
+        course_type_totals.setdefault(ct,{"purchase":0,"usage":0})["usage"]+=float(x.get("deducted_amount") or 0)
+    course_type_rows=[{"課程屬性":k,"成交未稅金額":_tax_display_amount(v["purchase"],"未稅"),"銷課未稅金額":_tax_display_amount(v["usage"],"未稅")} for k,v in sorted(course_type_totals.items())]
+
+    termination_rows=[]
+    for x in sorted(terminations,key=lambda r:str(r.get("termination_date") or ""),reverse=True):
+        p=purchase_map.get(x.get("purchase_id"),{}); expired=x.get("termination_type")=="expired"
+        termination_rows.append({"日期":x.get("termination_date"),"購買_ID":purchase_codes.get(x.get("purchase_id"),""),"會員名稱":member_name.get(p.get("member_id"),""),
+            "教練":coach_name.get(p.get("coach_id"),""),"課程名稱":p.get("course_name") or "","中止類型":"逾期中止" if expired else "退費中止",
+            "退費前剩餘金額（未稅）":_tax_display_amount(x.get("remaining_amount"),"未稅"),"逾期入帳金額（未稅）":_tax_display_amount(x.get("recognized_amount"),"未稅") if expired else 0,
+            "退費手續費（未稅）":_tax_display_amount(x.get("fee_amount"),"未稅") if not expired else 0,"實際退費金額（未稅）":_tax_display_amount(x.get("refund_amount"),"未稅") if not expired else 0,
+            "中止原因":x.get("reason") or "","備註":x.get("note") or ""})
+
+    usage_rows=[]
+    for x in sorted(usages,key=lambda r:(str(r.get("usage_date") or ""),str(r.get("id") or "")),reverse=True):
+        p=purchase_map.get(x.get("purchase_id"),{})
+        usage_rows.append({"銷課日期":x.get("usage_date"),"購買_ID":purchase_codes.get(x.get("purchase_id"),""),"教練":coach_name.get(x.get("coach_id"),""),
+            "會員名稱":member_name.get(p.get("member_id"),""),"課程名稱":p.get("course_name") or "","堂次":x.get("session_seq"),
+            "銷課時數":float(p.get("session_hours") or 1),"銷課金額（未稅）":_tax_display_amount(x.get("deducted_amount"),"未稅"),"備註":x.get("note") or ""})
+
+    coach_hours=[]; coach_revenues=[]
+    trials=[x for x in table_data.get("trial_items",[]) if str(x.get("entry_date") or "")<=today]
+    singles=[x for x in table_data.get("single_sales",[]) if str(x.get("entry_date") or "")<=today]
+    events=[x for x in table_data.get("event_supports",[]) if str(x.get("entry_date") or "")<=today]
+    months=sorted({str(x.get(field) or "")[:7] for records,field in [(trials,"entry_date"),(singles,"entry_date"),(events,"entry_date"),(project_entries,"entry_date"),(usages,"usage_date")] for x in records if x.get(field)})
+    for report_month in months:
+      for coach_id,name in sorted(coach_name.items(),key=lambda x:x[1]):
+        month_trials=[x for x in trials if str(x.get("entry_date") or "").startswith(report_month)]
+        month_singles=[x for x in singles if str(x.get("entry_date") or "").startswith(report_month)]
+        month_events=[x for x in events if str(x.get("entry_date") or "").startswith(report_month)]
+        month_projects=[x for x in project_entries if str(x.get("entry_date") or "").startswith(report_month)]
+        trial_hours=sum(float(x.get("hours") or 0) for x in month_trials if x.get("coach_id")==coach_id)
+        single_hours=sum(float(x.get("hours") or 0) for x in month_singles if x.get("coach_id")==coach_id)
+        event_hours=sum(max(0,float(x.get("hours") or 0)-float(x.get("deducted_hours") or 0)) for x in month_events if x.get("coach_id")==coach_id)
+        project_hours=sum(float(x.get("item_hours") or 0)*float(x.get("quantity") or 0) for x in month_projects if x.get("coach_id")==coach_id)
+        coach_usages=[x for x in usages if x.get("coach_id")==coach_id and str(x.get("usage_date") or "").startswith(report_month)]
+        normal_hours=sum(float(purchase_map.get(x.get("purchase_id"),{}).get("session_hours") or 1) for x in coach_usages if not is_magnetic_wave_course(purchase_map.get(x.get("purchase_id"),{}).get("course_name")))
+        magnetic_hours=sum(float(purchase_map.get(x.get("purchase_id"),{}).get("session_hours") or 1) for x in coach_usages if is_magnetic_wave_course(purchase_map.get(x.get("purchase_id"),{}).get("course_name")))
+        coach_hours.append({"報表月份":report_month,"教練":name,"體驗項目時數":trial_hours,"單堂銷售時數":single_hours,"活動支援時數":event_hours,"專案時數":project_hours,
+            "銷課時數":normal_hours,"動磁波時數":magnetic_hours,"時數總計":trial_hours+single_hours+event_hours+project_hours+normal_hours+magnetic_hours})
+        trial_rev=sum(float(x.get("amount") or 0) for x in month_trials if x.get("coach_id")==coach_id); single_rev=sum(float(x.get("amount") or 0) for x in month_singles if x.get("coach_id")==coach_id)
+        project_rev=sum(_tax_display_amount(x.get("line_amount"),"未稅") for x in month_projects if x.get("coach_id")==coach_id); usage_rev=sum(_tax_display_amount(x.get("deducted_amount"),"未稅") for x in coach_usages)
+        coach_revenues.append({"報表月份":report_month,"教練":name,"體驗項目金額（未稅）":round(trial_rev),"單堂銷售金額（未稅）":round(single_rev),"專案（未稅）":round(project_rev),"銷課（未稅）":round(usage_rev),"金額總計（未稅）":round(trial_rev+single_rev+project_rev+usage_rev)})
+
+    bonus_rules=sorted([x for x in table_data.get("bonus_rules",[]) if x.get("active")],key=lambda x:str(x.get("effective_from") or ""),reverse=True)
+    talk_bonus_rows=[]
+    for p in purchases:
+        coach_id=p.get("coach_id")
+        if coach_id not in coach_name: continue
+        rule=_bonus_rule_for_date(bonus_rules,p.get("purchase_date")); eligible,reason=_bonus_eligibility(rule,p,"talk")
+        untaxed=_tax_display_amount(p.get("total_amount"),"未稅"); rate=Decimal(str(rule.get("talk_rate") or 0)) if rule else Decimal("0")
+        bonus=int((Decimal(untaxed)*rate).quantize(Decimal("1"),rounding=ROUND_HALF_UP)) if eligible else 0
+        talk_bonus_rows.append({"成交日期":p.get("purchase_date"),"購買_ID":purchase_codes.get(p.get("id"),""),"會員名稱":member_name.get(p.get("member_id"),""),
+            "教練":coach_name.get(coach_id,""),"購買類型":"首次購買" if p.get("purchase_kind")=="first" else "續約" if p.get("purchase_kind")=="renewal" else p.get("purchase_kind") or "",
+            "醫生轉介":p.get("referral") or "","成交未稅金額":untaxed,"談單率":float(rate)*100,"談單獎金":bonus,
+            "適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
+    talk_summary=[]
+    for name in sorted(coach_name.values()):
+        eligible_rows=[x for x in talk_bonus_rows if x["教練"]==name and x["計算狀態"]=="已計算"]
+        talk_summary.append({"教練":name,"符合規則成交未稅金額總計":sum(x["成交未稅金額"] for x in eligible_rows),"談單獎金總計":sum(x["談單獎金"] for x in eligible_rows)})
+
+    completed_usage={}
+    for x in usages:
+        p=purchase_map.get(x.get("purchase_id"),{}); total_sessions=int(p.get("total_sessions") or 0)
+        if total_sessions and int(x.get("session_seq") or 0)==total_sessions: completed_usage[x.get("purchase_id")]=x
+    completion_rows=[]
+    completion_sources=[(pid,x,purchase_map.get(pid,{}),x.get("coach_id"),x.get("usage_date")) for pid,x in completed_usage.items()]
+    completion_sources += [(x.get("purchase_id"),x,purchase_map.get(x.get("purchase_id"),{}),x.get("completion_bonus_coach_id"),x.get("termination_date")) for x in terminations
+        if x.get("termination_type")=="expired" and x.get("completion_bonus_eligible")]
+    for pid,source,p,coach_id,completed_date in completion_sources:
+        if coach_id not in coach_name: continue
+        rule=_bonus_rule_for_date(bonus_rules,completed_date); eligible,reason=_bonus_eligibility(rule,p,"completion")
+        untaxed=_tax_display_amount(p.get("total_amount"),"未稅"); rate=Decimal(str(rule.get("completion_rate") or 0)) if rule else Decimal("0")
+        bonus=int((Decimal(untaxed)*rate).quantize(Decimal("1"),rounding=ROUND_HALF_UP)) if eligible else 0
+        completion_rows.append({"課程完成日期":completed_date,"購買_ID":purchase_codes.get(pid,""),"會員名稱":member_name.get(p.get("member_id"),""),"教練":coach_name.get(coach_id,""),
+            "課程名稱":p.get("course_name") or "","課程結束成交未稅金額":untaxed,"結單率":float(rate)*100,"結單獎金":bonus,
+            "適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
+    completion_summary=[]
+    for name in sorted(coach_name.values()):
+        eligible_rows=[x for x in completion_rows if x["教練"]==name and x["計算狀態"]=="已計算"]
+        completion_summary.append({"教練":name,"符合規則課程結束成交未稅金額總計":sum(x["課程結束成交未稅金額"] for x in eligible_rows),"結單獎金總計":sum(x["結單獎金"] for x in eligible_rows)})
+
+    visible=lambda rows_list:[{k:v for k,v in x.items() if not str(k).startswith("_")} for x in rows_list]
+    return {
+        "財務-成交預收總表":pd.DataFrame(prepaid_rows),"財務-預收餘額明細":pd.DataFrame(outstanding_rows),
+        "財務-專案儲值狀況":pd.DataFrame(funding_rows),"財務-專案儲值明細":pd.DataFrame(deposit_rows),
+        "財務-已儲值專案":pd.DataFrame(visible([x for x in project_usage_rows if x.get("_type")=="stored"])),
+        "財務-未儲值專案":pd.DataFrame(visible([x for x in project_usage_rows if x.get("_type")=="unfunded"])),
+        "財務-體驗項目報表":operation_summary(trials),"財務-單堂銷售報表":operation_summary(singles),
+        "財務-醫生轉介":pd.DataFrame(referral_rows),"財務-課程屬性":pd.DataFrame(course_type_rows),
+        "財務-銷課明細":pd.DataFrame(usage_rows),"財務-課程中止":pd.DataFrame(termination_rows),
+        "財務-教練時數":pd.DataFrame(coach_hours),"財務-教練營收":pd.DataFrame(coach_revenues),
+        "財務-教練談單獎金":pd.DataFrame(talk_bonus_rows),"財務-談單獎金總計":pd.DataFrame(talk_summary),
+        "財務-教練結單獎金":pd.DataFrame(completion_rows),"財務-結單獎金總計":pd.DataFrame(completion_summary),
+    }
+
 def _full_system_backup_bytes(admin):
     table_sheets={
         "profiles":"帳號權限",
@@ -1473,6 +1648,7 @@ def _full_system_backup_bytes(admin):
         "course_terminations":"課程中止",
     }
     backup_frames={}
+    table_data={}
     summary_rows=[]
     errors=[]
     for table_name,sheet_name in table_sheets.items():
@@ -1480,6 +1656,7 @@ def _full_system_backup_bytes(admin):
             order_column="member_id" if table_name=="project_members" else "id"
             table_rows=paged_rows(lambda table_name=table_name,order_column=order_column:
                 admin.table(table_name).select("*").order(order_column))
+            table_data[table_name]=table_rows
             backup_frames[sheet_name]=pd.DataFrame(table_rows)
             summary_rows.append({"資料表":table_name,"工作表":sheet_name,"資料筆數":len(table_rows),"備份狀態":"完成"})
         except Exception as exc:
@@ -1487,12 +1664,13 @@ def _full_system_backup_bytes(admin):
     if errors:
         raise RuntimeError("完整備份失敗，未產生部分備份："+"；".join(errors))
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.2"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.3"},
         {"項目":"備份時間","內容":backup_time},
-        {"項目":"備份範圍","內容":"系統主要資料表完整資料；保留UUID及關聯欄位"},
+        {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
-    ]),"資料筆數檢核":pd.DataFrame(summary_rows),**backup_frames}
+    ]),"資料筆數檢核":pd.DataFrame(summary_rows),**backup_frames,**financial_frames}
     return _excel_bytes(backup_frames)
 
 def data_io_page(me):
@@ -2272,12 +2450,12 @@ def data_management_page(me):
         with io_tab: member_course_io_page(me)
         with usage_query_tab: session_usage_export_query(me)
         with backup_tab:
-            st.subheader("一鍵下載完整資料備份")
-            st.caption("備份包含系統主要資料表、原始UUID與關聯欄位；不包含登入密碼、API金鑰及Streamlit Secrets。")
+            st.subheader("一鍵下載完整資料及財務報表備份")
+            st.caption("同一份 Excel 包含系統主要原始資料表，以及截至下載當日、不套用畫面篩選的全部財務報表工作表；不包含登入密碼、API金鑰及Streamlit Secrets。")
             backup_admin=admin_client()
             backup_stamp=datetime.now().strftime("%Y%m%d_%H%M%S")
-            st.download_button("下載完整資料備份",data=lambda: _full_system_backup_bytes(backup_admin),
-                file_name=f"秀傳運醫營運系統_完整資料備份_{backup_stamp}.xlsx",
+            st.download_button("下載完整資料及財務報表備份",data=lambda: _full_system_backup_bytes(backup_admin),
+                file_name=f"秀傳運醫營運系統_完整資料及財務報表備份_{backup_stamp}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 icon=":material/download:",type="primary",width="stretch",on_click="ignore")
     with tab7: record_admin_page(me)
