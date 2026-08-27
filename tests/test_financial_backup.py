@@ -10,6 +10,7 @@ import pandas as pd
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 FUNCTIONS = {
     "is_magnetic_wave_course",
+    "usage_sequence_by_date",
     "_excel_bytes",
     "_financial_backup_frames",
     "_tax_display_amount",
@@ -73,4 +74,17 @@ def test_financial_backup_contains_all_report_groups_and_balances():
     assert frames["財務-體驗項目報表"].iloc[0]["未稅金額"] == 500
     workbook = ns["_excel_bytes"](frames)
     assert len(workbook) > 1000
+
+
+def test_usage_sequence_uses_chronological_order_instead_of_bad_source_sequence():
+    ns = load_functions()
+    usages = [
+        {"id": "u10", "purchase_id": "p1", "usage_date": "2026-08-27", "created_at": "2026-08-27T08:22:24", "session_seq": 9},
+        {"id": "u09", "purchase_id": "p1", "usage_date": "2026-08-13", "created_at": "2026-08-18T10:57:42", "session_seq": 15},
+    ]
+    for seq in range(1, 9):
+        usages.append({"id": f"u{seq:02d}", "purchase_id": "p1", "usage_date": f"2026-07-{seq:02d}", "created_at": f"2026-07-{seq:02d}T08:00:00", "session_seq": seq})
+    displayed = ns["usage_sequence_by_date"](usages)
+    assert displayed["u09"] == 9
+    assert displayed["u10"] == 10
 
