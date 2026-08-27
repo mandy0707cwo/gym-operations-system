@@ -1488,7 +1488,7 @@ def _full_system_backup_bytes(admin):
         raise RuntimeError("完整備份失敗，未產生部分備份："+"；".join(errors))
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.1"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.2"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2514,7 +2514,7 @@ def financial_report_page(me):
 
         # 預收餘額明細為截至今日的即時餘額，不受上方日期區間限制。
         outstanding_purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,status")
-            .in_("status",["active","completed"]).lte("purchase_date",str(date.today())).order("purchase_date",desc=True))
+            .in_("status",["active","completed","expired","cancelled"]).lte("purchase_date",str(date.today())).order("purchase_date",desc=True))
         if selected_coach_id: outstanding_purchases=[x for x in outstanding_purchases if x.get("coach_id")==selected_coach_id]
         if selected_member_id: outstanding_purchases=[x for x in outstanding_purchases if x.get("member_id")==selected_member_id]
         outstanding_ids=[x["id"] for x in outstanding_purchases]
@@ -2539,8 +2539,11 @@ def financial_report_page(me):
             used_sessions=outstanding_used_sessions_map.get(purchase["id"],0)
             total_sessions=int(purchase.get("total_sessions") or 0)
             remaining_sessions=max(total_sessions-used_sessions,0)
-            prepaid_balance=received-used
-            if prepaid_balance<=0 or remaining_sessions<=0: continue
+            raw_prepaid_balance=max(received-used,0)
+            # 已完成、逾期中止及退費中止均視為已結清，不再列為可使用的預收餘額；
+            # 但保留明細列，讓財務人員可查閱其實收、銷課及最終課程狀態。
+            prepaid_balance=raw_prepaid_balance if purchase.get("status")=="active" else 0
+            if purchase.get("status")=="active" and (prepaid_balance<=0 or remaining_sessions<=0): continue
             outstanding_rows.append({"成交日期":purchase.get("purchase_date"),"購買_ID":financial_purchase_code_map.get(purchase["id"],""),
                 "會員名稱":member_name_map.get(purchase.get("member_id"),""),"課程名稱":purchase.get("course_name") or "",
                 "實際預收金額":_tax_display_amount(received,detail_tax_mode),"累計銷課金額":_tax_display_amount(used,detail_tax_mode),
@@ -2568,7 +2571,7 @@ def financial_report_page(me):
         with detail_tabs[1]:
             actual_prepaid_balance_total=_tax_display_amount(sum(x["_含稅預收餘額"] for x in outstanding_rows),detail_tax_mode)
             st.metric(f"目前預收餘額（{detail_tax_mode}）",f"$ {actual_prepaid_balance_total:,.0f}")
-            st.caption(f"本表不受上方日期區間限制，顯示所有有效課程截至 {date.today()} 的實際預收餘額；只列累計實收減累計銷課後大於 0 且尚有剩餘堂數的課程。教練及會員篩選仍然有效。目前顯示：{detail_tax_mode}金額。")
+            st.caption(f"本表不受上方日期區間限制，列出截至 {date.today()} 的進行中、已完成、逾期中止及退費中止課程。已完成與已中止課程視為結清，目前預收餘額顯示為 0；教練及會員篩選仍然有效。目前顯示：{detail_tax_mode}金額。")
             st.dataframe(center_member_report_columns(outstanding_balance_df,["實際預收金額","實際預收剩餘金額"]),hide_index=True,width="stretch",column_config=money_config)
         export_data=_excel_bytes({"成交預收總表":prepaid_total_df,"成交預收彙總":totals_df,"預收餘額明細":outstanding_balance_df})
         st.download_button("匯出會員財務報表",export_data,file_name=f"會員財務報表_{start}_{end}_明細{detail_tax_mode}_總額{total_tax_mode}.xlsx",
@@ -3135,3 +3138,4 @@ try:
     {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")
+
