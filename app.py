@@ -84,6 +84,17 @@ def is_magnetic_wave_course(course_name):
     """課程名稱包含「動磁波」時，時數與一般銷課時數分開列示。"""
     return "動磁波" in str(course_name or "")
 
+def usage_sequence_by_date(usage_records):
+    """依同一購買課程的銷課日期與建立順序，計算畫面應顯示的累計堂次。"""
+    ordered=sorted(usage_records,key=lambda x:(str(x.get("usage_date") or ""),str(x.get("created_at") or ""),str(x.get("id") or "")))
+    sequence_map={}
+    counters={}
+    for usage in ordered:
+        purchase_id=usage.get("purchase_id")
+        counters[purchase_id]=counters.get(purchase_id,0)+1
+        sequence_map[usage.get("id")]=counters[purchase_id]
+    return sequence_map
+
 def collapse_sidebar_on_mobile():
     """手機版切換頁面後自動收合側邊選單，桌面版不受影響。"""
     components.html(
@@ -715,12 +726,14 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             detail_balances=[x for x in detail_balances if detail_member_key in str(x.get("member_name") or "").casefold()]
         detail_balance_map={x["purchase_id"]:x for x in detail_balances}
         detail_purchase_ids=list(detail_balance_map)
-        detail_usages=(rows(client().table("session_usages").select("purchase_id,usage_date,session_seq,coach_id,note")
-            .in_("purchase_id",detail_purchase_ids).order("usage_date",desc=True).order("session_seq",desc=True)) if detail_purchase_ids else [])
+        detail_usages=(paged_rows(lambda: client().table("session_usages").select("id,purchase_id,usage_date,session_seq,coach_id,note,created_at")
+            .in_("purchase_id",detail_purchase_ids).order("usage_date").order("created_at").order("id")) if detail_purchase_ids else [])
+        displayed_sequence=usage_sequence_by_date(detail_usages)
+        detail_usages.sort(key=lambda x:(str(x.get("usage_date") or ""),str(x.get("created_at") or ""),str(x.get("id") or "")),reverse=True)
         usage_detail_rows=[]
         for usage in detail_usages:
             balance=detail_balance_map.get(usage["purchase_id"],{})
-            used_session_count=int(usage.get("session_seq") or 0)
+            used_session_count=displayed_sequence.get(usage.get("id"),int(usage.get("session_seq") or 0))
             total_session_count=int(balance.get("total_sessions") or 0)
             usage_detail_rows.append({"購買_ID":purchase_code_map.get(usage["purchase_id"],usage["purchase_id"]),
                 "教練":next((name for name,coach_id in coaches.items() if coach_id==usage.get("coach_id")),"未知教練"),
@@ -1666,7 +1679,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.3"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.4"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
