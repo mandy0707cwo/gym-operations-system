@@ -11,6 +11,7 @@ APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 FUNCTIONS = {
     "is_magnetic_wave_course",
     "usage_sequence_by_date",
+    "course_status_label",
     "_excel_bytes",
     "_financial_backup_frames",
     "_tax_display_amount",
@@ -87,4 +88,12 @@ def test_usage_sequence_uses_chronological_order_instead_of_bad_source_sequence(
     displayed = ns["usage_sequence_by_date"](usages)
     assert displayed["u09"] == 9
     assert displayed["u10"] == 10
+
+
+def test_course_status_filter_labels_are_mutually_exclusive():
+    status = load_functions()["course_status_label"]
+    assert status({"status": "active", "used_sessions": 3, "total_sessions": 10, "remaining_sessions": 7}) == "進行中"
+    assert status({"status": "completed", "used_sessions": 10, "total_sessions": 10, "remaining_sessions": 0}) == "已完成"
+    assert status({"status": "expired", "used_sessions": 3, "total_sessions": 10, "remaining_sessions": 7}) == "逾期中止"
+    assert status({"status": "cancelled", "used_sessions": 3, "total_sessions": 10, "remaining_sessions": 7}) == "退費中止"
 
