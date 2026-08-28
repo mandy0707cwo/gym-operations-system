@@ -582,10 +582,20 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
         member_course_df=pd.DataFrame(detail,columns=detail_columns)
         export_sheets["會員課程查詢"]=member_course_df
         if detail:
-            st.dataframe(member_course_df,hide_index=True,width="stretch",
-                column_config={"成交金額":st.column_config.NumberColumn(format="$ %.0f"),
-                               "時數":st.column_config.NumberColumn(format="%.2f"),
-                               "剩餘金額":st.column_config.NumberColumn(format="$ %.0f")})
+            st.dataframe(member_course_df,hide_index=True,width="stretch",height="auto",row_height=28,
+                column_config={
+                    "購買_ID":st.column_config.TextColumn(width=105),
+                    "教練":st.column_config.TextColumn(width=70),
+                    "會員名稱":st.column_config.TextColumn(width=85),
+                    "課程名稱":st.column_config.TextColumn(width=95),
+                    "時數":st.column_config.NumberColumn(format="%.2f",width=55),
+                    "成交金額":st.column_config.NumberColumn(format="$ %.0f",width=85),
+                    "剩餘金額":st.column_config.NumberColumn(format="$ %.0f",width=85),
+                    "堂數":st.column_config.TextColumn(width=65),
+                    "有效期限":st.column_config.TextColumn(width=90),
+                    "付款狀況":st.column_config.TextColumn(width=115),
+                    "課程狀況":st.column_config.TextColumn(width=80),
+                })
         else:
             st.info("目前沒有可查詢的課程資料。")
 
@@ -1688,7 +1698,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.5"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.6"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
