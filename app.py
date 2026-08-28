@@ -95,6 +95,18 @@ def usage_sequence_by_date(usage_records):
         sequence_map[usage.get("id")]=counters[purchase_id]
     return sequence_map
 
+def course_status_label(item):
+    """將課程資料庫狀態與實際銷課堂數轉為畫面使用的課程狀況。"""
+    status=item.get("status")
+    if status=="expired": return "逾期中止"
+    if status=="cancelled": return "退費中止"
+    used_sessions=int(item.get("used_sessions") or 0)
+    total_sessions=int(item.get("total_sessions") or 0)
+    remaining_sessions=float(item.get("remaining_sessions") or 0)
+    if status=="completed" or remaining_sessions<=0 or (total_sessions>0 and used_sessions>=total_sessions):
+        return "已完成"
+    return "進行中"
+
 def collapse_sidebar_on_mobile():
     """手機版切換頁面後自動收合側邊選單，桌面版不受影響。"""
     components.html(
@@ -533,19 +545,18 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             filter_col1,filter_col2,filter_col3=st.columns(3)
             selected_coach=filter_col1.selectbox("成交教練",["全部教練"]+list(coaches),key="member_course_coach_filter")
             member_keyword=filter_col2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="member_course_name_filter").strip()
-            course_end_filter=filter_col3.selectbox("課程完成",["全部","未完成","已完成"],key="member_course_end_filter")
+            course_end_filter=filter_col3.selectbox("課程狀況",["全部","進行中","已完成","逾期中止","退費中止"],key="member_course_end_filter")
             filtered_balances=balances if selected_coach=="全部教練" else [x for x in balances if x.get("coach_id")==coaches[selected_coach]]
         else:
             filter_col1,filter_col2,filter_col3=st.columns(3)
             filter_col1.caption(f'成交教練：{me["display_name"]}')
             member_keyword=filter_col2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="member_course_name_filter").strip()
-            course_end_filter=filter_col3.selectbox("課程完成",["全部","未完成","已完成"],key="member_course_end_filter")
+            course_end_filter=filter_col3.selectbox("課程狀況",["全部","進行中","已完成","逾期中止","退費中止"],key="member_course_end_filter")
             filtered_balances=[x for x in balances if x.get("coach_id")==me["id"]]
         if member_keyword:
             normalized_keyword=member_keyword.casefold()
             filtered_balances=[x for x in filtered_balances if normalized_keyword in str(x.get("member_name") or "").casefold()]
-        if course_end_filter=="已完成": filtered_balances=[x for x in filtered_balances if float(x.get("remaining_sessions") or 0)<=0]
-        elif course_end_filter=="未完成": filtered_balances=[x for x in filtered_balances if float(x.get("remaining_sessions") or 0)>0]
+        if course_end_filter!="全部": filtered_balances=[x for x in filtered_balances if course_status_label(x)==course_end_filter]
         detail=[]
         for item in filtered_balances:
             purchase=purchase_map.get(item["purchase_id"],{})
@@ -559,9 +570,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
                 payment_status=f'已付 {payment["count"]}/{purchase.get("installment_count", "-")} 期，$ {payment["amount"]:,.0f}'
             else:
                 payment_status=f'尚欠 $ {total_amount-payment["amount"]:,.0f}'
-            course_status={"active":"進行中","completed":"已完成","expired":"逾期中止","cancelled":"退費中止"}.get(item.get("status"),"未知")
-            if used_sessions>=total_sessions and total_sessions>0 and course_status=="進行中":
-                course_status="已完成"
+            course_status=course_status_label(item)
             detail.append({
                 "購買_ID":purchase_code_map.get(item["purchase_id"],item["purchase_id"]),
                 "教練":item.get("coach_name") or "未知教練","會員名稱":item["member_name"],"課程名稱":item["course_name"],
@@ -672,7 +681,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
     with tab3:
         today=date.today()
         deadline=today+timedelta(days=30)
-        expiring=[x for x in balances if not course_is_completed(x) and x.get("expiry_date")
+        expiring=[x for x in balances if course_status_label(x)=="進行中" and x.get("expiry_date")
             and pd.to_datetime(x["expiry_date"]).date()<=deadline]
         if expiring:
             expiry_rows=[]
@@ -1679,7 +1688,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.4"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.5"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
