@@ -1624,7 +1624,7 @@ def _financial_backup_frames(table_data):
             +sum(float(purchase_map.get(x.get("purchase_id"),{}).get("session_hours") or 1) for x in coach_usages if is_magnetic_wave_course(purchase_map.get(x.get("purchase_id"),{}).get("course_name"))))
         coach_hours.append({"報表月份":report_month,"教練":name,"體驗時數":trial_hours,"單堂時數":single_hours,"活動時數":event_hours,"專案時數":project_hours,
             "銷課時數":normal_hours,"可計執行時數":trial_hours+single_hours+event_hours+project_hours+normal_hours,"動磁波時數":magnetic_hours})
-        trial_rev=sum(float(x.get("amount") or 0) for x in month_trials if x.get("coach_id")==coach_id); single_rev=sum(float(x.get("amount") or 0) for x in month_singles if x.get("coach_id")==coach_id)
+        trial_rev=sum(_tax_display_amount(x.get("amount"),"未稅") for x in month_trials if x.get("coach_id")==coach_id); single_rev=sum(_tax_display_amount(x.get("amount"),"未稅") for x in month_singles if x.get("coach_id")==coach_id)
         project_rev=sum(_tax_display_amount(x.get("line_amount"),"未稅") for x in month_projects if x.get("coach_id")==coach_id); usage_rev=sum(_tax_display_amount(x.get("deducted_amount"),"未稅") for x in coach_usages)
         coach_revenues.append({"報表月份":report_month,"教練":name,"體驗項目金額（未稅）":round(trial_rev),"單堂銷售金額（未稅）":round(single_rev),"專案（未稅）":round(project_rev),"銷課（未稅）":round(usage_rev),"金額總計（未稅）":round(trial_rev+single_rev+project_rev+usage_rev)})
 
@@ -1723,7 +1723,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.9"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.10"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -3237,8 +3237,8 @@ def financial_report_page(me):
             coach_hour_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"體驗時數":trial_hours,"單堂時數":single_hours,
                 "活動時數":event_hours,"專案時數":project_hours,"銷課時數":usage_hours,
                 "可計執行時數":trial_hours+single_hours+event_hours+project_hours+usage_hours,"動磁波時數":magnetic_wave_hours})
-            trial_revenue=sum(float(x.get("amount") or 0) for x in coach_trials)
-            single_revenue=sum(float(x.get("amount") or 0) for x in coach_singles)
+            trial_revenue=sum(_tax_display_amount(x.get("amount"),"未稅") for x in coach_trials)
+            single_revenue=sum(_tax_display_amount(x.get("amount"),"未稅") for x in coach_singles)
             project_revenue=sum(_tax_display_amount(x.get("line_amount"),"未稅") for x in monthly_projects if x.get("coach_id")==coach_id)
             usage_revenue=sum(_tax_display_amount(x.get("deducted_amount"),"未稅") for x in monthly_usages if x.get("coach_id")==coach_id)
             coach_revenue_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"體驗項目金額（未稅）":round(trial_revenue),"單堂銷售金額（未稅）":round(single_revenue),
@@ -3358,7 +3358,7 @@ def financial_report_page(me):
             st.caption("※可計執行時數不含動磁波；動磁波時數包含體驗、單堂銷售及課程銷課。")
             st.dataframe(monthly_hours_df,hide_index=True,width="stretch")
         with monthly_tabs[4]:
-            st.caption("※體驗項目及單堂銷售金額使用系統輸入的未稅金額。")
+            st.caption("※體驗項目及單堂銷售的輸入金額為含稅，報表以金額 ÷ 1.05 換算未稅。")
             st.dataframe(monthly_revenue_df,hide_index=True,width="stretch",column_config=monthly_money_config)
         with monthly_tabs[5]:
             if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")

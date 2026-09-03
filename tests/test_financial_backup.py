@@ -52,7 +52,7 @@ def sample_tables():
         "session_usages": [{"id": "u1", "purchase_id": "p1", "coach_id": "c1", "usage_date": "2026-08-02", "session_seq": 1,
             "deducted_amount": 1050, "note": ""}],
         "projects": [], "project_entries": [], "project_deposits": [], "course_terminations": [],
-        "trial_items": [{"coach_id": "c1", "course_type": "體驗", "hours": 1, "amount": 500}],
+        "trial_items": [{"coach_id": "c1", "course_type": "體驗", "hours": 1, "amount": 500, "entry_date": "2026-08-02"}],
         "single_sales": [], "event_supports": [], "bonus_rules": [],
     }
 
@@ -75,6 +75,9 @@ def test_financial_backup_contains_all_report_groups_and_balances():
     assert balance["累計銷課金額"] == 1050
     assert balance["實際預收剩餘金額"] == 1050
     assert frames["財務-體驗項目報表"].iloc[0]["未稅金額"] == 500
+    coach_revenue = frames["財務-教練營收"].iloc[0]
+    assert coach_revenue["體驗項目金額（未稅）"] == 476
+    assert coach_revenue["金額總計（未稅）"] == 1476
     workbook = ns["_excel_bytes"](frames)
     assert len(workbook) > 1000
 
