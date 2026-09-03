@@ -10,6 +10,7 @@ import pandas as pd
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 FUNCTIONS = {
     "is_magnetic_wave_course",
+    "is_magnetic_wave_operation",
     "usage_sequence_by_date",
     "course_status_label",
     "completed_purchase_ids",
@@ -110,4 +111,11 @@ def test_completed_purchase_ids_counts_only_the_final_session_once():
         {"id": "u5", "purchase_id": "p3", "session_seq": 0},
     ]
     assert completed(usages, purchases) == {"p1"}
+
+
+def test_magnetic_wave_operation_accepts_course_type_or_item_name():
+    is_magnetic = load_functions()["is_magnetic_wave_operation"]
+    assert is_magnetic({"course_type": "動磁波", "content": "初次體驗"})
+    assert is_magnetic({"course_type": "體驗", "content": "動磁波體驗"})
+    assert not is_magnetic({"course_type": "運動訓練", "content": "身體平衡"})
 
