@@ -11,6 +11,7 @@ APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 FUNCTIONS = {
     "is_magnetic_wave_course",
     "is_magnetic_wave_operation",
+    "is_magnetic_wave_purchase",
     "usage_sequence_by_date",
     "course_status_label",
     "completed_purchase_ids",
@@ -121,4 +122,11 @@ def test_magnetic_wave_operation_accepts_course_type_or_item_name():
     assert is_magnetic({"course_type": "動磁波", "content": "初次體驗"})
     assert is_magnetic({"course_type": "體驗", "content": "動磁波體驗"})
     assert not is_magnetic({"course_type": "運動訓練", "content": "身體平衡"})
+
+
+def test_magnetic_wave_purchase_accepts_course_name_or_catalog_type():
+    is_magnetic = load_functions()["is_magnetic_wave_purchase"]
+    assert is_magnetic({"course_name": "動磁波課程"}, {})
+    assert is_magnetic({"course_name": "身體平衡"}, {"身體平衡": "動磁波"})
+    assert not is_magnetic({"course_name": "運動訓練"}, {"運動訓練": "一般課程"})
 

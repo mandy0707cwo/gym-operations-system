@@ -88,6 +88,12 @@ def is_magnetic_wave_operation(item):
     """體驗及單堂銷售以課程屬性或項目名稱判斷是否屬於動磁波。"""
     return any(is_magnetic_wave_course(item.get(field)) for field in ("course_type","content","item_name"))
 
+def is_magnetic_wave_purchase(purchase,course_type_map=None):
+    """購買課程以課程名稱或課程屬性判斷是否屬於動磁波。"""
+    course_name=str(purchase.get("course_name") or "").strip()
+    course_type=(course_type_map or {}).get(course_name,"")
+    return is_magnetic_wave_course(course_name) or is_magnetic_wave_course(course_type)
+
 def usage_sequence_by_date(usage_records):
     """依同一購買課程的銷課日期與建立順序，計算畫面應顯示的累計堂次。"""
     ordered=sorted(usage_records,key=lambda x:(str(x.get("usage_date") or ""),str(x.get("created_at") or ""),str(x.get("id") or "")))
@@ -619,8 +625,8 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
         else:
             usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,deducted_amount").gte("usage_date",str(query_start)).lte("usage_date",str(query_end)).order("usage_date",desc=True))
             usages=[x for x in usages if x.get("coach_id") in operational_ids]
-            trial_hours=rows(client().table("trial_items").select("coach_id,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
-            single_hours=rows(client().table("single_sales").select("coach_id,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
+            trial_hours=rows(client().table("trial_items").select("coach_id,content,course_type,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
+            single_hours=rows(client().table("single_sales").select("coach_id,content,course_type,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
             event_hours=rows(client().table("event_supports").select("coach_id,hours,deducted_hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
             project_hours=rows(client().table("project_entries").select("coach_id,item_hours,quantity,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
             trial_hours=[x for x in trial_hours if x.get("coach_id") in operational_ids]
@@ -635,6 +641,8 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
                 event_hours=[x for x in event_hours if x.get("coach_id")==usage_coach_id]
                 project_hours=[x for x in project_hours if x.get("coach_id")==usage_coach_id]
             balance_by_purchase={x["purchase_id"]:x for x in balances}
+            execution_catalog=rows(client().table("course_catalog").select("course_name,course_type"))
+            execution_course_type={str(x.get("course_name") or "").strip():str(x.get("course_type") or "").strip() for x in execution_catalog}
             usage_detail=[]
             total_usage_hours=0.0
             total_magnetic_wave_hours=0.0
@@ -642,7 +650,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
                 purchase=purchase_map.get(usage["purchase_id"],{})
                 session_hours=float(purchase.get("session_hours") or 1)
                 course_name=purchase.get("course_name") or balance_by_purchase.get(usage["purchase_id"],{}).get("course_name","")
-                magnetic_wave_hours=session_hours if is_magnetic_wave_course(course_name) else 0.0
+                magnetic_wave_hours=session_hours if is_magnetic_wave_purchase({**purchase,"course_name":course_name},execution_course_type) else 0.0
                 regular_usage_hours=0.0 if magnetic_wave_hours else session_hours
                 total_usage_hours+=regular_usage_hours
                 total_magnetic_wave_hours+=magnetic_wave_hours
@@ -651,11 +659,14 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
                     "課程名稱":course_name,"銷課時數":regular_usage_hours,"動磁波時數":magnetic_wave_hours,
                     "銷課金額":float(usage["deducted_amount"])})
             total_amount=sum(float(x["deducted_amount"]) for x in usages)
-            total_daily_hours=(sum(float(x["hours"]) for x in trial_hours)
-                +sum(float(x["hours"]) for x in single_hours)
+            magnetic_operation_hours=(sum(float(x["hours"]) for x in trial_hours if is_magnetic_wave_operation(x))
+                +sum(float(x["hours"]) for x in single_hours if is_magnetic_wave_operation(x)))
+            total_magnetic_wave_hours+=magnetic_operation_hours
+            total_daily_hours=(sum(float(x["hours"]) for x in trial_hours if not is_magnetic_wave_operation(x))
+                +sum(float(x["hours"]) for x in single_hours if not is_magnetic_wave_operation(x))
                 +sum((float(x["hours"])-float(x.get("deducted_hours") or 0))/2 for x in event_hours)
                 +sum(float(x.get("item_hours") or 0)*float(x["quantity"]) for x in project_hours))
-            total_execution_hours=total_usage_hours+total_magnetic_wave_hours+total_daily_hours
+            total_execution_hours=total_usage_hours+total_daily_hours
             a,b,c,d=st.columns(4)
             a.metric("銷課時數",f"{total_usage_hours:,.2f} 小時")
             b.metric("動磁波時數",f"{total_magnetic_wave_hours:,.2f} 小時")
@@ -677,8 +688,8 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
                 daily_rows=[]
                 coach_name_by_id={cid:name for name,cid in coaches.items()}
                 for entry_date,coach_id in daily_keys:
-                    trial_total=sum(float(x["hours"]) for x in trial_hours if str(x["entry_date"])==entry_date and x["coach_id"]==coach_id)
-                    single_total=sum(float(x["hours"]) for x in single_hours if str(x["entry_date"])==entry_date and x["coach_id"]==coach_id)
+                    trial_total=sum(float(x["hours"]) for x in trial_hours if str(x["entry_date"])==entry_date and x["coach_id"]==coach_id and not is_magnetic_wave_operation(x))
+                    single_total=sum(float(x["hours"]) for x in single_hours if str(x["entry_date"])==entry_date and x["coach_id"]==coach_id and not is_magnetic_wave_operation(x))
                     project_total=sum(float(x.get("item_hours") or 0)*float(x["quantity"]) for x in project_hours if str(x["entry_date"])==entry_date and x["coach_id"]==coach_id)
                     event_total=sum((float(x["hours"])-float(x.get("deducted_hours") or 0))/2 for x in event_hours if str(x["entry_date"])==entry_date and x["coach_id"]==coach_id)
                     daily_rows.append({"日期":entry_date,"教練":coach_name_by_id.get(coach_id,"未知"),"體驗項目時數":trial_total,
@@ -1618,10 +1629,10 @@ def _financial_backup_frames(table_data):
         event_hours=sum(max(0,float(x.get("hours") or 0)-float(x.get("deducted_hours") or 0)) for x in month_events if x.get("coach_id")==coach_id)
         project_hours=sum(float(x.get("item_hours") or 0)*float(x.get("quantity") or 0) for x in month_projects if x.get("coach_id")==coach_id)
         coach_usages=[x for x in usages if x.get("coach_id")==coach_id and str(x.get("usage_date") or "").startswith(report_month)]
-        normal_hours=sum(float(purchase_map.get(x.get("purchase_id"),{}).get("session_hours") or 1) for x in coach_usages if not is_magnetic_wave_course(purchase_map.get(x.get("purchase_id"),{}).get("course_name")))
+        normal_hours=sum(float(purchase_map.get(x.get("purchase_id"),{}).get("session_hours") or 1) for x in coach_usages if not is_magnetic_wave_purchase(purchase_map.get(x.get("purchase_id"),{}),course_type_map))
         magnetic_hours=(sum(float(x.get("hours") or 0) for x in coach_trials if is_magnetic_wave_operation(x))
             +sum(float(x.get("hours") or 0) for x in coach_singles if is_magnetic_wave_operation(x))
-            +sum(float(purchase_map.get(x.get("purchase_id"),{}).get("session_hours") or 1) for x in coach_usages if is_magnetic_wave_course(purchase_map.get(x.get("purchase_id"),{}).get("course_name"))))
+            +sum(float(purchase_map.get(x.get("purchase_id"),{}).get("session_hours") or 1) for x in coach_usages if is_magnetic_wave_purchase(purchase_map.get(x.get("purchase_id"),{}),course_type_map)))
         coach_hours.append({"報表月份":report_month,"教練":name,"體驗時數":trial_hours,"單堂時數":single_hours,"活動時數":event_hours,"專案時數":project_hours,
             "銷課時數":normal_hours,"可計執行時數":trial_hours+single_hours+event_hours+project_hours+normal_hours,"動磁波時數":magnetic_hours})
         trial_rev=sum(_tax_display_amount(x.get("amount"),"未稅") for x in month_trials if x.get("coach_id")==coach_id); single_rev=sum(_tax_display_amount(x.get("amount"),"未稅") for x in month_singles if x.get("coach_id")==coach_id)
@@ -1723,7 +1734,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.10"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.11"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -3182,6 +3193,8 @@ def financial_report_page(me):
         monthly_purchase_ids=list({x["purchase_id"] for x in monthly_usages+monthly_terminations})
         monthly_purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,session_hours,total_sessions,total_amount,purchase_date,purchase_kind,referral,created_at").in_("id",monthly_purchase_ids)) if monthly_purchase_ids else []
         monthly_purchase_map={x["id"]:x for x in monthly_purchases}
+        monthly_course_catalog=rows(client().table("course_catalog").select("course_name,course_type"))
+        monthly_course_type={str(x.get("course_name") or "").strip():str(x.get("course_type") or "").strip() for x in monthly_course_catalog}
         monthly_member_ids=list({x.get("member_id") for x in monthly_purchases if x.get("member_id")})
         monthly_members=rows(client().table("members").select("id,member_name").in_("id",monthly_member_ids)) if monthly_member_ids else []
         monthly_member_name={x["id"]:x["member_name"] for x in monthly_members}
@@ -3229,11 +3242,11 @@ def financial_report_page(me):
             project_hours=sum(float(x.get("item_hours") or 0)*float(x.get("quantity") or 0) for x in monthly_projects if x.get("coach_id")==coach_id)
             coach_usages=[x for x in monthly_usages if x.get("coach_id")==coach_id]
             usage_hours=sum(float(monthly_purchase_map.get(x["purchase_id"],{}).get("session_hours") or 1) for x in coach_usages
-                if not is_magnetic_wave_course(monthly_purchase_map.get(x["purchase_id"],{}).get("course_name")))
+                if not is_magnetic_wave_purchase(monthly_purchase_map.get(x["purchase_id"],{}),monthly_course_type))
             magnetic_wave_hours=(sum(float(x.get("hours") or 0) for x in coach_trials if is_magnetic_wave_operation(x))
                 +sum(float(x.get("hours") or 0) for x in coach_singles if is_magnetic_wave_operation(x))
                 +sum(float(monthly_purchase_map.get(x["purchase_id"],{}).get("session_hours") or 1) for x in coach_usages
-                    if is_magnetic_wave_course(monthly_purchase_map.get(x["purchase_id"],{}).get("course_name"))))
+                    if is_magnetic_wave_purchase(monthly_purchase_map.get(x["purchase_id"],{}),monthly_course_type)))
             coach_hour_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"體驗時數":trial_hours,"單堂時數":single_hours,
                 "活動時數":event_hours,"專案時數":project_hours,"銷課時數":usage_hours,
                 "可計執行時數":trial_hours+single_hours+event_hours+project_hours+usage_hours,"動磁波時數":magnetic_wave_hours})
