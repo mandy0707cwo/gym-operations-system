@@ -1698,7 +1698,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.6"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.7"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2299,9 +2299,26 @@ def record_admin_page(me):
         delete_records=[labels[label] for label in delete_labels]
     if delete_records:
         st.warning(f"即將刪除 {len(delete_records)} 筆「{data_type}」資料。")
+    purchase_delete_blockers=[]
+    if data_type=="課程購買" and delete_records:
+        selected_purchase_ids=list({item["purchase_id"] for item in delete_records})
+        existing_usage_rows=rows(admin.table("session_usages").select("purchase_id").in_("purchase_id",selected_purchase_ids))
+        usage_count_by_purchase={}
+        for usage in existing_usage_rows:
+            purchase_id=usage["purchase_id"]
+            usage_count_by_purchase[purchase_id]=usage_count_by_purchase.get(purchase_id,0)+1
+        purchase_delete_blockers=[{
+            "購買_ID":item.get("purchase_code") or item["purchase_id"],
+            "會員名稱":item.get("member_name") or "",
+            "課程名稱":item.get("course_name") or "",
+            "銷課紀錄筆數":usage_count_by_purchase[item["purchase_id"]],
+        } for item in delete_records if usage_count_by_purchase.get(item["purchase_id"],0)>0]
+        if purchase_delete_blockers:
+            st.error("以下課程已有銷課紀錄，不能刪除課程購買。請先至「銷課表」刪除該課程的全部銷課紀錄，再回來刪除課程購買。")
+            st.dataframe(pd.DataFrame(purchase_delete_blockers),hide_index=True,width="stretch")
     with st.form("record_delete"):
-        confirm=st.checkbox(f"我確認刪除已選取的 {len(delete_records)} 筆資料；此操作無法復原。")
-        delete=st.form_submit_button("刪除目前紀錄" if len(delete_records)==1 else "刪除選取紀錄",type="primary")
+        confirm=st.checkbox(f"我確認刪除已選取的 {len(delete_records)} 筆資料；此操作無法復原。",disabled=bool(purchase_delete_blockers))
+        delete=st.form_submit_button("刪除目前紀錄" if len(delete_records)==1 else "刪除選取紀錄",type="primary",disabled=bool(purchase_delete_blockers))
     if delete:
         if not delete_records: st.error("請先選擇至少一筆要刪除的資料。")
         elif not confirm: st.error("請先勾選刪除確認。")
@@ -2315,11 +2332,10 @@ def record_admin_page(me):
                 elif data_type=="專案": admin.table("project_entries").delete().in_("id",record_ids).execute()
                 elif data_type=="課程購買":
                     purchase_ids=list({item["purchase_id"] for item in delete_records})
-                    affected=rows(admin.table("session_usages").select("usage_date,coach_id").in_("purchase_id",purchase_ids))
-                    admin.table("session_usages").delete().in_("purchase_id",purchase_ids).execute()
+                    usage_still_exists=rows(admin.table("session_usages").select("purchase_id").in_("purchase_id",purchase_ids).limit(1))
+                    if usage_still_exists:
+                        raise ValueError("課程已有銷課紀錄；請先刪除該課程的全部銷課紀錄，確認為零筆後才能刪除課程購買。")
                     admin.table("purchases").delete().in_("id",purchase_ids).execute()
-                    for usage_date,coach_id in {(item["usage_date"],item["coach_id"]) for item in affected}:
-                        _sync_daily_classes(admin,usage_date,coach_id)
                 else:
                     affected={(item["usage_date"],item["coach_id"]) for item in delete_records}
                     affected_purchase_ids=list({item["purchase_id"] for item in delete_records})
