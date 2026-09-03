@@ -12,6 +12,7 @@ FUNCTIONS = {
     "is_magnetic_wave_course",
     "usage_sequence_by_date",
     "course_status_label",
+    "completed_purchase_ids",
     "_excel_bytes",
     "_financial_backup_frames",
     "_tax_display_amount",
@@ -96,4 +97,17 @@ def test_course_status_filter_labels_are_mutually_exclusive():
     assert status({"status": "completed", "used_sessions": 10, "total_sessions": 10, "remaining_sessions": 0}) == "已完成"
     assert status({"status": "expired", "used_sessions": 3, "total_sessions": 10, "remaining_sessions": 7}) == "逾期中止"
     assert status({"status": "cancelled", "used_sessions": 3, "total_sessions": 10, "remaining_sessions": 7}) == "退費中止"
+
+
+def test_completed_purchase_ids_counts_only_the_final_session_once():
+    completed = load_functions()["completed_purchase_ids"]
+    purchases = {"p1": {"total_sessions": 2}, "p2": {"total_sessions": 3}, "p3": {"total_sessions": 0}}
+    usages = [
+        {"id": "u1", "purchase_id": "p1", "session_seq": 1},
+        {"id": "u2", "purchase_id": "p1", "session_seq": 2},
+        {"id": "u3", "purchase_id": "p1", "session_seq": 2},
+        {"id": "u4", "purchase_id": "p2", "session_seq": 2},
+        {"id": "u5", "purchase_id": "p3", "session_seq": 0},
+    ]
+    assert completed(usages, purchases) == {"p1"}
 
