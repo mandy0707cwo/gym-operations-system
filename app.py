@@ -884,13 +884,20 @@ def usage_page(me):
     with query_tab:
         usage_query_tabs(me,purchase_code_map=usage_purchase_code_map)
 
+def completed_purchase_ids(usages,purchase_map):
+    """回傳在銷課明細中完成最後一堂的購買課程 ID；同一課程只計一次。"""
+    return {usage["purchase_id"] for usage in usages
+        if usage.get("purchase_id") in purchase_map
+        and int(purchase_map[usage["purchase_id"]].get("total_sessions") or 0)>0
+        and int(usage.get("session_seq") or 0)==int(purchase_map[usage["purchase_id"]].get("total_sessions") or 0)}
+
 def dashboard_page(me):
     st.header("主管 Dashboard")
     if me["role"] not in ("manager","admin"): st.warning("此頁僅限主管與系統管理員使用。") ; return
     coaches=coach_options(); c1,c2,c3=st.columns(3)
     start=c1.date_input("開始日期",date.today().replace(day=1)); end=c2.date_input("結束日期",date.today())
     selected=c3.multiselect("教練",list(coaches),default=list(coaches))
-    st.caption("※金額皆為含稅")
+    st.caption("※金額皆為含稅；續約率＝查詢期間續課購買筆數 ÷ 查詢期間課程結束筆數。")
     if start>end: st.error("開始日期不可晚於結束日期。") ; return
     ids=[coaches[x] for x in selected]
     cancellations=rows(client().table("session_cancellations").select("coach_id,cancelled_sessions,cancel_date").gte("cancel_date",str(start)).lte("cancel_date",str(end)))
@@ -899,7 +906,16 @@ def dashboard_page(me):
     event_supports=rows(client().table("event_supports").select("coach_id,hours,deducted_hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
     project_entries=rows(client().table("project_entries").select("coach_id,item_hours,quantity,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
     purchases=rows(client().table("purchases").select("id,coach_id,purchase_kind,total_sessions,total_amount,purchase_date").gte("purchase_date",str(start)).lte("purchase_date",str(end)))
-    usages=rows(client().table("session_usages").select("coach_id,deducted_amount,usage_date").gte("usage_date",str(start)).lte("usage_date",str(end)))
+    def dashboard_usage_query():
+        return (client().table("session_usages").select("id,purchase_id,coach_id,session_seq,deducted_amount,usage_date")
+            .gte("usage_date",str(start)).lte("usage_date",str(end))
+            .order("usage_date").order("id"))
+    usages=paged_rows(dashboard_usage_query)
+    dashboard_usage_purchase_ids=list({x["purchase_id"] for x in usages})
+    completion_purchases=(rows(client().table("purchases").select("id,coach_id,total_sessions").in_("id",dashboard_usage_purchase_ids))
+        if dashboard_usage_purchase_ids else [])
+    completion_purchase_map={x["id"]:x for x in completion_purchases}
+    completed_ids=completed_purchase_ids(usages,completion_purchase_map)
     payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").gte("paid_date",str(start)).lte("paid_date",str(end)))
     payment_purchase_ids=list({x["purchase_id"] for x in payments})
     payment_purchase_map={}
@@ -917,6 +933,7 @@ def dashboard_page(me):
         trial_count=len(trial_member_content)
         first_count=sum(1 for x in p if x["purchase_kind"]=="first")
         renewal_count=sum(1 for x in p if x["purchase_kind"]=="renewal")
+        completed_count=sum(1 for purchase_id in completed_ids if completion_purchase_map[purchase_id].get("coach_id")==cid)
         received=sum(float(x["amount"]) for x in payments if payment_purchase_map.get(x["purchase_id"])==cid)
         used_sessions=len(u); used_amount=sum(float(x["deducted_amount"]) for x in u)
         execution_hours=(used_sessions+sum(float(x["hours"]) for x in trials if x["coach_id"]==cid)
@@ -926,7 +943,7 @@ def dashboard_page(me):
         result.append({"教練":names[cid],"銷課堂數":used_sessions,"銷課金額":used_amount,
                        "上課取消率":cancelled/(used_sessions+cancelled) if used_sessions+cancelled else None,
                        "體驗人次":trial_count,"體驗成交率":first_count/trial_count if trial_count else None,
-                       "續約率":renewal_count/len(p) if p else None,"成交堂數":sessions,
+                       "續約率":renewal_count/completed_count if completed_count else None,"成交堂數":sessions,
                        "成交總金額":amount,"實際預收金額":received,
                        "平均每堂單價":amount/sessions if sessions else None,"總執行時數":execution_hours})
     df=pd.DataFrame(result)
@@ -937,9 +954,9 @@ def dashboard_page(me):
     total_trial_count=len(overall_trial_member_content)
     total_first_count=len([x for x in purchases if x["coach_id"] in ids and x["purchase_kind"]=="first"])
     overall_trial_conversion=total_first_count/total_trial_count if total_trial_count else None
-    total_purchase_count=len([x for x in purchases if x["coach_id"] in ids])
     total_renewals=len([x for x in purchases if x["coach_id"] in ids and x["purchase_kind"]=="renewal"])
-    overall_renewal=total_renewals/total_purchase_count if total_purchase_count else None
+    total_completed=len([purchase_id for purchase_id in completed_ids if completion_purchase_map[purchase_id].get("coach_id") in ids])
+    overall_renewal=total_renewals/total_completed if total_completed else None
     total_cancelled=sum(x["cancelled_sessions"] for x in cancellations if x["coach_id"] in ids)
     overall_cancel_rate=total_cancelled/(totals["銷課堂數"]+total_cancelled) if totals["銷課堂數"]+total_cancelled else None
     average_unit=totals["成交總金額"]/totals["成交堂數"] if totals["成交堂數"] else None
@@ -1698,7 +1715,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.7"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.8"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
