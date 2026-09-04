@@ -548,20 +548,26 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
         return (item.get("status")=="completed" or remaining_sessions<=0
             or (total_sessions>0 and used_sessions>=total_sessions))
 
-    tab1,tab2,tab3,tab4,tab5=st.tabs(["會員課程查詢","執行時數","即將到期／過期","剩餘三堂（含）","銷課明細查詢"])
-    with tab1:
-        can_filter_coach=me["role"] in ("shared_coach","manager","admin")
+    can_filter_coach=me["role"] in ("shared_coach","manager","admin")
+    query_view=st.segmented_control("查詢項目",["會員課程查詢","執行時數","即將到期／過期","剩餘三堂（含）","銷課明細查詢"],
+        default="會員課程查詢",key=f'coach_query_view_{"export" if enable_export else "usage"}',width="stretch")
+    if query_view=="會員課程查詢":
+        with st.form(f'member_course_filter_form_{"export" if enable_export else "usage"}',border=False):
+            if can_filter_coach:
+                filter_col1,filter_col2,filter_col3=st.columns(3)
+                selected_coach=filter_col1.selectbox("成交教練",["全部教練"]+list(coaches),key="member_course_coach_filter")
+                member_keyword=filter_col2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="member_course_name_filter").strip()
+                course_end_filter=filter_col3.selectbox("課程狀況",["全部","進行中","已完成","逾期中止","退費中止"],key="member_course_end_filter")
+            else:
+                filter_col1,filter_col2,filter_col3=st.columns(3)
+                filter_col1.caption(f'成交教練：{me["display_name"]}')
+                selected_coach=me["display_name"]
+                member_keyword=filter_col2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="member_course_name_filter").strip()
+                course_end_filter=filter_col3.selectbox("課程狀況",["全部","進行中","已完成","逾期中止","退費中止"],key="member_course_end_filter")
+            st.form_submit_button("查詢",type="primary",width="stretch")
         if can_filter_coach:
-            filter_col1,filter_col2,filter_col3=st.columns(3)
-            selected_coach=filter_col1.selectbox("成交教練",["全部教練"]+list(coaches),key="member_course_coach_filter")
-            member_keyword=filter_col2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="member_course_name_filter").strip()
-            course_end_filter=filter_col3.selectbox("課程狀況",["全部","進行中","已完成","逾期中止","退費中止"],key="member_course_end_filter")
             filtered_balances=balances if selected_coach=="全部教練" else [x for x in balances if x.get("coach_id")==coaches[selected_coach]]
         else:
-            filter_col1,filter_col2,filter_col3=st.columns(3)
-            filter_col1.caption(f'成交教練：{me["display_name"]}')
-            member_keyword=filter_col2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="member_course_name_filter").strip()
-            course_end_filter=filter_col3.selectbox("課程狀況",["全部","進行中","已完成","逾期中止","退費中止"],key="member_course_end_filter")
             filtered_balances=[x for x in balances if x.get("coach_id")==me["id"]]
         if member_keyword:
             normalized_keyword=member_keyword.casefold()
@@ -609,17 +615,19 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
         else:
             st.info("目前沒有可查詢的課程資料。")
 
-    with tab2:
+    if query_view=="執行時數":
         usage_detail_display=pd.DataFrame(columns=["日期","教練","會員名稱","課程名稱","銷課時數","動磁波時數","銷課金額"])
         daily_hours_df=pd.DataFrame(columns=["日期","教練","體驗項目時數","單堂銷售時數","專案時數","活動支援時數（扣除後÷2）","每日營運時數合計"])
-        c1,c2,c3=st.columns(3)
-        query_start=c1.date_input("開始日期",date.today().replace(day=1),key="usage_query_start")
-        query_end=c2.date_input("結束日期",date.today(),key="usage_query_end")
-        if can_filter_coach:
-            usage_coach=c3.selectbox("授課教練",["全部教練"]+list(coaches),key="usage_stats_coach_filter")
-        else:
-            c3.caption(f'授課教練：{me["display_name"]}')
-            usage_coach=me["display_name"]
+        with st.form(f'usage_stats_filter_form_{"export" if enable_export else "usage"}',border=False):
+            c1,c2,c3=st.columns(3)
+            query_start=c1.date_input("開始日期",date.today().replace(day=1),key="usage_query_start")
+            query_end=c2.date_input("結束日期",date.today(),key="usage_query_end")
+            if can_filter_coach:
+                usage_coach=c3.selectbox("授課教練",["全部教練"]+list(coaches),key="usage_stats_coach_filter")
+            else:
+                c3.caption(f'授課教練：{me["display_name"]}')
+                usage_coach=me["display_name"]
+            st.form_submit_button("查詢",type="primary",width="stretch")
         if query_start>query_end:
             st.error("開始日期不可晚於結束日期。")
         else:
@@ -703,7 +711,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
         export_sheets["執行時數_銷課"]=usage_detail_display
         export_sheets["執行時數_每日營運"]=daily_hours_df
 
-    with tab3:
+    if query_view=="即將到期／過期":
         today=date.today()
         deadline=today+timedelta(days=30)
         expiring=[x for x in balances if course_status_label(x)=="進行中" and x.get("expiry_date")
@@ -724,7 +732,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             st.info("目前沒有即將到期或過期的課程資料。")
         export_sheets["即將到期過期"]=expiry_df
 
-    with tab4:
+    if query_view=="剩餘三堂（含）":
         low_balances=[x for x in balances if not course_is_completed(x) and x["status"]=="active"
             and 0<float(x["remaining_sessions"])<=3]
         if low_balances:
@@ -743,14 +751,16 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             st.info("目前沒有剩餘三堂（含）以下的有效課程。")
         export_sheets["剩餘三堂"]=low_balance_df
 
-    with tab5:
-        detail_c1,detail_c2=st.columns(2)
-        if can_filter_coach:
-            detail_coach=detail_c1.selectbox("成交教練",["全部教練"]+list(coaches),key="usage_detail_coach")
-        else:
-            detail_c1.caption(f'成交教練：{me["display_name"]}')
-            detail_coach=me["display_name"]
-        detail_member_keyword=detail_c2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="usage_detail_member").strip()
+    if query_view=="銷課明細查詢":
+        with st.form(f'usage_detail_filter_form_{"export" if enable_export else "usage"}',border=False):
+            detail_c1,detail_c2=st.columns(2)
+            if can_filter_coach:
+                detail_coach=detail_c1.selectbox("成交教練",["全部教練"]+list(coaches),key="usage_detail_coach")
+            else:
+                detail_c1.caption(f'成交教練：{me["display_name"]}')
+                detail_coach=me["display_name"]
+            detail_member_keyword=detail_c2.text_input("會員名稱",placeholder="輸入完整或部分會員名稱",key="usage_detail_member").strip()
+            st.form_submit_button("查詢",type="primary",width="stretch")
         detail_balances=balances
         if detail_coach!="全部教練":
             detail_coach_id=coaches.get(detail_coach,me["id"])
@@ -1734,7 +1744,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.12"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.13"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2685,18 +2695,21 @@ def financial_report_page(me):
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
         return
-    report_tabs=st.tabs(["會員報表","其他報表","每月報表","教練查詢","課程中止"])
-    with report_tabs[0]:
+    report_view=st.segmented_control("報表分類",["會員報表","其他報表","每月報表","教練查詢","課程中止"],
+        default="會員報表",key="financial_report_view",width="stretch")
+    if report_view=="會員報表":
         st.subheader("會員報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
         member_name_map={x["id"]:x["member_name"] for x in members}
         member_id_map={x["member_name"]:x["id"] for x in members}
         coaches=coach_options(); coach_name_map={v:k for k,v in coaches.items()}
-        c1,c2,c3,c4=st.columns(4)
-        start=c1.date_input("開始日期",date.today().replace(day=1),key="finance_member_start")
-        end=c2.date_input("結束日期",date.today(),key="finance_member_end")
-        selected_coach=c3.selectbox("教練",["全部教練"]+list(coaches),key="finance_member_coach")
-        selected_member=c4.selectbox("會員名稱",["全部會員"]+list(member_id_map),key="finance_member_name")
+        with st.form("finance_member_filter_form",border=False):
+            c1,c2,c3,c4=st.columns(4)
+            start=c1.date_input("開始日期",date.today().replace(day=1),key="finance_member_start")
+            end=c2.date_input("結束日期",date.today(),key="finance_member_end")
+            selected_coach=c3.selectbox("教練",["全部教練"]+list(coaches),key="finance_member_coach")
+            selected_member=c4.selectbox("會員名稱",["全部會員"]+list(member_id_map),key="finance_member_name")
+            st.form_submit_button("查詢",type="primary",width="stretch")
         if start>end:
             st.error("開始日期不可晚於結束日期。")
             return
@@ -2947,18 +2960,21 @@ def financial_report_page(me):
             st.download_button("匯出教練財務報表",coach_export,file_name=f"教練財務報表_{coach_start}_{coach_end}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
-    with report_tabs[1]:
+    if report_view=="其他報表":
         st.subheader("其他報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
         member_name_map={x["id"]:x["member_name"] for x in members}
         member_id_map={x["member_name"]:x["id"] for x in members}
         coaches=coach_options()
-        c1,c2,c3,c4=st.columns(4)
-        other_start=c1.date_input("開始日期",date.today().replace(day=1),key="finance_other_start")
-        other_end=c2.date_input("結束日期",date.today(),key="finance_other_end")
-        other_coach=c3.selectbox("教練",["全部教練"]+list(coaches),key="finance_other_coach")
-        other_member=c4.selectbox("會員名稱",["全部會員"]+list(member_id_map),key="finance_other_member")
-        other_tabs=st.tabs(["醫生轉介","課程屬性","專案報表","每日營運報表"])
+        with st.form("finance_other_filter_form",border=False):
+            c1,c2,c3,c4=st.columns(4)
+            other_start=c1.date_input("開始日期",date.today().replace(day=1),key="finance_other_start")
+            other_end=c2.date_input("結束日期",date.today(),key="finance_other_end")
+            other_coach=c3.selectbox("教練",["全部教練"]+list(coaches),key="finance_other_coach")
+            other_member=c4.selectbox("會員名稱",["全部會員"]+list(member_id_map),key="finance_other_member")
+            st.form_submit_button("查詢",type="primary",width="stretch")
+        other_report_view=st.segmented_control("其他報表分類",["醫生轉介","課程屬性","專案報表","每日營運報表"],
+            default="醫生轉介",key="financial_other_report_view",width="stretch")
         if other_start>other_end:
             st.error("開始日期不可晚於結束日期。")
         else:
@@ -3025,10 +3041,10 @@ def financial_report_page(me):
                 })
             course_type_columns=["課程屬性","成交未稅金額","銷課未稅金額"]
             course_type_df=pd.DataFrame(course_type_rows,columns=course_type_columns)
-            with other_tabs[0]:
+            if other_report_view=="醫生轉介":
                 st.caption("日期依課程購買日期；成交總金額為含稅金額。首購與續約欄位為購買筆數。")
                 st.dataframe(referral_df,hide_index=True,use_container_width=True,column_config={"成交總金額":st.column_config.NumberColumn(format="$ %.0f")})
-            with other_tabs[1]:
+            if other_report_view=="課程屬性":
                 st.caption("成交未稅金額依購買日期及成交教練；銷課未稅金額依銷課日期及實際授課教練。未稅金額均以原含稅金額 ÷ 1.05 計算。")
                 if course_type_df.empty:
                     st.info("查詢期間沒有成交或銷課資料。")
@@ -3040,7 +3056,7 @@ def financial_report_page(me):
             st.download_button("匯出其他報表",other_export,file_name=f"其他報表_{other_start}_{other_end}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
-    with other_tabs[2]:
+    if report_view=="其他報表" and other_report_view=="專案報表":
         st.subheader("專案報表")
         try:
             report_projects=rows(client().table("projects").select("id,project_name,funding_type,stored_amount").order("project_name"))
@@ -3049,11 +3065,13 @@ def financial_report_page(me):
             report_projects=[]
         if report_projects:
             project_name_id={x["project_name"]:x["id"] for x in report_projects}
-            c1,c2,c3,c4=st.columns(4)
-            project_start=c1.date_input("開始日期",date.today().replace(day=1),key="finance_project_start")
-            project_end=c2.date_input("結束日期",date.today(),key="finance_project_end")
-            project_filter=c3.selectbox("專案名稱",["全部專案"]+list(project_name_id),key="finance_project_filter")
-            project_user_filter=c4.text_input("使用者",placeholder="可輸入部分姓名",key="finance_project_user").strip().casefold()
+            with st.form("finance_project_filter_form",border=False):
+                c1,c2,c3,c4=st.columns(4)
+                project_start=c1.date_input("開始日期",date.today().replace(day=1),key="finance_project_start")
+                project_end=c2.date_input("結束日期",date.today(),key="finance_project_end")
+                project_filter=c3.selectbox("專案名稱",["全部專案"]+list(project_name_id),key="finance_project_filter")
+                project_user_filter=c4.text_input("使用者",placeholder="可輸入部分姓名",key="finance_project_user").strip().casefold()
+                st.form_submit_button("查詢",type="primary",width="stretch")
             if project_start>project_end:
                 st.error("開始日期不可晚於結束日期。")
             else:
@@ -3123,14 +3141,16 @@ def financial_report_page(me):
                 st.download_button("下載完整專案報表",project_export,file_name=f"專案報表_{project_start}_{project_end}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
 
-    with other_tabs[3]:
+    if report_view=="其他報表" and other_report_view=="每日營運報表":
         st.subheader("每日營運報表")
         daily_coaches=coach_options()
-        c1,c2,c3,c4=st.columns(4)
-        daily_report_start=c1.date_input("開始日期",date.today().replace(day=1),key="finance_daily_start")
-        daily_report_end=c2.date_input("結束日期",date.today(),key="finance_daily_end")
-        daily_report_coach=c3.selectbox("教練",["全部教練"]+list(daily_coaches),key="finance_daily_coach")
-        daily_report_member=c4.text_input("會員名稱",placeholder="可輸入完整或部分姓名",key="finance_daily_member").strip().casefold()
+        with st.form("finance_daily_filter_form",border=False):
+            c1,c2,c3,c4=st.columns(4)
+            daily_report_start=c1.date_input("開始日期",date.today().replace(day=1),key="finance_daily_start")
+            daily_report_end=c2.date_input("結束日期",date.today(),key="finance_daily_end")
+            daily_report_coach=c3.selectbox("教練",["全部教練"]+list(daily_coaches),key="finance_daily_coach")
+            daily_report_member=c4.text_input("會員名稱",placeholder="可輸入完整或部分姓名",key="finance_daily_member").strip().casefold()
+            st.form_submit_button("查詢",type="primary",width="stretch")
         if daily_report_start>daily_report_end:
             st.error("開始日期不可晚於結束日期。")
         else:
@@ -3186,13 +3206,15 @@ def financial_report_page(me):
                 file_name=f"每日營運報表_{daily_report_start}_{daily_report_end}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
 
-    with report_tabs[2]:
+    if report_view=="每月報表":
         st.subheader("每月報表")
         default_month_start=date.today().replace(day=1)
         default_month_end=(pd.Timestamp(default_month_start)+pd.offsets.MonthEnd(1)).date()
-        c1,c2=st.columns(2)
-        month_start=c1.date_input("開始日期",default_month_start,key="monthly_report_start")
-        month_end=c2.date_input("結束日期",default_month_end,key="monthly_report_end")
+        with st.form("monthly_report_filter_form",border=False):
+            c1,c2=st.columns(2)
+            month_start=c1.date_input("開始日期",default_month_start,key="monthly_report_start")
+            month_end=c2.date_input("結束日期",default_month_end,key="monthly_report_end")
+            st.form_submit_button("查詢",type="primary",width="stretch")
         if month_start>month_end:
             st.error("開始日期不可晚於結束日期。")
             st.stop()
@@ -3406,10 +3428,10 @@ def financial_report_page(me):
         st.download_button("匯出每月報表",monthly_export,file_name=f"每月報表_{month_start}_{month_end}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
 
-    with report_tabs[3]:
+    if report_view=="教練查詢":
         usage_query_tabs(me,enable_export=True)
 
-    with report_tabs[4]:
+    if report_view=="課程中止":
         course_termination_report_page(me)
 
 user=login(); me=profile(user.id)
