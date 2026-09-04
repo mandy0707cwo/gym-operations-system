@@ -1744,7 +1744,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.13"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.14"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2715,7 +2715,7 @@ def financial_report_page(me):
             return
         selected_coach_id=coaches.get(selected_coach)
         selected_member_id=member_id_map.get(selected_member)
-        detail_tabs=st.tabs(["成交預收總表","預收餘額明細","專案預收儲值"])
+        detail_tabs=st.tabs(["成交預收總表","預收餘額明細","專案預收儲值餘額"])
         with detail_tabs[0]:
             total_tax_mode=st.radio("預收總額顯示方式",["未稅","含稅"],horizontal=True,key="finance_member_total_tax_mode")
         with detail_tabs[1]:
@@ -2828,7 +2828,7 @@ def financial_report_page(me):
                 "_含稅預收餘額":prepaid_balance})
         outstanding_balance_df=pd.DataFrame(outstanding_rows,columns=["成交日期","購買_ID","會員名稱","課程名稱","實際預收金額","累計銷課金額","實際預收剩餘金額","堂數","有效期限","課程狀態"])
 
-        # 專案預收儲值固定列示截至今日的全部儲值交易，不受會員報表篩選條件影響。
+        # 專案預收儲值餘額固定列示截至今日的全部儲值交易，不受會員報表篩選條件影響。
         prepaid_projects=rows(client().table("projects").select("id,project_name,funding_type").eq("funding_type","stored").order("project_name"))
         prepaid_project_map={x["id"]:x["project_name"] for x in prepaid_projects}
         prepaid_project_ids=list(prepaid_project_map)
@@ -2863,10 +2863,10 @@ def financial_report_page(me):
             st.dataframe(center_member_report_columns(outstanding_balance_df,["實際預收金額","實際預收剩餘金額"]),hide_index=True,width="stretch",column_config=money_config)
         with detail_tabs[2]:
             project_prepaid_total=_tax_display_amount(sum(float(x.get("amount") or 0) for x in prepaid_deposits),"未稅")
-            st.metric("儲值未稅金額總計",f"$ {project_prepaid_total:,.0f}")
+            st.metric("儲值餘額總計未稅",f"$ {project_prepaid_total:,.0f}")
             st.caption(f"列出截至 {date.today()} 的專案儲值交易，不受上方日期、教練及會員篩選影響；含稅儲值金額以 ÷ 1.05 換算未稅。")
             st.dataframe(project_prepaid_df,hide_index=True,width="stretch",column_config={"儲值金額（未稅）":st.column_config.NumberColumn(format="$ %.0f")})
-        export_data=_excel_bytes({"成交預收總表":prepaid_total_df,"成交預收彙總":totals_df,"預收餘額明細":outstanding_balance_df,"專案預收儲值":project_prepaid_df})
+        export_data=_excel_bytes({"成交預收總表":prepaid_total_df,"成交預收彙總":totals_df,"預收餘額明細":outstanding_balance_df,"專案預收儲值餘額":project_prepaid_df})
         st.download_button("匯出會員財務報表",export_data,file_name=f"會員財務報表_{start}_{end}_明細{detail_tax_mode}_總額{total_tax_mode}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
 
@@ -3114,7 +3114,7 @@ def financial_report_page(me):
 
                 project_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["金額","儲值金額","已使用金額","剩餘金額"]}
                 project_main_tabs=st.tabs(["專案報表"])
-                if False:  # 儲值明細已移至會員報表／專案預收儲值。
+                if False:  # 儲值明細已移至會員報表／專案預收儲值餘額。
                     st.caption(f"儲值狀況與儲值交易明細固定統計至 {date.today()}，不受上方開始／結束日期影響；專案名稱篩選仍然有效。")
                     st.markdown("#### 儲值狀況")
                     st.dataframe(funding_df,hide_index=True,width="stretch",column_config=project_money_config)
