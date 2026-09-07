@@ -147,12 +147,15 @@ create table public.session_usages (
   id uuid primary key default gen_random_uuid(),
   purchase_id uuid not null references public.purchases(id),
   usage_date date not null,
+  actual_usage_date date not null,
+  is_makeup boolean not null default false,
   coach_id uuid not null references public.profiles(id),
   session_seq integer not null check (session_seq > 0),
   deducted_amount numeric(12,2) not null check (deducted_amount >= 0),
   note text,
   created_at timestamptz not null default now(),
   created_by uuid not null references public.profiles(id),
+  check ((not is_makeup and actual_usage_date = usage_date) or (is_makeup and actual_usage_date <= usage_date)),
   unique (purchase_id, session_seq)
 );
 
@@ -160,6 +163,7 @@ create index idx_daily_date_coach on public.daily_operations(operation_date, coa
 create index idx_purchase_member on public.purchases(member_id);
 create index idx_purchase_date_coach on public.purchases(purchase_date, coach_id);
 create index idx_usage_date_coach on public.session_usages(usage_date, coach_id);
+create index idx_usage_actual_date_coach on public.session_usages(actual_usage_date, coach_id);
 create index idx_trial_date_coach on public.trial_items(entry_date, coach_id);
 create index idx_single_sale_date_coach on public.single_sales(entry_date, coach_id);
 create index idx_event_date_coach on public.event_supports(entry_date, coach_id);
@@ -200,7 +204,8 @@ group by p.id,m.member_name,pr.display_name;
 
 -- 原子扣課：鎖定購買資料，最後一堂扣完剩餘金額，避免四捨五入與多人競爭問題。
 create or replace function public.consume_session(
-  p_purchase_id uuid, p_usage_date date, p_coach_id uuid, p_note text default null
+  p_purchase_id uuid, p_usage_date date, p_coach_id uuid, p_note text default null,
+  p_is_makeup boolean default false, p_actual_usage_date date default null
 ) returns public.session_usages
 language plpgsql security invoker set search_path=public as $$
 declare
@@ -208,8 +213,14 @@ declare
   v_used integer;
   v_next_seq integer;
   v_deducted numeric(12,2);
+  v_actual_usage_date date;
   v_row public.session_usages%rowtype;
 begin
+  v_actual_usage_date := coalesce(p_actual_usage_date,p_usage_date);
+  if not coalesce(p_is_makeup,false) then v_actual_usage_date := p_usage_date; end if;
+  if coalesce(p_is_makeup,false) and v_actual_usage_date > p_usage_date then
+    raise exception '補單的實際銷課日期不可晚於銷課日期';
+  end if;
   select * into v_purchase from public.purchases where id=p_purchase_id for update;
   if not found then raise exception '找不到購買紀錄'; end if;
   if v_purchase.status <> 'active' then raise exception '此課程不是有效狀態'; end if;
@@ -230,8 +241,8 @@ begin
   else
     v_deducted := round(v_purchase.total_amount/v_purchase.total_sessions,2);
   end if;
-  insert into public.session_usages(purchase_id,usage_date,coach_id,session_seq,deducted_amount,note,created_by)
-  values(p_purchase_id,p_usage_date,p_coach_id,v_next_seq,v_deducted,nullif(trim(p_note),''),auth.uid()) returning * into v_row;
+  insert into public.session_usages(purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount,note,created_by)
+  values(p_purchase_id,p_usage_date,v_actual_usage_date,coalesce(p_is_makeup,false),p_coach_id,v_next_seq,v_deducted,nullif(trim(p_note),''),auth.uid()) returning * into v_row;
   insert into public.daily_operations(operation_date,coach_id,classes_held,classes_cancelled,trial_visits,trial_conversions)
   values(p_usage_date,p_coach_id,1,0,0,0)
   on conflict(operation_date,coach_id) do update
@@ -289,5 +300,5 @@ create policy cancellation_read on public.session_cancellations for select to au
 create policy cancellation_insert on public.session_cancellations for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
 
 grant select on public.purchase_balances to authenticated;
-grant execute on function public.consume_session(uuid,date,uuid,text) to authenticated;
+grant execute on function public.consume_session(uuid,date,uuid,text,boolean,date) to authenticated;
 

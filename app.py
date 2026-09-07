@@ -22,7 +22,8 @@ LABELS = {
     "trial_member_name":"體驗會員姓名", "single_sale_member_name":"單堂銷售會員姓名",
     "course_name":"課程名稱", "total_sessions":"原始堂數", "session_hours":"每堂課時數",
     "remaining_sessions":"剩餘堂數", "remaining_amount":"剩餘金額",
-    "purchase_date":"成交日期", "usage_date":"銷課日期", "session_seq":"第幾堂", "deducted_amount":"扣課金額",
+    "purchase_date":"成交日期", "usage_date":"銷課日期", "actual_usage_date":"實際銷課日期",
+    "is_makeup_label":"補單", "session_seq":"第幾堂", "deducted_amount":"扣課金額",
     "entry_date":"日期", "content":"內容", "hours":"時數",
     "deducted_hours":"應扣除時間", "deduction_reason":"扣除原因",
     "cancel_date":"取消日期", "cancelled_sessions":"上課取消堂數", "reason":"取消原因",
@@ -93,6 +94,12 @@ def is_magnetic_wave_purchase(purchase,course_type_map=None):
     course_name=str(purchase.get("course_name") or "").strip()
     course_type=(course_type_map or {}).get(course_name,"")
     return is_magnetic_wave_course(course_name) or is_magnetic_wave_course(course_type)
+
+def usage_counts_for_execution(usage):
+    """實際銷課日與銷課日同年月才列入教練執行時數；舊資料視為同日。"""
+    usage_date=str(usage.get("usage_date") or "")
+    actual_date=str(usage.get("actual_usage_date") or usage_date)
+    return bool(usage_date) and usage_date[:7]==actual_date[:7]
 
 def usage_sequence_by_date(usage_records):
     """依同一購買課程的銷課日期與建立順序，計算畫面應顯示的累計堂次。"""
@@ -616,7 +623,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             st.info("目前沒有可查詢的課程資料。")
 
     if query_view=="執行時數":
-        usage_detail_display=pd.DataFrame(columns=["日期","教練","會員名稱","課程名稱","銷課時數","動磁波時數","銷課金額"])
+        usage_detail_display=pd.DataFrame(columns=["日期","實際銷課日期","補單","教練","會員名稱","課程名稱","銷課時數","動磁波時數","銷課金額"])
         daily_hours_df=pd.DataFrame(columns=["日期","教練","體驗項目時數","單堂銷售時數","專案時數","活動支援時數（扣除後÷2）","每日營運時數合計"])
         with st.form(f'usage_stats_filter_form_{"export" if enable_export else "usage"}',border=False):
             c1,c2,c3=st.columns(3)
@@ -631,7 +638,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
         if query_start>query_end:
             st.error("開始日期不可晚於結束日期。")
         else:
-            usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,deducted_amount").gte("usage_date",str(query_start)).lte("usage_date",str(query_end)).order("usage_date",desc=True))
+            usages=rows(client().table("session_usages").select("purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,deducted_amount").gte("usage_date",str(query_start)).lte("usage_date",str(query_end)).order("usage_date",desc=True))
             usages=[x for x in usages if x.get("coach_id") in operational_ids]
             trial_hours=rows(client().table("trial_items").select("coach_id,content,course_type,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
             single_hours=rows(client().table("single_sales").select("coach_id,content,course_type,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)))
@@ -658,11 +665,13 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
                 purchase=purchase_map.get(usage["purchase_id"],{})
                 session_hours=float(purchase.get("session_hours") or 1)
                 course_name=purchase.get("course_name") or balance_by_purchase.get(usage["purchase_id"],{}).get("course_name","")
-                magnetic_wave_hours=session_hours if is_magnetic_wave_purchase({**purchase,"course_name":course_name},execution_course_type) else 0.0
-                regular_usage_hours=0.0 if magnetic_wave_hours else session_hours
+                counted_session_hours=session_hours if usage_counts_for_execution(usage) else 0.0
+                magnetic_wave_hours=counted_session_hours if is_magnetic_wave_purchase({**purchase,"course_name":course_name},execution_course_type) else 0.0
+                regular_usage_hours=0.0 if magnetic_wave_hours else counted_session_hours
                 total_usage_hours+=regular_usage_hours
                 total_magnetic_wave_hours+=magnetic_wave_hours
-                usage_detail.append({"日期":usage["usage_date"],"教練":next((name for name,cid in coaches.items() if cid==usage["coach_id"]),"未知"),
+                usage_detail.append({"日期":usage["usage_date"],"實際銷課日期":usage.get("actual_usage_date") or usage["usage_date"],
+                    "補單":"是" if usage.get("is_makeup") else "否","教練":next((name for name,cid in coaches.items() if cid==usage["coach_id"]),"未知"),
                     "會員名稱":balance_by_purchase.get(usage["purchase_id"],{}).get("member_name","未知"),
                     "課程名稱":course_name,"銷課時數":regular_usage_hours,"動磁波時數":magnetic_wave_hours,
                     "銷課金額":float(usage["deducted_amount"])})
@@ -683,9 +692,9 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             execution_tabs=st.tabs(["銷課時數","每日營運時數"])
             with execution_tabs[0]:
                 if usage_detail:
-                    usage_detail_display=pd.DataFrame(usage_detail,columns=["日期","教練","會員名稱","課程名稱","銷課時數","動磁波時數","銷課金額"])
+                    usage_detail_display=pd.DataFrame(usage_detail,columns=["日期","實際銷課日期","補單","教練","會員名稱","課程名稱","銷課時數","動磁波時數","銷課金額"])
                     usage_detail_display=pd.concat([usage_detail_display,pd.DataFrame([{
-                        "日期":"合計","教練":"","會員名稱":"","課程名稱":"","銷課時數":total_usage_hours,
+                        "日期":"合計","實際銷課日期":"","補單":"","教練":"","會員名稱":"","課程名稱":"","銷課時數":total_usage_hours,
                         "動磁波時數":total_magnetic_wave_hours,"銷課金額":total_amount}])],ignore_index=True)
                     st.dataframe(usage_detail_display,hide_index=True,use_container_width=True,
                         column_config={"銷課時數":st.column_config.NumberColumn(format="%.2f 小時"),
@@ -770,7 +779,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             detail_balances=[x for x in detail_balances if detail_member_key in str(x.get("member_name") or "").casefold()]
         detail_balance_map={x["purchase_id"]:x for x in detail_balances}
         detail_purchase_ids=list(detail_balance_map)
-        detail_usages=(paged_rows(lambda: client().table("session_usages").select("id,purchase_id,usage_date,session_seq,coach_id,note,created_at")
+        detail_usages=(paged_rows(lambda: client().table("session_usages").select("id,purchase_id,usage_date,actual_usage_date,is_makeup,session_seq,coach_id,note,created_at")
             .in_("purchase_id",detail_purchase_ids).order("usage_date").order("created_at").order("id")) if detail_purchase_ids else [])
         displayed_sequence=usage_sequence_by_date(detail_usages)
         detail_usages.sort(key=lambda x:(str(x.get("usage_date") or ""),str(x.get("created_at") or ""),str(x.get("id") or "")),reverse=True)
@@ -782,9 +791,10 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             usage_detail_rows.append({"購買_ID":purchase_code_map.get(usage["purchase_id"],usage["purchase_id"]),
                 "教練":next((name for name,coach_id in coaches.items() if coach_id==usage.get("coach_id")),"未知教練"),
                 "會員名稱":balance.get("member_name",""),"課程名稱":balance.get("course_name",""),
-                "銷課日期":usage["usage_date"],"堂數":f"{used_session_count}／{total_session_count}",
+                "銷課日期":usage["usage_date"],"實際銷課日期":usage.get("actual_usage_date") or usage["usage_date"],
+                "補單":"是" if usage.get("is_makeup") else "否","堂數":f"{used_session_count}／{total_session_count}",
                 "有效期限":balance.get("expiry_date")})
-        usage_detail_columns=["購買_ID","教練","會員名稱","課程名稱","銷課日期","堂數","有效期限"]
+        usage_detail_columns=["購買_ID","教練","會員名稱","課程名稱","銷課日期","實際銷課日期","補單","堂數","有效期限"]
         usage_history_df=pd.DataFrame(usage_detail_rows,columns=usage_detail_columns)
         export_sheets["銷課明細查詢"]=usage_history_df
         if usage_detail_rows:
@@ -852,6 +862,8 @@ def usage_page(me):
                     selected=lookup[label]
                     with st.form(f'consume_{selected["purchase_id"]}'):
                         c1,c2=st.columns(2); usage_date=c1.date_input("銷課日期",date.today(),**coach_date_limit); c2.text_input("授課教練",value=selected["coach_name"],disabled=True)
+                        makeup_order=st.checkbox("補單",value=False,help="補登先前實際已完成的課程")
+                        actual_usage_date=st.date_input("實際銷課日期",date.today(),help="非補單時系統會自動使用銷課日期")
                         note=st.text_area("備註",placeholder="可輸入本次銷課備註"); submit=st.form_submit_button("確認扣除 1 堂")
                     per=Decimal(str(selected["remaining_amount"])) if selected["remaining_sessions"]==1 else (Decimal(str(selected["total_amount"]))/selected["total_sessions"]).quantize(Decimal("0.01"))
                     st.caption(f"本次預計扣除：1 堂／$ {per:,.0f}；最後一堂會自動扣完剩餘金額。")
@@ -859,22 +871,28 @@ def usage_page(me):
                         try:
                             if me["role"]=="coach" and usage_date<date.today():
                                 raise ValueError("教練只能填寫今天或未來的銷課日期")
-                            client().rpc("consume_session",{"p_purchase_id":selected["purchase_id"],"p_usage_date":str(usage_date),"p_coach_id":selected["coach_id"],"p_note":note}).execute()
+                            effective_actual_date=actual_usage_date if makeup_order else usage_date
+                            if makeup_order and effective_actual_date>usage_date:
+                                raise ValueError("補單的實際銷課日期不可晚於銷課日期")
+                            client().rpc("consume_session",{"p_purchase_id":selected["purchase_id"],"p_usage_date":str(usage_date),
+                                "p_coach_id":selected["coach_id"],"p_note":note,"p_is_makeup":makeup_order,
+                                "p_actual_usage_date":str(effective_actual_date)}).execute()
                             st.success("扣課完成。"); st.rerun()
                         except Exception as exc: st.error(f"扣課失敗：{exc}")
-                    history=rows(client().table("session_usages").select("usage_date,coach_id,session_seq,deducted_amount,note").eq("purchase_id",selected["purchase_id"]).order("session_seq",desc=True))
+                    history=rows(client().table("session_usages").select("usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount,note").eq("purchase_id",selected["purchase_id"]).order("session_seq",desc=True))
                     names={v:k for k,v in coaches.items()}; history=[x for x in history if x.get("coach_id") in names]
                     for x in history: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
-                    st.subheader("扣課紀錄"); show_table(history,["usage_date","coach_name","session_seq","deducted_amount","note"])
+                    for x in history: x["is_makeup_label"]="是" if x.get("is_makeup") else "否"
+                    st.subheader("扣課紀錄"); show_table(history,["usage_date","actual_usage_date","is_makeup_label","coach_name","session_seq","deducted_amount","note"])
 
         st.divider()
         st.subheader("近期銷課紀錄")
         recent_start=date.today()-timedelta(days=6)
         recent_end=date.today()
         recent_coach_id=me["id"] if me["role"]=="coach" else None
-        recent_columns=["銷課日期","購買_ID","教練","會員名稱","課程名稱","堂次","備註"]
+        recent_columns=["銷課日期","實際銷課日期","補單","購買_ID","教練","會員名稱","課程名稱","堂次","備註"]
         def recent_usage_query():
-            query=(client().table("session_usages").select("id,purchase_id,usage_date,coach_id,session_seq,note,created_at")
+            query=(client().table("session_usages").select("id,purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,session_seq,note,created_at")
                 .gte("usage_date",str(recent_start)).lte("usage_date",str(recent_end))
                 .order("usage_date",desc=True).order("created_at",desc=True).order("id",desc=True))
             return query.eq("coach_id",recent_coach_id) if recent_coach_id else query.in_("coach_id",list(coaches.values()))
@@ -893,6 +911,8 @@ def usage_page(me):
             purchase=recent_purchase_map.get(usage["purchase_id"],{})
             recent_rows.append({
                 "銷課日期":usage.get("usage_date"),
+                "實際銷課日期":usage.get("actual_usage_date") or usage.get("usage_date"),
+                "補單":"是" if usage.get("is_makeup") else "否",
                 "購買_ID":usage_purchase_code_map.get(usage["purchase_id"],usage["purchase_id"]),
                 "教練":recent_coach_name_map.get(usage.get("coach_id"),"未知教練"),
                 "會員名稱":recent_member_name_map.get(purchase.get("member_id"),""),
@@ -932,7 +952,7 @@ def dashboard_page(me):
     project_entries=rows(client().table("project_entries").select("coach_id,item_hours,quantity,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
     purchases=rows(client().table("purchases").select("id,coach_id,purchase_kind,total_sessions,total_amount,purchase_date").gte("purchase_date",str(start)).lte("purchase_date",str(end)))
     def dashboard_usage_query():
-        return (client().table("session_usages").select("id,purchase_id,coach_id,session_seq,deducted_amount,usage_date")
+        return (client().table("session_usages").select("id,purchase_id,coach_id,session_seq,deducted_amount,usage_date,actual_usage_date,is_makeup")
             .gte("usage_date",str(start)).lte("usage_date",str(end))
             .order("usage_date").order("id"))
     usages=paged_rows(dashboard_usage_query)
@@ -961,7 +981,8 @@ def dashboard_page(me):
         completed_count=sum(1 for purchase_id in completed_ids if completion_purchase_map[purchase_id].get("coach_id")==cid)
         received=sum(float(x["amount"]) for x in payments if payment_purchase_map.get(x["purchase_id"])==cid)
         used_sessions=len(u); used_amount=sum(float(x["deducted_amount"]) for x in u)
-        execution_hours=(used_sessions+sum(float(x["hours"]) for x in trials if x["coach_id"]==cid)
+        execution_usage_hours=sum(1 for x in u if usage_counts_for_execution(x))
+        execution_hours=(execution_usage_hours+sum(float(x["hours"]) for x in trials if x["coach_id"]==cid)
             +sum(float(x["hours"]) for x in single_sales if x["coach_id"]==cid)
             +sum(float(x["hours"])-float(x.get("deducted_hours") or 0) for x in event_supports if x["coach_id"]==cid)
             +sum(float(x.get("item_hours") or 0)*float(x["quantity"]) for x in project_entries if x.get("coach_id")==cid))
@@ -1639,10 +1660,11 @@ def _financial_backup_frames(table_data):
         event_hours=sum(max(0,float(x.get("hours") or 0)-float(x.get("deducted_hours") or 0)) for x in month_events if x.get("coach_id")==coach_id)
         project_hours=sum(float(x.get("item_hours") or 0)*float(x.get("quantity") or 0) for x in month_projects if x.get("coach_id")==coach_id)
         coach_usages=[x for x in usages if x.get("coach_id")==coach_id and str(x.get("usage_date") or "").startswith(report_month)]
-        normal_hours=sum(float(purchase_map.get(x.get("purchase_id"),{}).get("session_hours") or 1) for x in coach_usages if not is_magnetic_wave_purchase(purchase_map.get(x.get("purchase_id"),{}),course_type_map))
+        execution_usages=[x for x in coach_usages if usage_counts_for_execution(x)]
+        normal_hours=sum(float(purchase_map.get(x.get("purchase_id"),{}).get("session_hours") or 1) for x in execution_usages if not is_magnetic_wave_purchase(purchase_map.get(x.get("purchase_id"),{}),course_type_map))
         magnetic_hours=(sum(float(x.get("hours") or 0) for x in coach_trials if is_magnetic_wave_operation(x))
             +sum(float(x.get("hours") or 0) for x in coach_singles if is_magnetic_wave_operation(x))
-            +sum(float(purchase_map.get(x.get("purchase_id"),{}).get("session_hours") or 1) for x in coach_usages if is_magnetic_wave_purchase(purchase_map.get(x.get("purchase_id"),{}),course_type_map)))
+            +sum(float(purchase_map.get(x.get("purchase_id"),{}).get("session_hours") or 1) for x in execution_usages if is_magnetic_wave_purchase(purchase_map.get(x.get("purchase_id"),{}),course_type_map)))
         coach_hours.append({"報表月份":report_month,"教練":name,"體驗時數":trial_hours,"單堂時數":single_hours,"活動時數":event_hours,"專案時數":project_hours,
             "銷課時數":normal_hours,"可計執行時數":trial_hours+single_hours+event_hours+project_hours+normal_hours,"動磁波時數":magnetic_hours})
         trial_rev=sum(_tax_display_amount(x.get("amount"),"未稅") for x in month_trials if x.get("coach_id")==coach_id); single_rev=sum(_tax_display_amount(x.get("amount"),"未稅") for x in month_singles if x.get("coach_id")==coach_id)
@@ -1744,7 +1766,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.14"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.16"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -1924,9 +1946,10 @@ def member_course_io_page(me):
         p=purchase_map.get(x["purchase_id"],{})
         usage_rows.append({"purchase_id":purchase_code_map.get(x["purchase_id"],""),"usage_id":x["id"],
             "member_name":member_names.get(p.get("member_id"),""),"course_name":p.get("course_name",""),
-            "usage_date":x["usage_date"],"coach_username":id_to_display_name.get(x["coach_id"],""),
+            "usage_date":x["usage_date"],"actual_usage_date":x.get("actual_usage_date") or x["usage_date"],
+            "is_makeup":bool(x.get("is_makeup")),"coach_username":id_to_display_name.get(x["coach_id"],""),
             "session_seq":x["session_seq"],"deducted_amount":x["deducted_amount"],"note":x.get("note") or ""})
-    usage_export_columns=["purchase_id","usage_id","member_name","course_name","usage_date","coach_username","session_seq","deducted_amount","note"]
+    usage_export_columns=["purchase_id","usage_id","member_name","course_name","usage_date","actual_usage_date","is_makeup","coach_username","session_seq","deducted_amount","note"]
     trial_rows=rows(admin.table("trial_items").select("entry_date,member_name,content,detail_content,hours,amount,note,coach_id,created_at").order("entry_date"))
     single_sale_rows=rows(admin.table("single_sales").select("entry_date,member_name,content,hours,amount,note,coach_id,created_at").order("entry_date"))
     event_rows=rows(admin.table("event_supports").select("entry_date,content,hours,deducted_hours,deduction_reason,coach_id,created_at").order("entry_date"))
@@ -1941,7 +1964,7 @@ def member_course_io_page(me):
     st.divider(); st.subheader("匯入會員課程與銷課表")
     st.caption("請先下載範本。匯入會員課程時 purchase_id 可留空；匯入銷課表時 purchase_id 請填購買課程編號（成交日期＋序號，例如 20260817-001），亦相容舊版 UUID。")
     course_template=pd.DataFrame(columns=["purchase_id","member_name","purchase_kind","coach_username","course_name","total_sessions","session_hours","total_amount","purchase_date","expiry_date","payment_plan","installment_count","paid_amount","paid_date","referral","note"])
-    usage_template=pd.DataFrame(columns=["purchase_id","usage_date","coach_username","note"])
+    usage_template=pd.DataFrame(columns=["purchase_id","usage_date","actual_usage_date","is_makeup","coach_username","note"])
     st.download_button("下載匯入範本",_excel_bytes({"會員課程":course_template,"銷課表":usage_template}),
         file_name="會員課程與銷課表_匯入範本.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     uploaded=st.file_uploader("選擇 Excel 檔案",type=["xlsx"],key="course_usage_import")
@@ -1995,7 +2018,8 @@ def member_course_io_page(me):
                         except Exception as exc: errors.append(f"會員課程第 {i+2} 列：{exc}")
             if "銷課表" in book.sheet_names:
                 df=pd.read_excel(book,"銷課表").fillna("")
-                if not set(usage_template.columns).issubset(df.columns): errors.append("銷課表欄位不完整。")
+                required_usage_columns={"purchase_id","usage_date","coach_username","note"}
+                if not required_usage_columns.issubset(df.columns): errors.append("銷課表欄位不完整。")
                 else:
                     workbook_purchase_references={
                         str(item.get("source_id") or "").strip().casefold()
@@ -2013,8 +2037,14 @@ def member_course_io_page(me):
                             username=str(row["coach_username"]).strip(); coach_key=username.casefold()
                             if coach_key in ambiguous_coach_references: raise ValueError("教練姓名重複，請改填登入帳號")
                             if coach_key not in coach_reference_to_id: raise ValueError("找不到教練帳號或姓名")
+                            usage_date_value=pd.to_datetime(row["usage_date"]).date()
+                            makeup_value=str(row.get("is_makeup","")).strip().casefold() in ("true","1","是","y","yes")
+                            actual_date_value=pd.to_datetime(row.get("actual_usage_date") or usage_date_value).date()
+                            if makeup_value and actual_date_value>usage_date_value: raise ValueError("補單的實際銷課日期不可晚於銷課日期")
+                            if not makeup_value: actual_date_value=usage_date_value
                             clean_usages.append({"source_row":i+2,"purchase_reference":purchase_reference,"purchase_key":purchase_key,
-                                "usage_date":str(pd.to_datetime(row["usage_date"]).date()),"coach_id":coach_reference_to_id[coach_key],
+                                "usage_date":str(usage_date_value),"actual_usage_date":str(actual_date_value),"is_makeup":makeup_value,
+                                "coach_id":coach_reference_to_id[coach_key],
                                 "note":str(row["note"]).strip() or None,"skip_existing":False})
                         except Exception as exc: errors.append(f"銷課表第 {i+2} 列：{exc}")
             # 以購買課程、日期、教練及備註做多重集合比對；重新上傳同一份檔案時，
@@ -2022,6 +2052,7 @@ def member_course_io_page(me):
             existing_usage_counts={}
             for usage in usages:
                 signature=(str(usage.get("purchase_id") or ""),str(usage.get("usage_date") or ""),
+                    str(usage.get("actual_usage_date") or usage.get("usage_date") or ""),bool(usage.get("is_makeup")),
                     str(usage.get("coach_id") or ""),str(usage.get("note") or "").strip().casefold())
                 existing_usage_counts[signature]=existing_usage_counts.get(signature,0)+1
             skipped_existing_usages=0
@@ -2030,7 +2061,8 @@ def member_course_io_page(me):
                 existing_purchase_id=purchase_reference_to_id.get(item["purchase_key"])
                 if not existing_purchase_id:
                     continue
-                signature=(str(existing_purchase_id),item["usage_date"],str(item["coach_id"]),str(item.get("note") or "").strip().casefold())
+                signature=(str(existing_purchase_id),item["usage_date"],item["actual_usage_date"],bool(item["is_makeup"]),
+                    str(item["coach_id"]),str(item.get("note") or "").strip().casefold())
                 if existing_usage_counts.get(signature,0)>0:
                     item["skip_existing"]=True
                     existing_usage_counts[signature]-=1
@@ -2107,7 +2139,9 @@ def member_course_io_page(me):
                         try:
                             purchase_id=purchase_reference_to_id.get(item["purchase_key"])
                             if not purchase_id: raise ValueError(f'找不到 purchase_id：{item["purchase_reference"]}')
-                            client().rpc("consume_session",{"p_purchase_id":purchase_id,"p_usage_date":item["usage_date"],"p_coach_id":item["coach_id"],"p_note":item["note"]}).execute()
+                            client().rpc("consume_session",{"p_purchase_id":purchase_id,"p_usage_date":item["usage_date"],
+                                "p_actual_usage_date":item["actual_usage_date"],"p_is_makeup":item["is_makeup"],
+                                "p_coach_id":item["coach_id"],"p_note":item["note"]}).execute()
                             imported_usage_count+=1
                         except Exception as exc:
                             failed_usage_rows.append({"Excel列號":item["source_row"],"purchase_id":item["purchase_reference"],
@@ -2203,7 +2237,7 @@ def record_admin_page(me):
         usage_course_map={x["purchase_id"]:x.get("course_name") or "課程不明" for x in usage_purchases}
         all_usage_purchase_keys=rows(admin.table("purchases").select("id,purchase_date,created_at"))
         usage_purchase_code_map=_build_purchase_code_map(all_usage_purchase_keys)
-        labels={f'purchase_id：{usage_purchase_code_map.get(x["purchase_id"],x["purchase_id"])}｜{usage_member_map.get(x["purchase_id"],"會員不明")}｜{id_name.get(x["coach_id"],"未知教練")}｜{usage_course_map.get(x["purchase_id"],"課程不明")}｜第{x["session_seq"]}堂｜銷課日期：{x["usage_date"]}':x for x in records}
+        labels={f'purchase_id：{usage_purchase_code_map.get(x["purchase_id"],x["purchase_id"])}｜{usage_member_map.get(x["purchase_id"],"會員不明")}｜{id_name.get(x["coach_id"],"未知教練")}｜{usage_course_map.get(x["purchase_id"],"課程不明")}｜第{x["session_seq"]}堂｜銷課日期：{x["usage_date"]}｜實際：{x.get("actual_usage_date") or x["usage_date"]}':x for x in records}
 
     st.markdown("#### 搜尋紀錄")
     search_col1,search_col2=st.columns(2)
@@ -2297,7 +2331,9 @@ def record_admin_page(me):
             referral=st.text_input("醫生轉介",record.get("referral") or "")
             note=st.text_area("備註",record.get("note") or "")
         else:
-            c1,c2=st.columns(2); d=c1.date_input("銷課日期",pd.to_datetime(record["usage_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index); note=st.text_area("備註",record.get("note") or "")
+            c1,c2=st.columns(2); d=c1.date_input("銷課日期",pd.to_datetime(record["usage_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
+            c1,c2=st.columns(2); is_makeup=c1.checkbox("補單",value=bool(record.get("is_makeup"))); actual_usage_date=c2.date_input("實際銷課日期",pd.to_datetime(record.get("actual_usage_date") or record["usage_date"]).date())
+            note=st.text_area("備註",record.get("note") or "")
         update=st.form_submit_button("儲存修改")
     if update:
         try:
@@ -2324,7 +2360,10 @@ def record_admin_page(me):
             elif data_type=="課程購買": admin.table("purchases").update({"purchase_kind":"first" if purchase_kind_label=="首次購買" else "renewal","coach_id":record_coach_map[coach],"total_sessions":sessions,"total_amount":amount,"expiry_date":str(expiry),"referral":referral.strip() or None,"note":note.strip() or None}).eq("id",record["purchase_id"]).execute()
             else:
                 old_date,old_coach=record["usage_date"],record["coach_id"]
-                admin.table("session_usages").update({"usage_date":str(d),"coach_id":record_coach_map[coach],"note":note or None}).eq("id",record["id"]).execute()
+                effective_actual_date=actual_usage_date if is_makeup else d
+                if is_makeup and effective_actual_date>d: raise ValueError("補單的實際銷課日期不可晚於銷課日期")
+                admin.table("session_usages").update({"usage_date":str(d),"actual_usage_date":str(effective_actual_date),
+                    "is_makeup":is_makeup,"coach_id":record_coach_map[coach],"note":note or None}).eq("id",record["id"]).execute()
                 _sync_daily_classes(admin,old_date,old_coach); _sync_daily_classes(admin,d,record_coach_map[coach])
             st.success("資料已修改。"); st.rerun()
         except Exception as exc: st.error(f"修改失敗：{exc}")
@@ -2490,7 +2529,7 @@ def session_usage_export_query(me):
     usage_page_size=1000
     usage_offset=0
     while True:
-        query=(admin.table("session_usages").select("id,purchase_id,usage_date,coach_id,created_at")
+        query=(admin.table("session_usages").select("id,purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,created_at")
             .gte("usage_date",str(start)).lte("usage_date",str(end))
             .order("usage_date",desc=True).order("created_at",desc=True).order("id",desc=True)
             .range(usage_offset,usage_offset+usage_page_size-1))
@@ -2515,12 +2554,14 @@ def session_usage_export_query(me):
             continue
         display_rows.append({
             "日期":usage["usage_date"],
+            "實際銷課日期":usage.get("actual_usage_date") or usage["usage_date"],
+            "補單":"是" if usage.get("is_makeup") else "否",
             "教練名稱":coach_name_map.get(usage["coach_id"],"未知教練"),
             "會員名稱":member_name,
             "課程名稱":purchase.get("course_name", ""),
             "時數":float(purchase.get("session_hours") or 1),
         })
-    result_df=pd.DataFrame(display_rows,columns=["日期","教練名稱","會員名稱","課程名稱","時數"])
+    result_df=pd.DataFrame(display_rows,columns=["日期","實際銷課日期","補單","教練名稱","會員名稱","課程名稱","時數"])
     st.caption(f"符合搜尋條件：{len(result_df)} 筆")
     st.dataframe(result_df,hide_index=True,use_container_width=True,
         column_config={"時數":st.column_config.NumberColumn(format="%.2f")})
@@ -2834,6 +2875,8 @@ def financial_report_page(me):
         prepaid_project_ids=list(prepaid_project_map)
         prepaid_deposits=rows(client().table("project_deposits").select("project_id,deposit_date,amount,transaction_type,note")
             .in_("project_id",prepaid_project_ids).lte("deposit_date",str(date.today())).order("deposit_date",desc=True)) if prepaid_project_ids else []
+        prepaid_project_entries=rows(client().table("project_entries").select("project_id,entry_date,line_amount")
+            .in_("project_id",prepaid_project_ids).lte("entry_date",str(date.today()))) if prepaid_project_ids else []
         project_prepaid_rows=[{
             "儲值日期":x.get("deposit_date"),"專案名稱":prepaid_project_map.get(x.get("project_id"),"未知"),
             "類型":{"opening":"期初儲值","deposit":"後續儲值","reversal":"沖銷"}.get(x.get("transaction_type"),x.get("transaction_type") or ""),
@@ -2862,11 +2905,20 @@ def financial_report_page(me):
             st.caption(f"本表不受上方日期區間限制，列出截至 {date.today()} 的進行中、已完成、逾期中止及退費中止課程。已完成與已中止課程視為結清，目前預收餘額顯示為 0；教練及會員篩選仍然有效。目前顯示：{detail_tax_mode}金額。")
             st.dataframe(center_member_report_columns(outstanding_balance_df,["實際預收金額","實際預收剩餘金額"]),hide_index=True,width="stretch",column_config=money_config)
         with detail_tabs[2]:
-            project_prepaid_total=_tax_display_amount(sum(float(x.get("amount") or 0) for x in prepaid_deposits),"未稅")
+            project_deposit_gross=sum(float(x.get("amount") or 0) for x in prepaid_deposits)
+            project_used_gross=sum(float(x.get("line_amount") or 0) for x in prepaid_project_entries)
+            project_balance_gross=project_deposit_gross-project_used_gross
+            project_prepaid_total=_tax_display_amount(project_balance_gross,"未稅")
+            project_prepaid_summary_df=pd.DataFrame([{
+                "儲值總額（未稅）":_tax_display_amount(project_deposit_gross,"未稅"),
+                "已操作項目金額（未稅）":_tax_display_amount(project_used_gross,"未稅"),
+                "儲值餘額總計未稅":project_prepaid_total,
+            }])
             st.metric("儲值餘額總計未稅",f"$ {project_prepaid_total:,.0f}")
-            st.caption(f"列出截至 {date.today()} 的專案儲值交易，不受上方日期、教練及會員篩選影響；含稅儲值金額以 ÷ 1.05 換算未稅。")
+            st.caption(f"截至 {date.today()} 的儲值餘額＝儲值金額－已操作項目金額，再以 ÷ 1.05 換算未稅；不受上方日期、教練及會員篩選影響。")
             st.dataframe(project_prepaid_df,hide_index=True,width="stretch",column_config={"儲值金額（未稅）":st.column_config.NumberColumn(format="$ %.0f")})
-        export_data=_excel_bytes({"成交預收總表":prepaid_total_df,"成交預收彙總":totals_df,"預收餘額明細":outstanding_balance_df,"專案預收儲值餘額":project_prepaid_df})
+        export_data=_excel_bytes({"成交預收總表":prepaid_total_df,"成交預收彙總":totals_df,"預收餘額明細":outstanding_balance_df,
+            "專案儲值餘額彙總":project_prepaid_summary_df,"專案預收儲值餘額":project_prepaid_df})
         st.download_button("匯出會員財務報表",export_data,file_name=f"會員財務報表_{start}_{end}_明細{detail_tax_mode}_總額{total_tax_mode}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
 
@@ -3221,7 +3273,7 @@ def financial_report_page(me):
         st.markdown(f"- 報表期間：{month_start} 至 {month_end}")
 
         monthly_coaches=coach_options(); monthly_coach_name={v:k for k,v in monthly_coaches.items()}
-        monthly_usages=rows(client().table("session_usages").select("purchase_id,usage_date,coach_id,session_seq,deducted_amount")
+        monthly_usages=rows(client().table("session_usages").select("purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount")
             .gte("usage_date",str(month_start)).lte("usage_date",str(month_end)).order("usage_date"))
         try:
             monthly_terminations=rows(client().table("course_terminations").select("purchase_id,termination_date,termination_type,remaining_amount,fee_amount,refund_amount,recognized_amount,completion_bonus_eligible,completion_bonus_coach_id,reason")
@@ -3279,11 +3331,12 @@ def financial_report_page(me):
             event_hours=sum(max(0,float(x.get("hours") or 0)-float(x.get("deducted_hours") or 0)) for x in monthly_events if x.get("coach_id")==coach_id)
             project_hours=sum(float(x.get("item_hours") or 0)*float(x.get("quantity") or 0) for x in monthly_projects if x.get("coach_id")==coach_id)
             coach_usages=[x for x in monthly_usages if x.get("coach_id")==coach_id]
-            usage_hours=sum(float(monthly_purchase_map.get(x["purchase_id"],{}).get("session_hours") or 1) for x in coach_usages
+            execution_usages=[x for x in coach_usages if usage_counts_for_execution(x)]
+            usage_hours=sum(float(monthly_purchase_map.get(x["purchase_id"],{}).get("session_hours") or 1) for x in execution_usages
                 if not is_magnetic_wave_purchase(monthly_purchase_map.get(x["purchase_id"],{}),monthly_course_type))
             magnetic_wave_hours=(sum(float(x.get("hours") or 0) for x in coach_trials if is_magnetic_wave_operation(x))
                 +sum(float(x.get("hours") or 0) for x in coach_singles if is_magnetic_wave_operation(x))
-                +sum(float(monthly_purchase_map.get(x["purchase_id"],{}).get("session_hours") or 1) for x in coach_usages
+                +sum(float(monthly_purchase_map.get(x["purchase_id"],{}).get("session_hours") or 1) for x in execution_usages
                     if is_magnetic_wave_purchase(monthly_purchase_map.get(x["purchase_id"],{}),monthly_course_type)))
             coach_hour_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"體驗時數":trial_hours,"單堂時數":single_hours,
                 "活動時數":event_hours,"專案時數":project_hours,"銷課時數":usage_hours,

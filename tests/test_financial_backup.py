@@ -12,6 +12,7 @@ FUNCTIONS = {
     "is_magnetic_wave_course",
     "is_magnetic_wave_operation",
     "is_magnetic_wave_purchase",
+    "usage_counts_for_execution",
     "usage_sequence_by_date",
     "course_status_label",
     "completed_purchase_ids",
@@ -94,6 +95,13 @@ def test_usage_sequence_uses_chronological_order_instead_of_bad_source_sequence(
     displayed = ns["usage_sequence_by_date"](usages)
     assert displayed["u09"] == 9
     assert displayed["u10"] == 10
+
+
+def test_makeup_usage_only_counts_when_dates_are_in_same_year_month():
+    counts = load_functions()["usage_counts_for_execution"]
+    assert counts({"usage_date": "2026-08-27", "actual_usage_date": "2026-08-13", "is_makeup": True})
+    assert not counts({"usage_date": "2026-09-01", "actual_usage_date": "2026-08-31", "is_makeup": True})
+    assert counts({"usage_date": "2026-08-27"})
 
 
 def test_course_status_filter_labels_are_mutually_exclusive():

@@ -4,6 +4,8 @@
 
 院內Windows本機落地請參考 `LOCAL_DEPLOYMENT.md`。v1.12.0起提供16GB記憶體規格的Docker部署、健康檢查、每日備份與USB備份工具；本機驗收完成前應保留線上系統。
 
+升級至 v1.12.16 時，請先在 Supabase SQL Editor 執行 `migration_usage_makeup_v1_12_16.sql`，再部署新版 App。此更新新增補單與實際銷課日期；兩個日期跨不同年月時，不列入教練執行時數。
+
 系統管理員可在「資料管理 → 資料匯入／匯出 → 一鍵下載備份」下載完整Excel資料備份。檔案保留資料庫UUID與關聯欄位，但基於安全限制不包含登入密碼、API金鑰及Streamlit Secrets；此功能不能取代Supabase資料庫層級備份。
 
 ## 一、建立資料庫
@@ -83,3 +85,4 @@ SUPABASE_SECRET_KEY = "YOUR_SUPABASE_SECRET_KEY"
 # v1.8.0 獎金規則升級
 
 既有系統升級至 v1.8.0 時，請先在 Supabase SQL Editor 執行 `migration_bonus_rules_v1_8_0.sql`，再等待 Streamlit 重新部署。初始規則為談單 3%、結單 4%，醫生轉介首購不計獎金。
+
