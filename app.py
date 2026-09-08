@@ -1766,7 +1766,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.16"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.18"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2161,33 +2161,10 @@ def _sync_daily_classes(admin, operation_date, coach_id):
     elif held:
         admin.table("daily_operations").insert({"operation_date":str(operation_date),"coach_id":coach_id,"classes_held":held,"classes_cancelled":0,"trial_visits":0,"trial_conversions":0}).execute()
 
-def record_admin_page(me):
-    admin=admin_client(); coaches=rows(admin.table("profiles").select("id,display_name,role"))
-    coach_map={x["display_name"]:x["id"] for x in coaches if x["role"]=="coach"}
-    id_name={x["id"]:x["display_name"] for x in coaches}
-    data_types=["體驗項目","單堂銷售","活動支援","專案","上課預約取消","課程購買","銷課表"]
-    st.markdown("#### 資料類型")
-    data_type=st.segmented_control(
-        "資料類型分頁",data_types,default="體驗項目",
-        key="manage_data_type",label_visibility="collapsed"
-    )
-    if data_type is None:
-        data_type="體驗項目"
-    st.divider()
+def _load_record_admin_data(admin,data_type,id_name):
+    """一次載入目前資料類型；搜尋與選擇紀錄時沿用 session 快取，避免重複查詢。"""
+    usage_member_map={}; usage_course_map={}; usage_purchase_code_map={}
     if data_type=="上課預約取消":
-        with st.expander("新增上課預約取消",expanded=False):
-            with st.form("admin_add_session_cancellation",clear_on_submit=True):
-                c1,c2,c3=st.columns(3)
-                new_cancel_date=c1.date_input("取消日期",date.today(),key="admin_cancel_date")
-                new_cancel_coach=c2.selectbox("教練",list(coach_map),key="admin_cancel_coach")
-                new_cancel_count=c3.number_input("上課取消堂數",0,100,0,key="admin_cancel_count")
-                new_cancel_reason=st.text_input("取消原因",key="admin_cancel_reason")
-                add_cancel=st.form_submit_button("新增紀錄")
-            if add_cancel:
-                try:
-                    admin.table("session_cancellations").insert({"cancel_date":str(new_cancel_date),"coach_id":coach_map[new_cancel_coach],"cancelled_sessions":new_cancel_count,"reason":new_cancel_reason.strip() or None,"created_by":me["id"]}).execute()
-                    st.success("上課預約取消紀錄已新增。"); st.rerun()
-                except Exception as exc: st.error(f"新增失敗：{exc}")
         records=rows(admin.table("session_cancellations").select("*").order("cancel_date",desc=True).limit(500))
         labels={f'{x["cancel_date"]}｜{id_name.get(x["coach_id"],"未知")}｜取消 {x["cancelled_sessions"]} 堂｜{x["id"][:8]}':x for x in records}
     elif data_type=="體驗項目":
@@ -2218,19 +2195,8 @@ def record_admin_page(me):
         records.sort(key=lambda x:str(x.get("purchase_date") or ""),reverse=True)
         labels={f'{x.get("purchase_date") or "日期不明"}｜{x["purchase_code"]}｜{x["member_name"]}｜{x["course_name"]}｜{x["total_sessions"]} 堂｜{id_name.get(x.get("coach_id"),x.get("coach_name") or "未知教練")}':x for x in records}
     else:
-        # 銷課紀錄可能超過 Data API 單次回傳上限；分批讀取後再套用會員、教練及 purchase_id 篩選。
-        # 使用穩定的多欄排序，避免相同日期資料在分頁邊界重複或遺漏。
-        records=[]
-        usage_page_size=1000
-        usage_offset=0
-        while True:
-            usage_page=rows(admin.table("session_usages").select("*")
-                .order("usage_date",desc=True).order("created_at",desc=True).order("id",desc=True)
-                .range(usage_offset,usage_offset+usage_page_size-1))
-            records.extend(usage_page)
-            if len(usage_page)<usage_page_size:
-                break
-            usage_offset+=usage_page_size
+        records=paged_rows(lambda: admin.table("session_usages").select("*")
+            .order("usage_date",desc=True).order("created_at",desc=True).order("id",desc=True))
         usage_purchase_ids=list({x["purchase_id"] for x in records})
         usage_purchases=rows(admin.table("purchase_balances").select("purchase_id,member_name,course_name").in_("purchase_id",usage_purchase_ids)) if usage_purchase_ids else []
         usage_member_map={x["purchase_id"]:x.get("member_name") or "會員不明" for x in usage_purchases}
@@ -2238,27 +2204,81 @@ def record_admin_page(me):
         all_usage_purchase_keys=rows(admin.table("purchases").select("id,purchase_date,created_at"))
         usage_purchase_code_map=_build_purchase_code_map(all_usage_purchase_keys)
         labels={f'purchase_id：{usage_purchase_code_map.get(x["purchase_id"],x["purchase_id"])}｜{usage_member_map.get(x["purchase_id"],"會員不明")}｜{id_name.get(x["coach_id"],"未知教練")}｜{usage_course_map.get(x["purchase_id"],"課程不明")}｜第{x["session_seq"]}堂｜銷課日期：{x["usage_date"]}｜實際：{x.get("actual_usage_date") or x["usage_date"]}':x for x in records}
+    return {"labels":labels,"usage_member_map":usage_member_map,"usage_course_map":usage_course_map,
+        "usage_purchase_code_map":usage_purchase_code_map,"loaded_at":datetime.now()}
+
+def record_admin_page(me):
+    admin=admin_client(); coaches=rows(admin.table("profiles").select("id,display_name,role"))
+    coach_map={x["display_name"]:x["id"] for x in coaches if x["role"]=="coach"}
+    id_name={x["id"]:x["display_name"] for x in coaches}
+    data_types=["體驗項目","單堂銷售","活動支援","專案","上課預約取消","課程購買","銷課表"]
+    st.markdown("#### 資料類型")
+    data_type=st.segmented_control(
+        "資料類型分頁",data_types,default="體驗項目",
+        key="manage_data_type",label_visibility="collapsed"
+    )
+    if data_type is None:
+        data_type="體驗項目"
+    st.divider()
+    if data_type=="上課預約取消":
+        with st.expander("新增上課預約取消",expanded=False):
+            with st.form("admin_add_session_cancellation",clear_on_submit=True):
+                c1,c2,c3=st.columns(3)
+                new_cancel_date=c1.date_input("取消日期",date.today(),key="admin_cancel_date")
+                new_cancel_coach=c2.selectbox("教練",list(coach_map),key="admin_cancel_coach")
+                new_cancel_count=c3.number_input("上課取消堂數",0,100,0,key="admin_cancel_count")
+                new_cancel_reason=st.text_input("取消原因",key="admin_cancel_reason")
+                add_cancel=st.form_submit_button("新增紀錄")
+            if add_cancel:
+                try:
+                    admin.table("session_cancellations").insert({"cancel_date":str(new_cancel_date),"coach_id":coach_map[new_cancel_coach],"cancelled_sessions":new_cancel_count,"reason":new_cancel_reason.strip() or None,"created_by":me["id"]}).execute()
+                    st.session_state.pop("_record_admin_data_上課預約取消",None)
+                    st.success("上課預約取消紀錄已新增。"); st.rerun()
+                except Exception as exc: st.error(f"新增失敗：{exc}")
+    cache_key=f"_record_admin_data_{data_type}"
+    cache_entry=st.session_state.get(cache_key)
+    cache_expired=not cache_entry or (datetime.now()-cache_entry["loaded_at"]).total_seconds()>120
+    if cache_expired:
+        with st.spinner("載入管理資料中…"):
+            cache_entry=_load_record_admin_data(admin,data_type,id_name)
+            st.session_state[cache_key]=cache_entry
+    labels=cache_entry["labels"]
+    usage_member_map=cache_entry["usage_member_map"]
+    usage_course_map=cache_entry["usage_course_map"]
+    usage_purchase_code_map=cache_entry["usage_purchase_code_map"]
 
     st.markdown("#### 搜尋紀錄")
-    search_col1,search_col2=st.columns(2)
-    coach_search=search_col1.selectbox(
-        "教練搜尋",["全部教練"]+list(coach_map),
-        key=f"record_coach_search_{data_type}"
-    )
-    member_search=""
-    if data_type in ("體驗項目","單堂銷售","課程購買","銷課表"):
-        member_search=search_col2.text_input(
-            "會員名稱搜尋",placeholder="可輸入完整或部分姓名",
-            key=f"record_member_search_{data_type}"
-        ).strip().casefold()
-    else:
-        search_col2.caption("此資料類型沒有會員名稱欄位。")
-    purchase_id_search=""
-    if data_type in ("課程購買","銷課表"):
-        purchase_id_search=st.text_input(
-            "purchase_id 搜尋",placeholder="可輸入完整或部分購買編號",
-            key=f"record_purchase_id_search_{data_type}"
-        ).strip().casefold()
+    with st.form(f"record_search_form_{data_type}",border=False):
+        search_col1,search_col2=st.columns(2)
+        coach_search=search_col1.selectbox(
+            "教練搜尋",["全部教練"]+list(coach_map),
+            key=f"record_coach_search_{data_type}"
+        )
+        member_search=""
+        if data_type in ("體驗項目","單堂銷售","課程購買","銷課表"):
+            member_search=search_col2.text_input(
+                "會員名稱搜尋",placeholder="可輸入完整或部分姓名",
+                key=f"record_member_search_{data_type}"
+            ).strip().casefold()
+        else:
+            search_col2.caption("此資料類型沒有會員名稱欄位。")
+        purchase_id_search=""
+        if data_type in ("課程購買","銷課表"):
+            purchase_id_search=st.text_input(
+                "purchase_id 搜尋",placeholder="可輸入完整或部分購買編號",
+                key=f"record_purchase_id_search_{data_type}"
+            ).strip().casefold()
+        search_col1,search_col2=st.columns(2)
+        search_col1.form_submit_button("查詢",type="primary",width="stretch")
+        reload_records=search_col2.form_submit_button("重新載入最新資料",width="stretch")
+    if reload_records:
+        with st.spinner("重新載入最新資料中…"):
+            cache_entry=_load_record_admin_data(admin,data_type,id_name)
+            st.session_state[cache_key]=cache_entry
+            labels=cache_entry["labels"]
+            usage_member_map=cache_entry["usage_member_map"]
+            usage_course_map=cache_entry["usage_course_map"]
+            usage_purchase_code_map=cache_entry["usage_purchase_code_map"]
 
     selected_search_coach_id=coach_map.get(coach_search)
     filtered_labels={}
@@ -2365,6 +2385,7 @@ def record_admin_page(me):
                 admin.table("session_usages").update({"usage_date":str(d),"actual_usage_date":str(effective_actual_date),
                     "is_makeup":is_makeup,"coach_id":record_coach_map[coach],"note":note or None}).eq("id",record["id"]).execute()
                 _sync_daily_classes(admin,old_date,old_coach); _sync_daily_classes(admin,d,record_coach_map[coach])
+            st.session_state.pop(cache_key,None)
             st.success("資料已修改。"); st.rerun()
         except Exception as exc: st.error(f"修改失敗：{exc}")
     st.divider()
@@ -2428,6 +2449,10 @@ def record_admin_page(me):
                     if affected_purchase_ids:
                         admin.table("purchases").update({"status":"active"}).in_("id",affected_purchase_ids).eq("status","completed").execute()
                     for usage_date,coach_id in affected: _sync_daily_classes(admin,usage_date,coach_id)
+                deleted_ids={item.get("id") for item in delete_records}
+                cache_entry["labels"]={label:item for label,item in cache_entry["labels"].items() if item.get("id") not in deleted_ids}
+                cache_entry["loaded_at"]=datetime.now()
+                st.session_state[cache_key]=cache_entry
                 st.success(f"已刪除 {len(delete_records)} 筆資料。"); st.rerun()
             except Exception as exc: st.error(f"刪除失敗：{exc}")
 
@@ -2574,13 +2599,14 @@ def data_management_page(me):
     st.header("資料管理")
     if me["role"]!="admin": st.warning("此頁僅限系統管理員使用。"); return
     if admin_client() is None: st.error("尚未設定 SUPABASE_SECRET_KEY。"); return
-    tab1,tab2,tab3,tab4,tab5,tab6,tab7=st.tabs(["課程名稱管理","體驗項目管理","單堂銷售管理","專案管理","獎金規則管理","資料匯入／匯出","修改／刪除"])
-    with tab1: course_admin_page(me)
-    with tab2: operation_item_admin_page(me,"trial","體驗項目管理")
-    with tab3: operation_item_admin_page(me,"single_sale","單堂銷售管理")
-    with tab4: project_admin_page(me)
-    with tab5: bonus_rule_admin_page(me)
-    with tab6:
+    management_view=st.segmented_control("資料管理功能",["課程名稱管理","體驗項目管理","單堂銷售管理","專案管理","獎金規則管理","資料匯入／匯出","修改／刪除"],
+        default="課程名稱管理",key="data_management_view",width="stretch")
+    if management_view=="課程名稱管理": course_admin_page(me)
+    elif management_view=="體驗項目管理": operation_item_admin_page(me,"trial","體驗項目管理")
+    elif management_view=="單堂銷售管理": operation_item_admin_page(me,"single_sale","單堂銷售管理")
+    elif management_view=="專案管理": project_admin_page(me)
+    elif management_view=="獎金規則管理": bonus_rule_admin_page(me)
+    elif management_view=="資料匯入／匯出":
         io_tab,usage_query_tab,backup_tab=st.tabs(["資料匯入／匯出","銷課查詢","一鍵下載備份"])
         with io_tab: member_course_io_page(me)
         with usage_query_tab: session_usage_export_query(me)
@@ -2593,7 +2619,7 @@ def data_management_page(me):
                 file_name=f"秀傳運醫營運系統_完整資料及財務報表備份_{backup_stamp}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 icon=":material/download:",type="primary",width="stretch",on_click="ignore")
-    with tab7: record_admin_page(me)
+    elif management_view=="修改／刪除": record_admin_page(me)
 
 def _tax_display_amount(amount, tax_mode):
     value=Decimal(str(amount or 0))
@@ -3297,16 +3323,18 @@ def financial_report_page(me):
         monthly_project_master=rows(client().table("projects").select("id,funding_type").in_("id",monthly_project_ids)) if monthly_project_ids else []
         monthly_project_type={x["id"]:x["funding_type"] for x in monthly_project_master}
 
-        monthly_sales_df=pd.DataFrame([{"日期":x["usage_date"],"姓名":monthly_member_name.get(monthly_purchase_map.get(x["purchase_id"],{}).get("member_id"),"未知"),
+        all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at").order("purchase_date"))
+        bonus_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
+        monthly_sales_df=pd.DataFrame([{"購買_ID":bonus_purchase_code_map.get(x["purchase_id"],x["purchase_id"]),
+            "日期":x["usage_date"],"姓名":monthly_member_name.get(monthly_purchase_map.get(x["purchase_id"],{}).get("member_id"),"未知"),
             "銷課金額":_tax_display_amount(x.get("deducted_amount"),"未稅"),
+            "教練":monthly_coach_name.get(x.get("coach_id"),"未知"),
             "購買堂數":int(monthly_purchase_map.get(x["purchase_id"],{}).get("total_sessions") or 0),
             "購買課程":monthly_purchase_map.get(x["purchase_id"],{}).get("course_name") or ""} for x in monthly_usages],
-            columns=["日期","姓名","銷課金額","購買堂數","購買課程"])
+            columns=["購買_ID","日期","姓名","銷課金額","教練","購買堂數","購買課程"])
         monthly_stored_project_df=pd.DataFrame([{"專案":x["project_name"],"日期":x["entry_date"],"姓名":x.get("person_name") or "",
             "扣款金額（未稅）":_tax_display_amount(x.get("line_amount"),"未稅")} for x in monthly_projects if monthly_project_type.get(x.get("project_id"))=="stored"],
             columns=["專案","日期","姓名","扣款金額（未稅）"])
-        all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at").order("purchase_date"))
-        bonus_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
         monthly_termination_rows=[]
         for item in monthly_terminations:
             purchase=monthly_purchase_map.get(item["purchase_id"],{})
@@ -3505,4 +3533,3 @@ try:
     {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")
-

@@ -104,6 +104,20 @@ def test_makeup_usage_only_counts_when_dates_are_in_same_year_month():
     assert counts({"usage_date": "2026-08-27"})
 
 
+def test_record_admin_performance_guards_are_present():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'management_view=st.segmented_control("資料管理功能"' in source
+    assert 'with st.form(f"record_search_form_{data_type}"' in source
+    assert 'cache_key=f"_record_admin_data_{data_type}"' in source
+    assert 'cache_entry["labels"]={label:item for label,item in cache_entry["labels"].items()' in source
+
+
+def test_monthly_sales_columns_include_purchase_id_and_coach():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert '"購買_ID":bonus_purchase_code_map.get(x["purchase_id"],x["purchase_id"])' in source
+    assert 'columns=["購買_ID","日期","姓名","銷課金額","教練","購買堂數","購買課程"]' in source
+
+
 def test_course_status_filter_labels_are_mutually_exclusive():
     status = load_functions()["course_status_label"]
     assert status({"status": "active", "used_sessions": 3, "total_sessions": 10, "remaining_sessions": 7}) == "進行中"
@@ -137,4 +151,3 @@ def test_magnetic_wave_purchase_accepts_course_name_or_catalog_type():
     assert is_magnetic({"course_name": "動磁波課程"}, {})
     assert is_magnetic({"course_name": "身體平衡"}, {"身體平衡": "動磁波"})
     assert not is_magnetic({"course_name": "運動訓練"}, {"運動訓練": "一般課程"})
-
