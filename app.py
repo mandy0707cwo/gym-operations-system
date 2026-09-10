@@ -391,7 +391,7 @@ def purchase_page(me):
     st.header("課程購買")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
     coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
-    members=rows(client().table("members").select("id,member_name,phone").eq("active",True).order("member_name"))
+    members=rows(client().table("members").select("id,member_name,phone,referral,responsible_coach_id").eq("active",True).order("member_name"))
     member_options={
         f'{x["member_name"]}｜{x.get("phone") or "無電話"}':x
         for x in members
@@ -408,16 +408,24 @@ def purchase_page(me):
         return
     purchase_revision_key="purchase_form_revision"
     purchase_revision=st.session_state.get(purchase_revision_key,0)
-    c1,c2=st.columns(2)
-    plan=c1.selectbox("付款方式",["未分期","分期"],index=None,placeholder="請選擇付款方式",key=f"purchase_payment_plan_{purchase_revision}")
-    course_label=c2.selectbox("課程名稱",course_names,index=None,placeholder="請選擇課程",key=f"purchase_course_{purchase_revision}")
+    c1,c2,c3=st.columns(3)
+    member_label=c1.selectbox("客戶姓名",list(member_options),index=None,placeholder="請選擇已建立的客戶",key=f"purchase_member_{purchase_revision}")
+    plan=c2.selectbox("付款方式",["未分期","分期"],index=None,placeholder="請選擇付款方式",key=f"purchase_payment_plan_{purchase_revision}")
+    course_label=c3.selectbox("課程名稱",course_names,index=None,placeholder="請選擇課程",key=f"purchase_course_{purchase_revision}")
     course=course_options.get(course_label) if course_label else None
     selected_session_hours=course_hours.get(course) if course else None
+    selected_member=member_options.get(member_label,{})
+    selected_member_id=selected_member.get("id") or "none"
+    default_coach_name=next((name for name,coach_id in allowed.items()
+        if coach_id==selected_member.get("responsible_coach_id")),None)
+    coach_names=list(allowed)
+    default_coach_index=coach_names.index(default_coach_name) if default_coach_name in coach_names else None
+    default_referral=str(selected_member.get("referral") or "")
     with st.form(f"purchase_{purchase_revision}",clear_on_submit=True,enter_to_submit=False):
-        c1,c2,c3=st.columns(3)
-        member_label=c1.selectbox("客戶姓名",list(member_options),index=None,placeholder="請選擇已建立的客戶")
-        kind=c2.selectbox("購買類型",["首次購買","續課"])
-        coach_name=c3.selectbox("指導教練",list(allowed),index=None,placeholder="請選擇教練")
+        c1,c2=st.columns(2)
+        kind=c1.selectbox("購買類型",["首次購買","續課"])
+        coach_name=c2.selectbox("指導教練",coach_names,index=default_coach_index,placeholder="請選擇教練",
+            key=f"purchase_coach_{purchase_revision}_{selected_member_id}")
         c1,c2,c3=st.columns(3)
         sessions=c1.number_input("課程堂數",1,999,value=None,placeholder="請輸入堂數")
         session_hours=c2.number_input("每堂課時數",0.25,24.0,value=selected_session_hours,step=0.25,format="%.2f",placeholder="選擇課程後自動帶入",disabled=True)
@@ -429,7 +437,7 @@ def purchase_page(me):
         except ValueError:
             default_expiry=purchased.replace(year=purchased.year+1,day=28)
         expiry=c2.date_input("有效日期",value=default_expiry)
-        referral=st.text_input("醫生轉介")
+        referral=st.text_input("醫生轉介",value=default_referral,key=f"purchase_referral_{purchase_revision}_{selected_member_id}")
         purchase_note=st.text_area("備註")
         if plan=="分期":
             count=st.selectbox("總期數",[2,3],index=None,placeholder="請選擇總期數")
@@ -445,7 +453,7 @@ def purchase_page(me):
             st.caption("未分期將於建立紀錄時，自動以成交總金額記錄為一次付清。")
         else:
             count=installment_no=paid=paid_date=None
-        save=st.form_submit_button("確認並建立購買紀錄",type="primary",use_container_width=True)
+        save=st.form_submit_button("確認並建立購買紀錄",type="primary",width="stretch")
     if save:
         errors=[]
         if member_label is None: errors.append("請選擇已建立的客戶")
@@ -1775,7 +1783,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.28"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.29"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
