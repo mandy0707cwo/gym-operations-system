@@ -20,7 +20,7 @@ begin
 end;
 $$;
 
-revoke all on function public.audit_member_change() from public;
+revoke all on function public.audit_member_change() from public,anon,authenticated;
 
 drop trigger if exists members_audit_update on public.members;
 create trigger members_audit_update
