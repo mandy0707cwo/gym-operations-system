@@ -8,6 +8,7 @@ import pandas as pd
 
 
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
+CUSTOMER_MIGRATION_PATH = Path(__file__).resolve().parents[1] / "migration_customer_master_v1_12_21.sql"
 FUNCTIONS = {
     "is_magnetic_wave_course",
     "is_magnetic_wave_operation",
@@ -153,6 +154,36 @@ def test_monthly_combined_report_formula_and_nested_tabs():
     assert 'monthly_combined_total=monthly_sales_total+monthly_project_total+expired_total' in source
     assert 'combined_tabs=st.tabs(["每月銷課","每月專案銷課","每月課程中止"])' in source
     assert 'monthly_tabs=st.tabs(["每月預收銷課合併計","每月教練時數"' in source
+
+
+def test_customer_management_preserves_existing_member_ids():
+    source = APP_PATH.read_text(encoding="utf-8")
+    migration = CUSTOMER_MIGRATION_PATH.read_text(encoding="utf-8")
+    assert 'def customer_admin_page(me):' in source
+    assert '["客戶管理","課程名稱管理"' in source
+    assert 'admin.table("members").update' in source
+    assert "alter table public.members add column if not exists phone text;" in migration
+    assert "update public.members m" in migration
+    assert "p.member_id=m.id" in migration
+    assert "create table if not exists public.member_change_logs" in migration
+    assert "on delete restrict" in migration
+
+
+def test_customer_audit_and_rls_are_protected():
+    migration = CUSTOMER_MIGRATION_PATH.read_text(encoding="utf-8")
+    assert "security invoker" in migration
+    assert "alter table public.member_change_logs enable row level security" in migration
+    assert "using (public.is_admin())" in migration
+    assert "responsible_coach_id=(select auth.uid())" in migration
+
+
+def test_customer_purchase_summary_preserves_recorded_purchase_kind():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'st.metric("首次購買",f"{first_count} 次"' in source
+    assert 'st.metric("續購",f"{renewal_count} 次"' in source
+    assert '"購買類型":"首次購買" if purchase.get("purchase_kind")=="first" else "續購"' in source
+    assert '"實際預收金額":payment["amount"]' in source
+    assert '此客戶尚未購買課程；仍可先保留客戶資料' in source
 
 
 def test_course_status_filter_labels_are_mutually_exclusive():
