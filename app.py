@@ -391,6 +391,14 @@ def purchase_page(me):
     st.header("課程購買")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
     coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
+    members=rows(client().table("members").select("id,member_name,phone").eq("active",True).order("member_name"))
+    member_options={
+        f'{x["member_name"]}｜{x.get("phone") or "無電話"}':x
+        for x in members
+    }
+    if not member_options:
+        st.warning("尚無可使用的客戶資料。請先由系統管理員至左側「客戶管理」新增客戶，再建立課程購買。")
+        return
     courses=rows(client().table("course_catalog").select("course_name,course_type,session_hours").eq("active",True).order("course_name"))
     course_options={f'{x.get("course_type") or "未分類"}｜{x["course_name"]}':x["course_name"] for x in courses}
     course_names=list(course_options)
@@ -407,7 +415,7 @@ def purchase_page(me):
     selected_session_hours=course_hours.get(course) if course else None
     with st.form(f"purchase_{purchase_revision}",clear_on_submit=True,enter_to_submit=False):
         c1,c2,c3=st.columns(3)
-        member_name=c1.text_input("會員名稱（需完整一致）")
+        member_label=c1.selectbox("客戶姓名",list(member_options),index=None,placeholder="請選擇已建立的客戶")
         kind=c2.selectbox("購買類型",["首次購買","續課"])
         coach_name=c3.selectbox("指導教練",list(allowed),index=None,placeholder="請選擇教練")
         c1,c2,c3=st.columns(3)
@@ -440,7 +448,7 @@ def purchase_page(me):
         save=st.form_submit_button("確認並建立購買紀錄",type="primary",use_container_width=True)
     if save:
         errors=[]
-        if not member_name.strip(): errors.append("會員名稱不可空白")
+        if member_label is None: errors.append("請選擇已建立的客戶")
         if coach_name is None: errors.append("請選擇指導教練")
         if course is None: errors.append("請選擇課程名稱")
         if sessions is None: errors.append("請輸入課程堂數")
@@ -458,10 +466,7 @@ def purchase_page(me):
         if errors: st.error("；".join(errors))
         else:
             try:
-                member=rows(client().table("members").select("id").eq("member_name",member_name.strip()))
-                if member: member_id=member[0]["id"]
-                else:
-                    member_id=rows(client().table("members").insert({"member_name":member_name.strip(),"created_by":me["id"]}))[0]["id"]
+                member_id=member_options[member_label]["id"]
                 p=rows(client().table("purchases").insert({"member_id":member_id,"purchase_kind":"first" if kind=="首次購買" else "renewal",
                     "coach_id":allowed[coach_name],"course_name":course.strip(),"total_sessions":sessions,"session_hours":session_hours,"total_amount":amount,
                     "purchase_date":str(purchased),"expiry_date":str(expiry),"payment_plan":"full" if plan=="未分期" else "installment",
@@ -1770,7 +1775,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.22"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.24"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2600,7 +2605,7 @@ def session_usage_export_query(me):
         use_container_width=True)
 
 def customer_admin_page(me):
-    st.subheader("客戶管理")
+    st.header("客戶管理")
     if me["role"]!="admin": st.warning("此功能僅限系統管理員使用。"); return
     admin=admin_client()
     coaches=coach_options(); coach_name_by_id={coach_id:name for name,coach_id in coaches.items()}
@@ -2647,7 +2652,7 @@ def customer_admin_page(me):
                         "responsible_coach_id":coaches.get(new_coach),"initial_contact_date":str(new_initial_date) if new_initial_date else None,
                         "customer_status":status_values[new_status_label],"emergency_contact":new_emergency_contact or None,
                         "emergency_phone":new_emergency_phone or None,"note":new_note or None,"active":True,"created_by":me["id"],"updated_by":me["id"]}).execute()
-                    st.success("客戶資料已新增，可直接在課程購買中使用相同姓名建立購買紀錄。"); st.rerun()
+                    st.success("客戶資料已新增，現在可至左側「課程購買」選擇此客戶建立購買紀錄。"); st.rerun()
                 except Exception as exc: st.error(f"新增失敗：{exc}")
 
     with customer_tabs[1]:
@@ -2772,10 +2777,29 @@ def customer_admin_page(me):
             profile_ids=list({x.get("changed_by") for x in logs if x.get("changed_by")})
             profiles=rows(admin.table("profiles").select("id,display_name").in_("id",profile_ids)) if profile_ids else []
             profile_name={x["id"]:x["display_name"] for x in profiles}
-            log_rows=[{"修改時間":x.get("changed_at"),"客戶姓名":customer_name_by_id.get(x.get("member_id"),"未知客戶"),
-                "修改者":profile_name.get(x.get("changed_by"),"系統"),"修改前":json.dumps(x.get("old_data") or {},ensure_ascii=False),
-                "修改後":json.dumps(x.get("new_data") or {},ensure_ascii=False)} for x in logs]
-            st.dataframe(pd.DataFrame(log_rows),hide_index=True,width="stretch")
+            audit_field_labels={"member_name":"客戶姓名","gender":"性別","birth_date":"出生日期","phone":"聯絡電話",
+                "contact_method":"其他聯絡方式","customer_source":"客戶來源","referral":"醫生轉介",
+                "responsible_coach_id":"負責教練","initial_contact_date":"初次接觸日期","customer_status":"客戶狀態",
+                "emergency_contact":"緊急聯絡人","emergency_phone":"緊急聯絡電話","note":"備註","active":"啟用狀態"}
+            def audit_display(field,value):
+                if value is None or value=="": return "空白"
+                if field=="responsible_coach_id": return coach_name_by_id.get(value,"未指定")
+                if field=="customer_status": return status_labels.get(value,str(value))
+                if field=="active": return "啟用" if bool(value) else "停用"
+                return str(value)
+            log_rows=[]
+            for log in logs:
+                old_data=log.get("old_data") or {}; new_data=log.get("new_data") or {}
+                for field,label in audit_field_labels.items():
+                    if old_data.get(field)==new_data.get(field): continue
+                    log_rows.append({"修改時間":log.get("changed_at"),"客戶姓名":customer_name_by_id.get(log.get("member_id"),new_data.get("member_name") or "未知客戶"),
+                        "修改者":profile_name.get(log.get("changed_by"),"系統"),"異動欄位":label,
+                        "修改前":audit_display(field,old_data.get(field)),"修改後":audit_display(field,new_data.get(field))})
+            if log_rows:
+                st.dataframe(pd.DataFrame(log_rows),hide_index=True,width="stretch",height="auto",row_height=28,
+                    column_config={"修改時間":st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm")})
+            else:
+                st.info("目前沒有可顯示的客戶資料修改紀錄。")
         except Exception as exc:
             st.warning(f"尚無法讀取修改紀錄，請確認客戶資料 SQL 已執行：{exc}")
 
@@ -2783,10 +2807,9 @@ def data_management_page(me):
     st.header("資料管理")
     if me["role"]!="admin": st.warning("此頁僅限系統管理員使用。"); return
     if admin_client() is None: st.error("尚未設定 SUPABASE_SECRET_KEY。"); return
-    management_view=st.segmented_control("資料管理功能",["客戶管理","課程名稱管理","體驗項目管理","單堂銷售管理","專案管理","獎金規則管理","資料匯入／匯出","修改／刪除"],
+    management_view=st.segmented_control("資料管理功能",["課程名稱管理","體驗項目管理","單堂銷售管理","專案管理","獎金規則管理","資料匯入／匯出","修改／刪除"],
         default="課程名稱管理",key="data_management_view",width="stretch")
-    if management_view=="客戶管理": customer_admin_page(me)
-    elif management_view=="課程名稱管理": course_admin_page(me)
+    if management_view=="課程名稱管理": course_admin_page(me)
     elif management_view=="體驗項目管理": operation_item_admin_page(me,"trial","體驗項目管理")
     elif management_view=="單堂銷售管理": operation_item_admin_page(me,"single_sale","單堂銷售管理")
     elif management_view=="專案管理": project_admin_page(me)
@@ -3736,7 +3759,9 @@ user=login(); me=profile(user.id)
 with st.sidebar:
     st.title("🏋️ 營運管理")
     st.write(f'{me["display_name"]}｜{ROLE_LABELS.get(me["role"],me["role"])}')
-    pages=["每日營運","課程購買","銷課表","教練查詢"]
+    pages=["每日營運"]
+    if me["role"]=="admin": pages.append("客戶管理")
+    pages.extend(["課程購買","銷課表","教練查詢"])
     if me["role"] in ("manager","admin"): pages.append("主管 Dashboard")
     if me["role"] == "admin":
         pages.extend(["財務報表", "帳號與權限管理", "資料管理"])
@@ -3747,6 +3772,6 @@ with st.sidebar:
 collapse_sidebar_on_mobile()
 
 try:
-    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"教練查詢":coach_query_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
+    {"每日營運":daily_page,"客戶管理":customer_admin_page,"課程購買":purchase_page,"銷課表":usage_page,"教練查詢":coach_query_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")
