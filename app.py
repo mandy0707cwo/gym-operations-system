@@ -1775,7 +1775,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.26"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.27"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2629,7 +2629,7 @@ def customer_admin_page(me):
             c1,c2,c3=st.columns(3)
             new_name=c1.text_input("客戶姓名").strip()
             new_gender=c2.selectbox("性別",["未填寫","女","男","其他"])
-            new_birth=c3.date_input("出生日期",value=None,format="YYYY-MM-DD")
+            new_birth=c3.date_input("出生日期",value=None,min_value=date(1900,1,1),max_value=date.today(),format="YYYY-MM-DD")
             c1,c2=st.columns(2)
             new_phone=c1.text_input("聯絡電話").strip()
             new_contact_method=c2.text_input("其他聯絡方式").strip()
@@ -2748,7 +2748,8 @@ def customer_admin_page(me):
                 edited_name=c1.text_input("客戶姓名",current["member_name"]).strip()
                 gender_options=["未填寫","女","男","其他"]
                 edited_gender=c2.selectbox("性別",gender_options,index=gender_options.index(current.get("gender") or "未填寫"))
-                edited_birth=c3.date_input("出生日期",value=pd.to_datetime(current["birth_date"]).date() if current.get("birth_date") else None,format="YYYY-MM-DD")
+                edited_birth=c3.date_input("出生日期",value=pd.to_datetime(current["birth_date"]).date() if current.get("birth_date") else None,
+                    min_value=date(1900,1,1),max_value=date.today(),format="YYYY-MM-DD")
                 c1,c2=st.columns(2)
                 edited_phone=c1.text_input("聯絡電話",current.get("phone") or "").strip()
                 edited_contact_method=c2.text_input("其他聯絡方式",current.get("contact_method") or "").strip()
