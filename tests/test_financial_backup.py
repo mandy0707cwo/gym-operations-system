@@ -133,6 +133,28 @@ def test_daily_operation_reports_show_complete_details():
     assert '"單堂銷售明細":daily_single_detail_df' in source
 
 
+def test_project_items_support_course_type():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert '"project_name":selected_project_name,"item_name":item_name,"course_type":course_type' in source
+    assert '"course_type":edited_course_type,"hours":edited_hours' in source
+
+
+def test_course_type_report_uses_actual_received_amount():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert '"實際預收金額（未稅）":_tax_display_amount(totals["received"],"未稅")' in source
+    assert '.gte("paid_date",str(other_start)).lte("paid_date",str(other_end))' in source
+    frames = load_functions()["_financial_backup_frames"](sample_tables())
+    row = frames["財務-課程屬性"].iloc[0]
+    assert row["實際預收金額（未稅）"] == 2000
+
+
+def test_monthly_combined_report_formula_and_nested_tabs():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'monthly_combined_total=monthly_sales_total+monthly_project_total+expired_total' in source
+    assert 'combined_tabs=st.tabs(["每月銷課","每月專案銷課","每月課程中止"])' in source
+    assert 'monthly_tabs=st.tabs(["每月預收銷課合併計","每月教練時數"' in source
+
+
 def test_course_status_filter_labels_are_mutually_exclusive():
     status = load_functions()["course_status_label"]
     assert status({"status": "active", "used_sessions": 3, "total_sessions": 10, "remaining_sessions": 7}) == "進行中"

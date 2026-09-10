@@ -328,7 +328,7 @@ def daily_page(me):
     with tab4:
         try:
             projects=rows(client().table("projects").select("id,project_name,funding_type,stored_amount").eq("active",True).order("project_name"))
-            catalog=rows(client().table("project_catalog").select("id,project_id,project_name,item_name,hours,price").order("project_name").order("item_name"))
+            catalog=rows(client().table("project_catalog").select("id,project_id,project_name,item_name,course_type,hours,price").order("project_name").order("item_name"))
         except Exception:
             st.warning("專案主檔尚未建立，請系統管理員先執行 migration_project_v1_1_0.sql。")
             projects=[]
@@ -341,7 +341,7 @@ def daily_page(me):
             project_name=st.selectbox("專案名稱",project_names,index=None,placeholder="請選擇專案",key="project_entry_project")
             selected_project=project_map.get(project_name)
             project_items=[x for x in catalog if selected_project and x.get("project_id")==selected_project["id"]]
-            item_labels={f'{x["item_name"]}｜{float(x["hours"]):g} 小時｜$ {float(x["price"]):,.0f}':x for x in project_items}
+            item_labels={f'{x.get("course_type") or "未分類"}｜{x["item_name"]}｜{float(x["hours"]):g} 小時｜$ {float(x["price"]):,.0f}':x for x in project_items}
             item_label=st.selectbox("操作項目",list(item_labels),index=None,placeholder="請選擇操作項目",key="project_entry_item")
             selected_item=item_labels.get(item_label)
             form_key=f'project_entry_{selected_item["id"] if selected_item else "empty"}'
@@ -1466,7 +1466,7 @@ def project_admin_page(me):
     with item_tab:
         active_projects=[x for x in projects if x.get("active")]
         project_map={x["project_name"]:x for x in active_projects}
-        items=rows(admin.table("project_catalog").select("id,project_id,project_name,item_name,hours,price,created_at").order("project_name").order("item_name"))
+        items=rows(admin.table("project_catalog").select("id,project_id,project_name,item_name,course_type,hours,price,created_at").order("project_name").order("item_name"))
         item_map={f'{x["project_name"]}｜{x["item_name"]}':x for x in items}
         add_item_tab,delete_item_tab,edit_item_tab=st.tabs(["新增","刪除","修改"])
         with add_item_tab:
@@ -1477,17 +1477,18 @@ def project_admin_page(me):
                     c1,c2=st.columns(2)
                     selected_project_name=c1.selectbox("專案名稱",list(project_map),index=None,placeholder="請選擇專案")
                     item_name=c2.text_input("操作項目").strip()
+                    course_type=st.text_input("課程屬性").strip()
                     c1,c2=st.columns(2)
                     hours=c1.number_input("時數",0.25,10000.0,1.0,step=0.25)
                     price=c2.number_input("價格",0.0,10000000.0,0.0,step=100.0,format="%.0f")
                     add_project_item=st.form_submit_button("新增專案操作項目",type="primary",use_container_width=True)
                 if add_project_item:
-                    if not selected_project_name or not item_name: st.error("專案名稱及操作項目不可空白。")
+                    if not selected_project_name or not item_name or not course_type: st.error("專案名稱、操作項目及課程屬性不可空白。")
                     else:
                         try:
                             selected_project=project_map[selected_project_name]
                             admin.table("project_catalog").insert({"project_id":selected_project["id"],
-                                "project_name":selected_project_name,"item_name":item_name,"hours":hours,"price":price}).execute()
+                                "project_name":selected_project_name,"item_name":item_name,"course_type":course_type,"hours":hours,"price":price}).execute()
                             st.success("專案操作項目已新增。"); st.rerun()
                         except Exception as exc: st.error(f"新增失敗，請確認專案與項目組合是否重複：{exc}")
         with delete_item_tab:
@@ -1509,22 +1510,23 @@ def project_admin_page(me):
             if not items:
                 st.info("目前尚未建立專案操作項目。")
             else:
-                show_table(items,["project_name","item_name","hours","price","created_at"])
+                show_table(items,["project_name","item_name","course_type","hours","price","created_at"])
                 selected=st.selectbox("選擇要修改的專案操作項目",list(item_map),key="project_catalog_edit_select")
                 current_item=item_map[selected]
                 with st.form("edit_project_catalog",enter_to_submit=False):
                     st.text_input("所屬專案",current_item["project_name"],disabled=True)
                     edited_item=st.text_input("修改後操作項目",current_item["item_name"]).strip()
+                    edited_course_type=st.text_input("修改後課程屬性",current_item.get("course_type") or "未分類").strip()
                     c1,c2=st.columns(2)
                     edited_hours=c1.number_input("修改後時數",0.25,10000.0,float(current_item["hours"]),step=0.25)
                     edited_price=c2.number_input("修改後價格",0.0,10000000.0,float(current_item["price"]),step=100.0,format="%.0f")
                     update_project_item=st.form_submit_button("儲存操作項目修改",type="primary")
                 if update_project_item:
-                    if not edited_item: st.error("操作項目不可空白。")
+                    if not edited_item or not edited_course_type: st.error("操作項目及課程屬性不可空白。")
                     else:
                         try:
                             admin.table("project_catalog").update({"item_name":edited_item,
-                                "hours":edited_hours,"price":edited_price}).eq("id",current_item["id"]).execute()
+                                "course_type":edited_course_type,"hours":edited_hours,"price":edited_price}).eq("id",current_item["id"]).execute()
                             st.success("操作項目已修改；歷史單據內容不受影響。"); st.rerun()
                         except Exception as exc: st.error(f"修改失敗：{exc}")
 
@@ -1619,12 +1621,13 @@ def _financial_backup_frames(table_data):
     referral_rows=[{"醫生轉介":k[0],"會員名稱":member_name.get(k[1],""),**v} for k,v in sorted(referral_groups.items())]
     course_type_map={str(x.get("course_name") or "").strip():str(x.get("course_type") or "未分類").strip() or "未分類" for x in table_data.get("course_catalog",[])}
     course_type_totals={}
-    for p in purchases:
-        ct=course_type_map.get(str(p.get("course_name") or "").strip(),"未分類"); course_type_totals.setdefault(ct,{"purchase":0,"usage":0})["purchase"]+=float(p.get("total_amount") or 0)
+    for payment in payments:
+        p=purchase_map.get(payment.get("purchase_id"),{}); ct=course_type_map.get(str(p.get("course_name") or "").strip(),"未分類")
+        course_type_totals.setdefault(ct,{"received":0,"usage":0})["received"]+=float(payment.get("amount") or 0)
     for x in usages:
         p=purchase_map.get(x.get("purchase_id"),{}); ct=course_type_map.get(str(p.get("course_name") or "").strip(),"未分類")
-        course_type_totals.setdefault(ct,{"purchase":0,"usage":0})["usage"]+=float(x.get("deducted_amount") or 0)
-    course_type_rows=[{"課程屬性":k,"成交未稅金額":_tax_display_amount(v["purchase"],"未稅"),"銷課未稅金額":_tax_display_amount(v["usage"],"未稅")} for k,v in sorted(course_type_totals.items())]
+        course_type_totals.setdefault(ct,{"received":0,"usage":0})["usage"]+=float(x.get("deducted_amount") or 0)
+    course_type_rows=[{"課程屬性":k,"實際預收金額（未稅）":_tax_display_amount(v["received"],"未稅"),"銷課未稅金額":_tax_display_amount(v["usage"],"未稅")} for k,v in sorted(course_type_totals.items())]
 
     termination_rows=[]
     for x in sorted(terminations,key=lambda r:str(r.get("termination_date") or ""),reverse=True):
@@ -1766,7 +1769,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.19"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.20"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -3077,11 +3080,22 @@ def financial_report_page(me):
             course_catalog=rows(client().table("course_catalog").select("course_name,course_type"))
             course_type_map={str(x.get("course_name") or "").strip():str(x.get("course_type") or "未分類").strip() or "未分類" for x in course_catalog}
             course_type_totals={}
-            for purchase in other_purchases:
+            other_payments=paged_rows(lambda: client().table("purchase_payments")
+                .select("purchase_id,amount,paid_date,id")
+                .gte("paid_date",str(other_start)).lte("paid_date",str(other_end))
+                .order("paid_date",desc=True).order("id",desc=True))
+            payment_purchase_ids=list({x.get("purchase_id") for x in other_payments if x.get("purchase_id")})
+            payment_purchases=(rows(client().table("purchases").select("id,member_id,coach_id,course_name").in_("id",payment_purchase_ids))
+                if payment_purchase_ids else [])
+            payment_purchase_map={x["id"]:x for x in payment_purchases}
+            for payment in other_payments:
+                purchase=payment_purchase_map.get(payment.get("purchase_id"),{})
+                if selected_other_coach_id and purchase.get("coach_id")!=selected_other_coach_id: continue
+                if selected_other_member_id and purchase.get("member_id")!=selected_other_member_id: continue
                 course_name=str(purchase.get("course_name") or "").strip()
                 course_type=course_type_map.get(course_name,"未分類")
-                totals=course_type_totals.setdefault(course_type,{"purchase":0.0,"usage":0.0})
-                totals["purchase"]+=float(purchase.get("total_amount") or 0)
+                totals=course_type_totals.setdefault(course_type,{"received":0.0,"usage":0.0})
+                totals["received"]+=float(payment.get("amount") or 0)
 
             # 銷課依實際銷課日期、授課教練篩選；會員與課程屬性則由原購買紀錄關聯。
             usage_purchase_records=rows(client().table("purchases").select("id,member_id,course_name"))
@@ -3108,22 +3122,22 @@ def financial_report_page(me):
                 purchase=usage_purchase_map.get(usage.get("purchase_id"),{})
                 course_name=str(purchase.get("course_name") or "").strip()
                 course_type=course_type_map.get(course_name,"未分類")
-                totals=course_type_totals.setdefault(course_type,{"purchase":0.0,"usage":0.0})
+                totals=course_type_totals.setdefault(course_type,{"received":0.0,"usage":0.0})
                 totals["usage"]+=float(usage.get("deducted_amount") or 0)
             course_type_rows=[]
             for course_type,totals in sorted(course_type_totals.items()):
                 course_type_rows.append({
                     "課程屬性":course_type,
-                    "成交未稅金額":_tax_display_amount(totals["purchase"],"未稅"),
+                    "實際預收金額（未稅）":_tax_display_amount(totals["received"],"未稅"),
                     "銷課未稅金額":_tax_display_amount(totals["usage"],"未稅"),
                 })
-            course_type_columns=["課程屬性","成交未稅金額","銷課未稅金額"]
+            course_type_columns=["課程屬性","實際預收金額（未稅）","銷課未稅金額"]
             course_type_df=pd.DataFrame(course_type_rows,columns=course_type_columns)
             if other_report_view=="醫生轉介":
                 st.caption("日期依課程購買日期；成交總金額為含稅金額。首購與續約欄位為購買筆數。")
                 st.dataframe(referral_df,hide_index=True,use_container_width=True,column_config={"成交總金額":st.column_config.NumberColumn(format="$ %.0f")})
             if other_report_view=="課程屬性":
-                st.caption("成交未稅金額依購買日期及成交教練；銷課未稅金額依銷課日期及實際授課教練。未稅金額均以原含稅金額 ÷ 1.05 計算。")
+                st.caption("實際預收金額（未稅）依付款日期統計，包含首期及後續分期，教練與會員依原購買紀錄；銷課未稅金額依銷課日期及實際授課教練。未稅金額均以原含稅金額 ÷ 1.05 計算。")
                 if course_type_df.empty:
                     st.info("查詢期間沒有成交或銷課資料。")
                 else:
@@ -3480,44 +3494,50 @@ def financial_report_page(me):
         monthly_completion_bonus_summary_df=pd.DataFrame(completion_bonus_summary_rows,
             columns=["教練","符合規則課程結束成交未稅金額總計","結單獎金總計"])
 
-        monthly_tabs=st.tabs(["每月銷課","每月專案銷課","每月課程中止","每月教練時數","每月教練營收","每月教練談單獎金","每月教練結單獎金"])
+        monthly_sales_total=int(monthly_sales_df["銷課金額"].sum()) if not monthly_sales_df.empty else 0
+        monthly_project_total=int(monthly_stored_project_df["扣款金額（未稅）"].sum()) if not monthly_stored_project_df.empty else 0
+        expired_total=int(monthly_termination_df["逾期入帳金額（未稅）"].sum()) if not monthly_termination_df.empty else 0
+        fee_total=int(monthly_termination_df["退費手續費（未稅）"].sum()) if not monthly_termination_df.empty else 0
+        refund_total=int(monthly_termination_df["實際退費金額（未稅）"].sum()) if not monthly_termination_df.empty else 0
+        monthly_combined_total=monthly_sales_total+monthly_project_total+expired_total
+        monthly_combined_df=pd.DataFrame([{"銷課總金額（未稅）":monthly_sales_total,"專案總金額（未稅）":monthly_project_total,
+            "逾期入帳總額（未稅）":expired_total,"每月預收銷課合併計（未稅）":monthly_combined_total}])
+        monthly_tabs=st.tabs(["每月預收銷課合併計","每月教練時數","每月教練營收","每月教練談單獎金","每月教練結單獎金"])
         monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額","扣款金額（未稅）","體驗項目金額（未稅）","單堂銷售金額（未稅）","專案（未稅）","銷課（未稅）","金額總計（未稅）","成交未稅金額","談單獎金","課程結束成交未稅金額","結單獎金","符合規則成交未稅金額總計","談單獎金總計","符合規則課程結束成交未稅金額總計","結單獎金總計","退費前剩餘金額（未稅）","逾期入帳金額（未稅）","退費手續費（未稅）","實際退費金額（未稅）"]}
         monthly_bonus_config={**monthly_money_config,"談單率":st.column_config.NumberColumn(format="%.2f%%"),"結單率":st.column_config.NumberColumn(format="%.2f%%")}
         with monthly_tabs[0]:
-            monthly_sales_total=int(monthly_sales_df["銷課金額"].sum()) if not monthly_sales_df.empty else 0
-            st.metric("銷課總金額（未稅）",f"$ {monthly_sales_total:,.0f}")
-            st.caption("※銷課金額為未稅金額。")
-            st.dataframe(monthly_sales_df,hide_index=True,width="stretch",column_config=monthly_money_config)
+            st.metric("每月預收銷課合併計（未稅）",f"$ {monthly_combined_total:,.0f}")
+            st.caption("銷課總金額（未稅）＋專案總金額（未稅）＋逾期入帳總額（未稅）")
+            combined_tabs=st.tabs(["每月銷課","每月專案銷課","每月課程中止"])
+            with combined_tabs[0]:
+                st.metric("銷課總金額（未稅）",f"$ {monthly_sales_total:,.0f}")
+                st.dataframe(monthly_sales_df,hide_index=True,width="stretch",column_config=monthly_money_config)
+            with combined_tabs[1]:
+                st.metric("專案總金額（未稅）",f"$ {monthly_project_total:,.0f}")
+                st.dataframe(monthly_stored_project_df,hide_index=True,width="stretch",column_config=monthly_money_config)
+            with combined_tabs[2]:
+                c1,c2,c3=st.columns(3)
+                c1.metric("逾期入帳總額（未稅）",f"$ {expired_total:,.0f}")
+                c2.metric("退費手續費總額（未稅）",f"$ {fee_total:,.0f}")
+                c3.metric("實際退費總額（未稅）",f"$ {refund_total:,.0f}")
+                st.dataframe(monthly_termination_df,hide_index=True,width="stretch",column_config=monthly_money_config)
         with monthly_tabs[1]:
-            monthly_project_total=int(monthly_stored_project_df["扣款金額（未稅）"].sum()) if not monthly_stored_project_df.empty else 0
-            st.metric("專案總金額（未稅）",f"$ {monthly_project_total:,.0f}")
-            st.dataframe(monthly_stored_project_df,hide_index=True,width="stretch",column_config=monthly_money_config)
-        with monthly_tabs[2]:
-            expired_total=int(monthly_termination_df["逾期入帳金額（未稅）"].sum()) if not monthly_termination_df.empty else 0
-            fee_total=int(monthly_termination_df["退費手續費（未稅）"].sum()) if not monthly_termination_df.empty else 0
-            refund_total=int(monthly_termination_df["實際退費金額（未稅）"].sum()) if not monthly_termination_df.empty else 0
-            c1,c2,c3=st.columns(3)
-            c1.metric("逾期入帳總額（未稅）",f"$ {expired_total:,.0f}")
-            c2.metric("退費手續費總額（未稅）",f"$ {fee_total:,.0f}")
-            c3.metric("實際退費總額（未稅）",f"$ {refund_total:,.0f}")
-            st.dataframe(monthly_termination_df,hide_index=True,width="stretch",column_config=monthly_money_config)
-        with monthly_tabs[3]:
             st.caption("※可計執行時數不含動磁波；動磁波時數包含體驗、單堂銷售及課程銷課。")
             st.dataframe(monthly_hours_df,hide_index=True,width="stretch")
-        with monthly_tabs[4]:
+        with monthly_tabs[2]:
             st.caption("※體驗項目及單堂銷售的輸入金額為含稅，報表以金額 ÷ 1.05 換算未稅。")
             st.dataframe(monthly_revenue_df,hide_index=True,width="stretch",column_config=monthly_money_config)
-        with monthly_tabs[5]:
+        with monthly_tabs[3]:
             if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
             st.dataframe(monthly_talk_bonus_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
             st.markdown("**各教練談單獎金總計**")
             st.dataframe(monthly_talk_bonus_summary_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
-        with monthly_tabs[6]:
+        with monthly_tabs[4]:
             if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
             st.dataframe(monthly_completion_bonus_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
             st.markdown("**各教練結單獎金總計**")
             st.dataframe(monthly_completion_bonus_summary_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
-        monthly_export=_excel_bytes({"每月銷課":monthly_sales_df,"每月專案銷課":monthly_stored_project_df,
+        monthly_export=_excel_bytes({"合併計":monthly_combined_df,"每月銷課":monthly_sales_df,"每月專案銷課":monthly_stored_project_df,
             "每月課程中止":monthly_termination_df,"每月教練時數":monthly_hours_df,"每月教練營收":monthly_revenue_df,
             "每月教練談單獎金":monthly_talk_bonus_df,"談單獎金總計":monthly_talk_bonus_summary_df,
             "每月教練結單獎金":monthly_completion_bonus_df,"結單獎金總計":monthly_completion_bonus_summary_df})
