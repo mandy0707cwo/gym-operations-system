@@ -1783,7 +1783,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.29"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.30"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2994,6 +2994,11 @@ def financial_report_page(me):
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
         return
+    def center_member_report_columns(frame,columns):
+        centered=[name for name in columns if name in frame.columns]
+        styler=frame.style.set_properties(subset=centered,**{"text-align":"center"})
+        header_styles=[{"selector":f"th.col_heading.level0.col{frame.columns.get_loc(name)}","props":[("text-align","center")]} for name in centered]
+        return styler.set_table_styles(header_styles,overwrite=False)
     report_view=st.segmented_control("報表分類",["會員報表","其他報表","每月報表","教練查詢","課程中止"],
         default="會員報表",key="financial_report_view",width="stretch")
     if report_view=="會員報表":
@@ -3143,11 +3148,6 @@ def financial_report_page(me):
         project_prepaid_df=pd.DataFrame(project_prepaid_rows,columns=["儲值日期","專案名稱","類型","儲值金額（未稅）","備註"])
 
         money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","成交金額","成交總金額","實際預收金額","銷課金額","剩餘金額","實際預收總金額","銷課總金額","剩餘總金額","累計銷課金額","實際預收剩餘金額"]}
-        def center_member_report_columns(frame,columns):
-            centered=[name for name in columns if name in frame.columns]
-            styler=frame.style.set_properties(subset=centered,**{"text-align":"center"})
-            header_styles=[{"selector":f"th.col_heading.level0.col{frame.columns.get_loc(name)}","props":[("text-align","center")]} for name in centered]
-            return styler.set_table_styles(header_styles,overwrite=False)
         with detail_tabs[0]:
             total_values=totals_df.iloc[0]
             total_cols=st.columns(2)
