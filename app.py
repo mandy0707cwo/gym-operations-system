@@ -1775,7 +1775,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.24"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.26"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2606,20 +2606,25 @@ def session_usage_export_query(me):
 
 def customer_admin_page(me):
     st.header("客戶管理")
-    if me["role"]!="admin": st.warning("此功能僅限系統管理員使用。"); return
-    admin=admin_client()
+    if me["role"] not in ("coach","shared_coach","manager","admin"):
+        st.warning("此功能僅限教練、共用教練、主管與系統管理員使用。"); return
+    is_admin=me["role"]=="admin"
+    data_api=admin_client() if is_admin else client()
     coaches=coach_options(); coach_name_by_id={coach_id:name for name,coach_id in coaches.items()}
     customer_fields="id,member_name,gender,birth_date,phone,contact_method,customer_source,referral,responsible_coach_id,initial_contact_date,customer_status,emergency_contact,emergency_phone,note,active,created_at,updated_at"
     try:
-        customers=paged_rows(lambda: admin.table("members").select(customer_fields).order("member_name"))
+        customers=paged_rows(lambda: data_api.table("members").select(customer_fields).order("member_name"))
     except Exception:
         st.error("客戶資料欄位尚未建立，請先在 Supabase 執行 migration_customer_master_v1_12_21.sql。")
         return
 
     status_labels={"prospect":"潛在客戶","trial":"體驗中","member":"正式會員","paused":"暫停","ended":"結束"}
     status_values={label:value for value,label in status_labels.items()}
-    customer_tabs=st.tabs(["新增客戶","查詢／修改","修改紀錄"])
-    with customer_tabs[0]:
+    if is_admin:
+        add_customer_tab,customer_query_tab,customer_audit_tab=st.tabs(["新增客戶","查詢／修改","修改紀錄"])
+    else:
+        add_customer_tab,customer_query_tab=st.tabs(["新增客戶","查詢／修改"])
+    with add_customer_tab:
         with st.form("add_customer_form",clear_on_submit=True,enter_to_submit=False):
             c1,c2,c3=st.columns(3)
             new_name=c1.text_input("客戶姓名").strip()
@@ -2642,20 +2647,23 @@ def customer_admin_page(me):
             add_customer=st.form_submit_button("新增客戶",type="primary",width="stretch")
         if add_customer:
             if not new_name: st.error("客戶姓名不可空白。")
-            elif any(str(x.get("member_name") or "").strip().casefold()==new_name.casefold() for x in customers):
-                st.error("客戶姓名已存在，請改用「查詢／修改」更新原有客戶，避免產生重複資料。")
             else:
                 try:
-                    admin.table("members").insert({"member_name":new_name,"gender":None if new_gender=="未填寫" else new_gender,
+                    duplicate_api=admin_client() or data_api
+                    duplicate_names=paged_rows(lambda: duplicate_api.table("members").select("member_name").order("member_name"))
+                    if any(str(x.get("member_name") or "").strip().casefold()==new_name.casefold() for x in duplicate_names):
+                        raise ValueError("客戶姓名已存在，請先查詢原有客戶，避免產生重複資料。")
+                    data_api.table("members").insert({"member_name":new_name,"gender":None if new_gender=="未填寫" else new_gender,
                         "birth_date":str(new_birth) if new_birth else None,"phone":new_phone or None,"contact_method":new_contact_method or None,
                         "customer_source":new_source or None,"referral":new_referral or None,
                         "responsible_coach_id":coaches.get(new_coach),"initial_contact_date":str(new_initial_date) if new_initial_date else None,
                         "customer_status":status_values[new_status_label],"emergency_contact":new_emergency_contact or None,
                         "emergency_phone":new_emergency_phone or None,"note":new_note or None,"active":True,"created_by":me["id"],"updated_by":me["id"]}).execute()
                     st.success("客戶資料已新增，現在可至左側「課程購買」選擇此客戶建立購買紀錄。"); st.rerun()
+                except ValueError as exc: st.error(str(exc))
                 except Exception as exc: st.error(f"新增失敗：{exc}")
 
-    with customer_tabs[1]:
+    with customer_query_tab:
         with st.form("customer_search_form",border=False):
             c1,c2,c3=st.columns(3)
             customer_keyword=c1.text_input("姓名或電話",placeholder="可輸入完整或部分內容").strip().casefold()
@@ -2675,16 +2683,21 @@ def customer_admin_page(me):
             "啟用狀態":"啟用" if x.get("active") else "停用","備註":x.get("note") or ""} for x in filtered_customers]
         st.caption(f"符合條件：{len(customer_rows)} 筆")
         st.dataframe(pd.DataFrame(customer_rows),hide_index=True,width="stretch",height="auto",row_height=28)
+        if is_admin:
+            customer_download_df=pd.DataFrame(customer_rows)
+            st.download_button("下載客戶資料",_excel_bytes({"客戶資料":customer_download_df}),
+                file_name=f'客戶資料_{date.today().strftime("%Y%m%d")}.xlsx',
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",icon=":material/download:",width="stretch")
         if filtered_customers:
             customer_map={f'{x["member_name"]}｜{x.get("phone") or "無電話"}｜{status_labels.get(x.get("customer_status"),"")}':x for x in filtered_customers}
             selected_customer_label=st.selectbox("選擇要修改的客戶",list(customer_map),key="customer_edit_select")
             current=customer_map[selected_customer_label]
             st.markdown("#### 購課摘要與歷史")
-            customer_purchases=paged_rows(lambda: admin.table("purchases")
+            customer_purchases=paged_rows(lambda: data_api.table("purchases")
                 .select("id,purchase_date,purchase_kind,course_name,total_sessions,total_amount,payment_plan,installment_count,status,created_at")
                 .eq("member_id",current["id"]).order("purchase_date",desc=True).order("created_at",desc=True))
             customer_purchase_ids=[x["id"] for x in customer_purchases]
-            customer_payments=(paged_rows(lambda: admin.table("purchase_payments")
+            customer_payments=(paged_rows(lambda: data_api.table("purchase_payments")
                 .select("purchase_id,installment_no,amount,paid_date").in_("purchase_id",customer_purchase_ids).order("paid_date"))
                 if customer_purchase_ids else [])
             customer_payment_summary={}
@@ -2693,7 +2706,7 @@ def customer_admin_page(me):
                 summary["amount"]+=float(payment.get("amount") or 0)
                 if payment.get("installment_no") is not None: summary["installments"].add(int(payment["installment_no"]))
             if customer_purchases:
-                all_purchase_keys=paged_rows(lambda: admin.table("purchases").select("id,purchase_date,created_at")
+                all_purchase_keys=paged_rows(lambda: data_api.table("purchases").select("id,purchase_date,created_at")
                     .order("purchase_date").order("created_at").order("id"))
                 customer_purchase_codes=_build_purchase_code_map(all_purchase_keys)
                 first_count=sum(1 for x in customer_purchases if x.get("purchase_kind")=="first")
@@ -2761,7 +2774,7 @@ def customer_admin_page(me):
                 elif duplicate: st.error("已有相同姓名的客戶，請先確認是否為同一人；系統不會自動合併資料。")
                 else:
                     try:
-                        admin.table("members").update({"member_name":edited_name,"gender":None if edited_gender=="未填寫" else edited_gender,
+                        data_api.table("members").update({"member_name":edited_name,"gender":None if edited_gender=="未填寫" else edited_gender,
                             "birth_date":str(edited_birth) if edited_birth else None,"phone":edited_phone or None,"contact_method":edited_contact_method or None,
                             "customer_source":edited_source or None,"referral":edited_referral or None,"responsible_coach_id":coaches.get(edited_coach),
                             "initial_contact_date":str(edited_initial_date) if edited_initial_date else None,"customer_status":status_values[edited_status_label],
@@ -2770,12 +2783,14 @@ def customer_admin_page(me):
                         st.success("客戶資料已修改；原有購課、付款、銷課及中止紀錄均保留。"); st.rerun()
                     except Exception as exc: st.error(f"修改失敗：{exc}")
 
-    with customer_tabs[2]:
+    if not is_admin:
+        return
+    with customer_audit_tab:
         try:
-            logs=paged_rows(lambda: admin.table("member_change_logs").select("changed_at,member_id,changed_by,old_data,new_data").order("changed_at",desc=True))
+            logs=paged_rows(lambda: data_api.table("member_change_logs").select("changed_at,member_id,changed_by,old_data,new_data").order("changed_at",desc=True))
             customer_name_by_id={x["id"]:x["member_name"] for x in customers}
             profile_ids=list({x.get("changed_by") for x in logs if x.get("changed_by")})
-            profiles=rows(admin.table("profiles").select("id,display_name").in_("id",profile_ids)) if profile_ids else []
+            profiles=rows(data_api.table("profiles").select("id,display_name").in_("id",profile_ids)) if profile_ids else []
             profile_name={x["id"]:x["display_name"] for x in profiles}
             audit_field_labels={"member_name":"客戶姓名","gender":"性別","birth_date":"出生日期","phone":"聯絡電話",
                 "contact_method":"其他聯絡方式","customer_source":"客戶來源","referral":"醫生轉介",
@@ -3759,9 +3774,7 @@ user=login(); me=profile(user.id)
 with st.sidebar:
     st.title("🏋️ 營運管理")
     st.write(f'{me["display_name"]}｜{ROLE_LABELS.get(me["role"],me["role"])}')
-    pages=["每日營運"]
-    if me["role"]=="admin": pages.append("客戶管理")
-    pages.extend(["課程購買","銷課表","教練查詢"])
+    pages=["每日營運","客戶管理","課程購買","銷課表","教練查詢"]
     if me["role"] in ("manager","admin"): pages.append("主管 Dashboard")
     if me["role"] == "admin":
         pages.extend(["財務報表", "帳號與權限管理", "資料管理"])

@@ -70,12 +70,14 @@ create index if not exists idx_member_change_logs_member_time on public.member_c
 create or replace function public.audit_member_change()
 returns trigger
 language plpgsql
-security invoker
-set search_path=public
+security definer
+set search_path=pg_catalog,public
 as $$
 begin
   new.updated_at=now();
-  new.updated_by=coalesce(new.updated_by,auth.uid());
+  if auth.uid() is not null then
+    new.updated_by=auth.uid();
+  end if;
   if to_jsonb(new) is distinct from to_jsonb(old) then
     insert into public.member_change_logs(member_id,changed_by,old_data,new_data)
     values(new.id,new.updated_by,to_jsonb(old),to_jsonb(new));
@@ -83,6 +85,8 @@ begin
   return new;
 end;
 $$;
+
+revoke all on function public.audit_member_change() from public;
 
 drop trigger if exists members_audit_update on public.members;
 create trigger members_audit_update
@@ -99,7 +103,29 @@ drop policy if exists members_read on public.members;
 create policy members_read on public.members
 for select to authenticated
 using (
-  public.is_manager()
+  (select public.is_manager())
+  or created_by=(select auth.uid())
+  or responsible_coach_id=(select auth.uid())
+  or exists (
+    select 1 from public.purchases p
+    where p.member_id=members.id and p.coach_id=(select auth.uid())
+  )
+);
+
+drop policy if exists members_update on public.members;
+create policy members_update on public.members
+for update to authenticated
+using (
+  (select public.is_manager())
+  or created_by=(select auth.uid())
+  or responsible_coach_id=(select auth.uid())
+  or exists (
+    select 1 from public.purchases p
+    where p.member_id=members.id and p.coach_id=(select auth.uid())
+  )
+)
+with check (
+  (select public.is_manager())
   or created_by=(select auth.uid())
   or responsible_coach_id=(select auth.uid())
   or exists (
