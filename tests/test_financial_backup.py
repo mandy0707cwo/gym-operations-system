@@ -118,6 +118,21 @@ def test_monthly_sales_columns_include_purchase_id_and_coach():
     assert 'columns=["購買_ID","日期","姓名","銷課金額","教練","購買堂數","購買課程"]' in source
 
 
+def test_coach_query_is_a_sidebar_page_not_a_usage_tab():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'register_tab,cancel_tab=st.tabs(["銷課登錄","上課預約取消"])' in source
+    assert 'pages=["每日營運","課程購買","銷課表","教練查詢"]' in source
+    assert '"教練查詢":coach_query_page' in source
+
+
+def test_daily_operation_reports_show_complete_details():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'columns=["日期","教練","體驗會員姓名","體驗項目","內容","課程屬性","時數","金額","備註"]' in source
+    assert 'columns=["日期","教練","單堂銷售會員姓名","銷售內容","課程屬性","時數","金額","備註"]' in source
+    assert '"體驗項目明細":daily_trial_detail_df' in source
+    assert '"單堂銷售明細":daily_single_detail_df' in source
+
+
 def test_course_status_filter_labels_are_mutually_exclusive():
     status = load_functions()["course_status_label"]
     assert status({"status": "active", "used_sessions": 3, "total_sessions": 10, "remaining_sessions": 7}) == "進行中"

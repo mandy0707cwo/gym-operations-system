@@ -519,8 +519,6 @@ def purchase_page(me):
             except Exception as exc: st.error(f"新增失敗（請檢查期次是否重複或超出設定）：{exc}")
 
 def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
-    st.divider()
-    st.subheader("教練查詢")
     export_sheets={}
     coaches=coach_options()
     operational_ids=set(coaches.values())
@@ -814,7 +812,7 @@ def usage_page(me):
         .order("purchase_date").order("created_at").order("id"))
     usage_purchase_code_map=_build_purchase_code_map(all_usage_purchase_keys)
     coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
-    register_tab,cancel_tab,query_tab=st.tabs(["銷課登錄","上課預約取消","教練查詢"])
+    register_tab,cancel_tab=st.tabs(["銷課登錄","上課預約取消"])
     with cancel_tab:
         st.markdown('<div style="font-size:1.5rem;font-weight:600;line-height:1.3;margin:0.25rem 0 1rem 0;">上課預約取消 <span style="font-size:0.75rem;font-weight:400;">（前一日及當日臨時請假者）</span></div>',unsafe_allow_html=True)
         with st.form("session_cancellation",clear_on_submit=True):
@@ -926,8 +924,10 @@ def usage_page(me):
             st.info("最近 7 天沒有銷課紀錄。")
         else:
             st.dataframe(recent_usage_df,hide_index=True,width="stretch")
-    with query_tab:
-        usage_query_tabs(me,purchase_code_map=usage_purchase_code_map)
+
+def coach_query_page(me):
+    st.header("教練查詢")
+    usage_query_tabs(me)
 
 def completed_purchase_ids(usages,purchase_map):
     """回傳在銷課明細中完成最後一堂的購買課程 ID；同一課程只計一次。"""
@@ -1766,7 +1766,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.18"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.19"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -3233,11 +3233,11 @@ def financial_report_page(me):
             st.error("開始日期不可晚於結束日期。")
         else:
             daily_trial_records=paged_rows(lambda: client().table("trial_items")
-                .select("id,entry_date,coach_id,member_name,course_type,amount")
+                .select("id,entry_date,coach_id,member_name,content,detail_content,course_type,hours,amount,note")
                 .gte("entry_date",str(daily_report_start)).lte("entry_date",str(daily_report_end))
                 .order("entry_date",desc=True).order("id",desc=True))
             daily_single_records=paged_rows(lambda: client().table("single_sales")
-                .select("id,entry_date,coach_id,member_name,course_type,amount")
+                .select("id,entry_date,coach_id,member_name,content,course_type,hours,amount,note")
                 .gte("entry_date",str(daily_report_start)).lte("entry_date",str(daily_report_end))
                 .order("entry_date",desc=True).order("id",desc=True))
             selected_daily_coach_id=daily_coaches.get(daily_report_coach)
@@ -3261,25 +3261,40 @@ def financial_report_page(me):
 
             daily_trial_df=operation_finance_summary(daily_trial_records)
             daily_single_df=operation_finance_summary(daily_single_records)
+            daily_coach_names={coach_id:name for name,coach_id in daily_coaches.items()}
+            daily_trial_detail_df=pd.DataFrame([{
+                "日期":x.get("entry_date"),"教練":daily_coach_names.get(x.get("coach_id"),"未知教練"),
+                "體驗會員姓名":x.get("member_name") or "","體驗項目":x.get("content") or "",
+                "內容":x.get("detail_content") or "","課程屬性":x.get("course_type") or "未分類",
+                "時數":float(x.get("hours") or 0),"金額":float(x.get("amount") or 0),"備註":x.get("note") or ""
+            } for x in daily_trial_records],columns=["日期","教練","體驗會員姓名","體驗項目","內容","課程屬性","時數","金額","備註"])
+            daily_single_detail_df=pd.DataFrame([{
+                "日期":x.get("entry_date"),"教練":daily_coach_names.get(x.get("coach_id"),"未知教練"),
+                "單堂銷售會員姓名":x.get("member_name") or "","銷售內容":x.get("content") or "",
+                "課程屬性":x.get("course_type") or "未分類","時數":float(x.get("hours") or 0),
+                "金額":float(x.get("amount") or 0),"備註":x.get("note") or ""
+            } for x in daily_single_records],columns=["日期","教練","單堂銷售會員姓名","銷售內容","課程屬性","時數","金額","備註"])
             daily_money_config={"未稅金額":st.column_config.NumberColumn(format="$ %.0f")}
+            daily_detail_config={"時數":st.column_config.NumberColumn(format="%.2f"),"金額":st.column_config.NumberColumn(format="$ %.0f")}
             daily_operation_tabs=st.tabs(["體驗項目報表","單堂銷售報表"])
             with daily_operation_tabs[0]:
                 daily_trial_total=int(daily_trial_df["未稅金額"].sum()) if not daily_trial_df.empty else 0
                 st.metric("體驗總計（未稅）",f"$ {daily_trial_total:,.0f}")
-                st.dataframe(daily_trial_df,hide_index=True,width="stretch",height="auto",row_height=28,column_config=daily_money_config)
-                daily_trial_export=_excel_bytes({"體驗項目報表":daily_trial_df})
+                st.dataframe(daily_trial_detail_df,hide_index=True,width="stretch",height="auto",row_height=28,column_config=daily_detail_config)
+                daily_trial_export=_excel_bytes({"體驗項目明細":daily_trial_detail_df,"體驗項目彙總":daily_trial_df})
                 st.download_button("下載體驗項目報表",daily_trial_export,
                     file_name=f"體驗項目報表_{daily_report_start}_{daily_report_end}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
             with daily_operation_tabs[1]:
                 daily_single_total=int(daily_single_df["未稅金額"].sum()) if not daily_single_df.empty else 0
                 st.metric("單堂銷售總計（未稅）",f"$ {daily_single_total:,.0f}")
-                st.dataframe(daily_single_df,hide_index=True,width="stretch",height="auto",row_height=28,column_config=daily_money_config)
-                daily_single_export=_excel_bytes({"單堂銷售報表":daily_single_df})
+                st.dataframe(daily_single_detail_df,hide_index=True,width="stretch",height="auto",row_height=28,column_config=daily_detail_config)
+                daily_single_export=_excel_bytes({"單堂銷售明細":daily_single_detail_df,"單堂銷售彙總":daily_single_df})
                 st.download_button("下載單堂銷售報表",daily_single_export,
                     file_name=f"單堂銷售報表_{daily_report_start}_{daily_report_end}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
-            daily_operation_export=_excel_bytes({"體驗項目報表":daily_trial_df,"單堂銷售報表":daily_single_df})
+            daily_operation_export=_excel_bytes({"體驗項目明細":daily_trial_detail_df,"體驗項目彙總":daily_trial_df,
+                "單堂銷售明細":daily_single_detail_df,"單堂銷售彙總":daily_single_df})
             st.download_button("下載每日營運報表",daily_operation_export,
                 file_name=f"每日營運報表_{daily_report_start}_{daily_report_end}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
@@ -3519,7 +3534,7 @@ user=login(); me=profile(user.id)
 with st.sidebar:
     st.title("🏋️ 營運管理")
     st.write(f'{me["display_name"]}｜{ROLE_LABELS.get(me["role"],me["role"])}')
-    pages=["每日營運","課程購買","銷課表"]
+    pages=["每日營運","課程購買","銷課表","教練查詢"]
     if me["role"] in ("manager","admin"): pages.append("主管 Dashboard")
     if me["role"] == "admin":
         pages.extend(["財務報表", "帳號與權限管理", "資料管理"])
@@ -3530,6 +3545,6 @@ with st.sidebar:
 collapse_sidebar_on_mobile()
 
 try:
-    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
+    {"每日營運":daily_page,"課程購買":purchase_page,"銷課表":usage_page,"教練查詢":coach_query_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")
