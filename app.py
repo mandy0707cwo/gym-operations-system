@@ -1775,7 +1775,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.27"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.28"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -3268,15 +3268,22 @@ def financial_report_page(me):
         member_name_map={x["id"]:x["member_name"] for x in members}
         member_id_map={x["member_name"]:x["id"] for x in members}
         coaches=coach_options()
-        with st.form("finance_other_filter_form",border=False):
-            c1,c2,c3,c4=st.columns(4)
-            other_start=c1.date_input("開始日期",date.today().replace(day=1),key="finance_other_start")
-            other_end=c2.date_input("結束日期",date.today(),key="finance_other_end")
-            other_coach=c3.selectbox("教練",["全部教練"]+list(coaches),key="finance_other_coach")
-            other_member=c4.selectbox("會員名稱",["全部會員"]+list(member_id_map),key="finance_other_member")
-            st.form_submit_button("查詢",type="primary",width="stretch")
-        other_report_view=st.segmented_control("其他報表分類",["醫生轉介","課程屬性","專案報表","每日營運報表"],
+        other_report_view=st.segmented_control("其他報表分類",["醫生轉介","課程屬性","專案報表","每日營運報表","歷史預收餘額"],
             default="醫生轉介",key="financial_other_report_view",width="stretch")
+        with st.form("finance_other_filter_form",border=False):
+            if other_report_view=="歷史預收餘額":
+                c1,c2,c3=st.columns(3)
+                historical_cutoff=c1.date_input("截止日期",date.today(),max_value=date.today(),key="finance_historical_prepaid_cutoff")
+                other_coach=c2.selectbox("教練",["全部教練"]+list(coaches),key="finance_other_coach")
+                other_member=c3.selectbox("會員名稱",["全部會員"]+list(member_id_map),key="finance_other_member")
+                other_start=other_end=historical_cutoff
+            else:
+                c1,c2,c3,c4=st.columns(4)
+                other_start=c1.date_input("開始日期",date.today().replace(day=1),key="finance_other_start")
+                other_end=c2.date_input("結束日期",date.today(),key="finance_other_end")
+                other_coach=c3.selectbox("教練",["全部教練"]+list(coaches),key="finance_other_coach")
+                other_member=c4.selectbox("會員名稱",["全部會員"]+list(member_id_map),key="finance_other_member")
+            st.form_submit_button("查詢",type="primary",width="stretch")
         if other_start>other_end:
             st.error("開始日期不可晚於結束日期。")
         else:
@@ -3365,9 +3372,75 @@ def financial_report_page(me):
                     st.dataframe(course_type_df,hide_index=True,use_container_width=True,column_config={
                         name:st.column_config.NumberColumn(format="$ %.0f") for name in course_type_columns[1:]
                     })
-            other_export=_excel_bytes({"醫生轉介":referral_df,"課程屬性":course_type_df})
-            st.download_button("匯出其他報表",other_export,file_name=f"其他報表_{other_start}_{other_end}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+            if other_report_view in ("醫生轉介","課程屬性"):
+                other_export=_excel_bytes({"醫生轉介":referral_df,"課程屬性":course_type_df})
+                st.download_button("匯出其他報表",other_export,file_name=f"其他報表_{other_start}_{other_end}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
+
+            if other_report_view=="歷史預收餘額":
+                historical_tax_mode=st.segmented_control("金額顯示方式",["未稅","含稅"],default="未稅",key="finance_historical_prepaid_tax_mode")
+                historical_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_date,created_at")
+                    .order("purchase_date").order("created_at").order("id"))
+                historical_code_map=_build_purchase_code_map(historical_purchase_keys)
+                historical_purchases=paged_rows(lambda: client().table("purchases")
+                    .select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date")
+                    .lte("purchase_date",str(historical_cutoff)).order("purchase_date",desc=True))
+                if selected_other_coach_id:
+                    historical_purchases=[x for x in historical_purchases if x.get("coach_id")==selected_other_coach_id]
+                if selected_other_member_id:
+                    historical_purchases=[x for x in historical_purchases if x.get("member_id")==selected_other_member_id]
+                historical_ids=[x["id"] for x in historical_purchases]
+                historical_payments=(paged_rows(lambda: client().table("purchase_payments")
+                    .select("purchase_id,amount,paid_date").in_("purchase_id",historical_ids)
+                    .lte("paid_date",str(historical_cutoff)).order("paid_date")) if historical_ids else [])
+                historical_usages=(paged_rows(lambda: client().table("session_usages")
+                    .select("purchase_id,deducted_amount,usage_date").in_("purchase_id",historical_ids)
+                    .lte("usage_date",str(historical_cutoff)).order("usage_date")) if historical_ids else [])
+                historical_terminations=(paged_rows(lambda: client().table("course_terminations")
+                    .select("purchase_id,termination_type,termination_date").in_("purchase_id",historical_ids)
+                    .lte("termination_date",str(historical_cutoff)).order("termination_date")) if historical_ids else [])
+                historical_paid_map={}; historical_used_map={}; historical_session_map={}; historical_termination_map={}
+                for payment in historical_payments:
+                    historical_paid_map[payment["purchase_id"]]=historical_paid_map.get(payment["purchase_id"],0)+float(payment.get("amount") or 0)
+                for usage in historical_usages:
+                    historical_used_map[usage["purchase_id"]]=historical_used_map.get(usage["purchase_id"],0)+float(usage.get("deducted_amount") or 0)
+                    historical_session_map[usage["purchase_id"]]=historical_session_map.get(usage["purchase_id"],0)+1
+                for termination in historical_terminations:
+                    historical_termination_map[termination["purchase_id"]]=termination.get("termination_type")
+                historical_rows=[]
+                for purchase in historical_purchases:
+                    purchase_id=purchase["id"]
+                    contracted=float(purchase.get("total_amount") or 0)
+                    received=min(historical_paid_map.get(purchase_id,0),contracted)
+                    used=min(historical_used_map.get(purchase_id,0),contracted)
+                    used_sessions=historical_session_map.get(purchase_id,0)
+                    total_sessions=int(purchase.get("total_sessions") or 0)
+                    remaining_sessions=max(total_sessions-used_sessions,0)
+                    termination_type=historical_termination_map.get(purchase_id)
+                    if termination_type=="expired": historical_status="逾期中止"
+                    elif termination_type=="refund": historical_status="退費中止"
+                    elif total_sessions>0 and used_sessions>=total_sessions: historical_status="已完成"
+                    else: historical_status="進行中"
+                    raw_balance=max(received-used,0)
+                    prepaid_balance=raw_balance if historical_status=="進行中" else 0
+                    if historical_status=="進行中" and (prepaid_balance<=0 or remaining_sessions<=0): continue
+                    historical_rows.append({"成交日期":purchase.get("purchase_date"),"購買_ID":historical_code_map.get(purchase_id,""),
+                        "會員名稱":member_name_map.get(purchase.get("member_id"),""),"課程名稱":purchase.get("course_name") or "",
+                        "實際預收金額":_tax_display_amount(received,historical_tax_mode),
+                        "累計銷課金額":_tax_display_amount(used,historical_tax_mode),
+                        "實際預收剩餘金額":_tax_display_amount(prepaid_balance,historical_tax_mode),
+                        "堂數":f"{used_sessions}／{total_sessions}","有效期限":purchase.get("expiry_date"),"課程狀態":historical_status,
+                        "_含稅預收餘額":prepaid_balance})
+                historical_df=pd.DataFrame(historical_rows,columns=["成交日期","購買_ID","會員名稱","課程名稱","實際預收金額","累計銷課金額","實際預收剩餘金額","堂數","有效期限","課程狀態"])
+                historical_balance_total=_tax_display_amount(sum(x["_含稅預收餘額"] for x in historical_rows),historical_tax_mode)
+                st.metric(f"截至 {historical_cutoff} 預收餘額總計（{historical_tax_mode}）",f"$ {historical_balance_total:,.0f}")
+                st.caption("本表只計算截止日期當日結束前的購課、付款、銷課、課程完成與中止；截止日期之後的異動不會影響結果。")
+                historical_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["實際預收金額","累計銷課金額","實際預收剩餘金額"]}
+                st.dataframe(center_member_report_columns(historical_df,["實際預收金額","實際預收剩餘金額"]),
+                    hide_index=True,width="stretch",column_config=historical_money_config)
+                historical_export=_excel_bytes({"歷史預收餘額":historical_df})
+                st.download_button("下載歷史預收餘額",historical_export,file_name=f"歷史預收餘額_截至{historical_cutoff}_{historical_tax_mode}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",icon=":material/download:",width="stretch")
 
     if report_view=="其他報表" and other_report_view=="專案報表":
         st.subheader("專案報表")
