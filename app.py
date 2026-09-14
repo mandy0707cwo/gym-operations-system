@@ -391,7 +391,7 @@ def purchase_page(me):
     st.header("課程購買")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
     coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
-    members=rows(client().table("members").select("id,member_name,phone,referral,responsible_coach_id").eq("active",True).order("member_name"))
+    members=rows(client().table("members").select("id,member_name,phone,referral,responsible_coach_id,note").eq("active",True).order("member_name"))
     member_options={
         f'{x["member_name"]}｜{x.get("phone") or "無電話"}':x
         for x in members
@@ -421,6 +421,7 @@ def purchase_page(me):
     coach_names=list(allowed)
     default_coach_index=coach_names.index(default_coach_name) if default_coach_name in coach_names else None
     default_referral=str(selected_member.get("referral") or "")
+    default_purchase_note=str(selected_member.get("note") or "")
     with st.form(f"purchase_{purchase_revision}",clear_on_submit=True,enter_to_submit=False):
         c1,c2=st.columns(2)
         kind=c1.selectbox("購買類型",["首次購買","續課"])
@@ -438,7 +439,7 @@ def purchase_page(me):
             default_expiry=purchased.replace(year=purchased.year+1,day=28)
         expiry=c2.date_input("有效日期",value=default_expiry)
         referral=st.text_input("醫生轉介",value=default_referral,key=f"purchase_referral_{purchase_revision}_{selected_member_id}")
-        purchase_note=st.text_area("備註")
+        purchase_note=st.text_area("備註",value=default_purchase_note,key=f"purchase_note_{purchase_revision}_{selected_member_id}")
         if plan=="分期":
             count=st.selectbox("總期數",[2,3],index=None,placeholder="請選擇總期數")
             c1,c2,c3=st.columns(3)
@@ -1783,7 +1784,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.30"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.32"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2373,6 +2374,9 @@ def record_admin_page(me):
             note=st.text_area("備註",record.get("note") or "")
         update=st.form_submit_button("儲存修改")
     if update:
+        st.session_state[f"_record_update_confirm_{data_type}"]=True
+        st.rerun()
+    if st.session_state.pop(f"_record_update_execute_{data_type}",False):
         try:
             if data_type=="上課預約取消":
                 admin.table("session_cancellations").update({"cancel_date":str(d),"coach_id":record_coach_map[coach],"cancelled_sessions":cancelled_sessions,"reason":reason.strip() or None}).eq("id",record["id"]).execute()
@@ -2405,6 +2409,21 @@ def record_admin_page(me):
             st.session_state.pop(cache_key,None)
             st.success("資料已修改。"); st.rerun()
         except Exception as exc: st.error(f"修改失敗：{exc}")
+    if st.session_state.get(f"_record_update_confirm_{data_type}",False):
+        @st.dialog("確認修改資料",icon=":material/warning:",dismissible=False)
+        def confirm_record_update():
+            st.warning("確認後將立即修改資料庫中的這筆紀錄。")
+            st.write(f"資料類型：{data_type}")
+            st.caption(f"目前選擇：{selected}")
+            cancel_col,confirm_col=st.columns(2)
+            if cancel_col.button("取消",width="stretch",key=f"cancel_record_update_{data_type}"):
+                st.session_state.pop(f"_record_update_confirm_{data_type}",None)
+                st.rerun()
+            if confirm_col.button("確認修改",type="primary",width="stretch",key=f"confirm_record_update_{data_type}"):
+                st.session_state.pop(f"_record_update_confirm_{data_type}",None)
+                st.session_state[f"_record_update_execute_{data_type}"]=True
+                st.rerun()
+        confirm_record_update()
     st.divider()
     st.subheader("刪除資料")
     delete_mode=st.radio(
@@ -2445,6 +2464,15 @@ def record_admin_page(me):
     if delete:
         if not delete_records: st.error("請先選擇至少一筆要刪除的資料。")
         elif not confirm: st.error("請先勾選刪除確認。")
+        elif purchase_delete_blockers: st.error("選取的課程仍有銷課紀錄，無法刪除。")
+        else:
+            st.session_state[f"_record_delete_confirm_{data_type}"]=True
+            st.rerun()
+    if st.session_state.pop(f"_record_delete_execute_{data_type}",False):
+        if not delete_records:
+            st.error("刪除前的選取資料已變更，請重新選擇。")
+        elif purchase_delete_blockers:
+            st.error("選取的課程仍有銷課紀錄，無法刪除。")
         else:
             try:
                 record_ids=[item["id"] for item in delete_records if item.get("id")]
@@ -2472,6 +2500,21 @@ def record_admin_page(me):
                 st.session_state[cache_key]=cache_entry
                 st.success(f"已刪除 {len(delete_records)} 筆資料。"); st.rerun()
             except Exception as exc: st.error(f"刪除失敗：{exc}")
+    if st.session_state.get(f"_record_delete_confirm_{data_type}",False):
+        @st.dialog("確認刪除資料",icon=":material/delete_forever:",dismissible=False)
+        def confirm_record_delete():
+            st.error(f"即將永久刪除 {len(delete_records)} 筆「{data_type}」資料，此操作無法復原。")
+            if len(delete_records)==1:
+                st.caption(f"目前選擇：{selected}")
+            cancel_col,confirm_col=st.columns(2)
+            if cancel_col.button("取消",width="stretch",key=f"cancel_record_delete_{data_type}"):
+                st.session_state.pop(f"_record_delete_confirm_{data_type}",None)
+                st.rerun()
+            if confirm_col.button("確認永久刪除",type="primary",width="stretch",key=f"confirm_record_delete_{data_type}"):
+                st.session_state.pop(f"_record_delete_confirm_{data_type}",None)
+                st.session_state[f"_record_delete_execute_{data_type}"]=True
+                st.rerun()
+        confirm_record_delete()
 
 def bonus_rule_admin_page(me):
     st.subheader("獎金規則管理")
