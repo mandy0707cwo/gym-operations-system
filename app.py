@@ -1784,7 +1784,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.32"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.33"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2375,7 +2375,6 @@ def record_admin_page(me):
         update=st.form_submit_button("儲存修改")
     if update:
         st.session_state[f"_record_update_confirm_{data_type}"]=True
-        st.rerun()
     if st.session_state.pop(f"_record_update_execute_{data_type}",False):
         try:
             if data_type=="上課預約取消":
@@ -2467,7 +2466,6 @@ def record_admin_page(me):
         elif purchase_delete_blockers: st.error("選取的課程仍有銷課紀錄，無法刪除。")
         else:
             st.session_state[f"_record_delete_confirm_{data_type}"]=True
-            st.rerun()
     if st.session_state.pop(f"_record_delete_execute_{data_type}",False):
         if not delete_records:
             st.error("刪除前的選取資料已變更，請重新選擇。")
@@ -2690,7 +2688,8 @@ def customer_admin_page(me):
             new_coach=c3.selectbox("負責教練",["未指定"]+list(coaches))
             c1,c2=st.columns(2)
             new_initial_date=c1.date_input("初次接觸日期",value=None,format="YYYY-MM-DD")
-            new_status_label=c2.selectbox("客戶狀態",list(status_values),index=0)
+            customer_status_options=list(status_values)
+            new_status_label=c2.selectbox("客戶狀態",customer_status_options,index=customer_status_options.index("正式會員"))
             c1,c2=st.columns(2)
             new_emergency_contact=c1.text_input("緊急聯絡人").strip()
             new_emergency_phone=c2.text_input("緊急聯絡電話").strip()
