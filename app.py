@@ -8,6 +8,8 @@ from decimal import Decimal, ROUND_HALF_UP
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+
+# Streamlit Cloud redeploy trigger: 2026-09-15 v1.12.35
 import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from supabase import create_client
