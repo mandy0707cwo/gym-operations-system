@@ -3449,10 +3449,10 @@ def financial_report_page(me):
                 historical_payments=(paged_rows(lambda: client().table("purchase_payments")
                     .select("id,purchase_id,amount,paid_date,created_at").in_("purchase_id",historical_ids)
                     .lte("paid_date",str(historical_cutoff)).order("paid_date").order("created_at").order("id")) if historical_ids else [])
-                # 歷史預收應依實際上課日期歸屬；補登日期可能晚於截止日，不能因此漏算截止日前已完成的課程。
+                # 歷史預收餘額以「銷課日期」為截帳基準；截止日後才登錄的補單不回溯改寫歷史餘額。
                 historical_usages=(paged_rows(lambda: client().table("session_usages")
                     .select("id,purchase_id,deducted_amount,usage_date,actual_usage_date,created_at").in_("purchase_id",historical_ids)
-                    .lte("actual_usage_date",str(historical_cutoff)).order("actual_usage_date").order("usage_date").order("created_at").order("id")) if historical_ids else [])
+                    .lte("usage_date",str(historical_cutoff)).order("usage_date").order("created_at").order("id")) if historical_ids else [])
                 historical_terminations=(paged_rows(lambda: client().table("course_terminations")
                     .select("id,purchase_id,termination_type,termination_date,created_at").in_("purchase_id",historical_ids)
                     .lte("termination_date",str(historical_cutoff)).order("termination_date").order("created_at").order("id")) if historical_ids else [])
@@ -3471,7 +3471,7 @@ def financial_report_page(me):
                     purchase_usages=list(historical_usage_map.get(purchase_id,{}).values())
                     used=min(sum(float(x.get("deducted_amount") or 0) for x in purchase_usages),contracted)
                     used_sessions=len(purchase_usages)
-                    last_usage_date=max((str(x.get("actual_usage_date") or x.get("usage_date") or "") for x in purchase_usages),default="")
+                    last_usage_date=max((str(x.get("usage_date") or "") for x in purchase_usages),default="")
                     total_sessions=int(purchase.get("total_sessions") or 0)
                     remaining_sessions=max(total_sessions-used_sessions,0)
                     termination_type=historical_termination_map.get(purchase_id)
@@ -3493,7 +3493,7 @@ def financial_report_page(me):
                 historical_df=pd.DataFrame(historical_rows,columns=["成交日期","購買_ID","會員名稱","課程名稱","實際預收金額","累計銷課金額","實際預收剩餘金額","堂數","最後銷課日期","有效期限","課程狀態"])
                 historical_balance_total=_tax_display_amount(sum(x["_含稅預收餘額"] for x in historical_rows),historical_tax_mode)
                 st.metric(f"截至 {historical_cutoff} 預收餘額總計（{historical_tax_mode}）",f"$ {historical_balance_total:,.0f}")
-                st.caption("本表只計算截止日期當日結束前的購課、付款、實際銷課、課程完成與中止；補登銷課依實際銷課日期歸屬，截止日期之後的異動不會影響結果。")
+                st.caption("本表只計算截止日期當日結束前的購課、付款、銷課、課程完成與中止；補單仍以銷課日期為截帳基準，截止日期之後的異動不會回溯影響結果。")
                 historical_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["實際預收金額","累計銷課金額","實際預收剩餘金額"]}
                 st.dataframe(center_member_report_columns(historical_df,["實際預收金額","實際預收剩餘金額"]),
                     hide_index=True,width="stretch",column_config=historical_money_config)
