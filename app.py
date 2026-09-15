@@ -1784,7 +1784,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.34"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.35"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -3433,29 +3433,28 @@ def financial_report_page(me):
                     .order("purchase_date").order("created_at").order("id"))
                 historical_code_map=_build_purchase_code_map(historical_purchase_keys)
                 historical_purchases=paged_rows(lambda: client().table("purchases")
-                    .select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date")
-                    .lte("purchase_date",str(historical_cutoff)).order("purchase_date",desc=True))
+                    .select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,created_at")
+                    .lte("purchase_date",str(historical_cutoff)).order("purchase_date",desc=True).order("created_at",desc=True).order("id",desc=True))
                 if selected_other_coach_id:
                     historical_purchases=[x for x in historical_purchases if x.get("coach_id")==selected_other_coach_id]
                 if selected_other_member_id:
                     historical_purchases=[x for x in historical_purchases if x.get("member_id")==selected_other_member_id]
                 historical_ids=[x["id"] for x in historical_purchases]
                 historical_payments=(paged_rows(lambda: client().table("purchase_payments")
-                    .select("purchase_id,amount,paid_date").in_("purchase_id",historical_ids)
-                    .lte("paid_date",str(historical_cutoff)).order("paid_date")) if historical_ids else [])
+                    .select("id,purchase_id,amount,paid_date,created_at").in_("purchase_id",historical_ids)
+                    .lte("paid_date",str(historical_cutoff)).order("paid_date").order("created_at").order("id")) if historical_ids else [])
                 # 歷史預收應依實際上課日期歸屬；補登日期可能晚於截止日，不能因此漏算截止日前已完成的課程。
                 historical_usages=(paged_rows(lambda: client().table("session_usages")
-                    .select("purchase_id,deducted_amount,usage_date,actual_usage_date").in_("purchase_id",historical_ids)
-                    .lte("actual_usage_date",str(historical_cutoff)).order("actual_usage_date").order("usage_date")) if historical_ids else [])
+                    .select("id,purchase_id,deducted_amount,usage_date,actual_usage_date,created_at").in_("purchase_id",historical_ids)
+                    .lte("actual_usage_date",str(historical_cutoff)).order("actual_usage_date").order("usage_date").order("created_at").order("id")) if historical_ids else [])
                 historical_terminations=(paged_rows(lambda: client().table("course_terminations")
-                    .select("purchase_id,termination_type,termination_date").in_("purchase_id",historical_ids)
-                    .lte("termination_date",str(historical_cutoff)).order("termination_date")) if historical_ids else [])
-                historical_paid_map={}; historical_used_map={}; historical_session_map={}; historical_termination_map={}
+                    .select("id,purchase_id,termination_type,termination_date,created_at").in_("purchase_id",historical_ids)
+                    .lte("termination_date",str(historical_cutoff)).order("termination_date").order("created_at").order("id")) if historical_ids else [])
+                historical_paid_map={}; historical_usage_map={}; historical_termination_map={}
                 for payment in historical_payments:
                     historical_paid_map[payment["purchase_id"]]=historical_paid_map.get(payment["purchase_id"],0)+float(payment.get("amount") or 0)
                 for usage in historical_usages:
-                    historical_used_map[usage["purchase_id"]]=historical_used_map.get(usage["purchase_id"],0)+float(usage.get("deducted_amount") or 0)
-                    historical_session_map[usage["purchase_id"]]=historical_session_map.get(usage["purchase_id"],0)+1
+                    historical_usage_map.setdefault(usage["purchase_id"],{})[usage["id"]]=usage
                 for termination in historical_terminations:
                     historical_termination_map[termination["purchase_id"]]=termination.get("termination_type")
                 historical_rows=[]
@@ -3463,8 +3462,10 @@ def financial_report_page(me):
                     purchase_id=purchase["id"]
                     contracted=float(purchase.get("total_amount") or 0)
                     received=min(historical_paid_map.get(purchase_id,0),contracted)
-                    used=min(historical_used_map.get(purchase_id,0),contracted)
-                    used_sessions=historical_session_map.get(purchase_id,0)
+                    purchase_usages=list(historical_usage_map.get(purchase_id,{}).values())
+                    used=min(sum(float(x.get("deducted_amount") or 0) for x in purchase_usages),contracted)
+                    used_sessions=len(purchase_usages)
+                    last_usage_date=max((str(x.get("actual_usage_date") or x.get("usage_date") or "") for x in purchase_usages),default="")
                     total_sessions=int(purchase.get("total_sessions") or 0)
                     remaining_sessions=max(total_sessions-used_sessions,0)
                     termination_type=historical_termination_map.get(purchase_id)
@@ -3480,9 +3481,10 @@ def financial_report_page(me):
                         "實際預收金額":_tax_display_amount(received,historical_tax_mode),
                         "累計銷課金額":_tax_display_amount(used,historical_tax_mode),
                         "實際預收剩餘金額":_tax_display_amount(prepaid_balance,historical_tax_mode),
-                        "堂數":f"{used_sessions}／{total_sessions}","有效期限":purchase.get("expiry_date"),"課程狀態":historical_status,
+                        "堂數":f"{used_sessions}／{total_sessions}","最後銷課日期":last_usage_date or None,
+                        "有效期限":purchase.get("expiry_date"),"課程狀態":historical_status,
                         "_含稅預收餘額":prepaid_balance})
-                historical_df=pd.DataFrame(historical_rows,columns=["成交日期","購買_ID","會員名稱","課程名稱","實際預收金額","累計銷課金額","實際預收剩餘金額","堂數","有效期限","課程狀態"])
+                historical_df=pd.DataFrame(historical_rows,columns=["成交日期","購買_ID","會員名稱","課程名稱","實際預收金額","累計銷課金額","實際預收剩餘金額","堂數","最後銷課日期","有效期限","課程狀態"])
                 historical_balance_total=_tax_display_amount(sum(x["_含稅預收餘額"] for x in historical_rows),historical_tax_mode)
                 st.metric(f"截至 {historical_cutoff} 預收餘額總計（{historical_tax_mode}）",f"$ {historical_balance_total:,.0f}")
                 st.caption("本表只計算截止日期當日結束前的購課、付款、實際銷課、課程完成與中止；補登銷課依實際銷課日期歸屬，截止日期之後的異動不會影響結果。")
