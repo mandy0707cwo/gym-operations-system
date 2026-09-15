@@ -216,6 +216,10 @@ declare
   v_actual_usage_date date;
   v_row public.session_usages%rowtype;
 begin
+  if (coalesce(p_is_makeup,false) or coalesce(p_actual_usage_date,p_usage_date) <> p_usage_date)
+     and not public.is_admin() then
+    raise exception '僅系統管理員可以建立補單或指定實際銷課日期';
+  end if;
   v_actual_usage_date := coalesce(p_actual_usage_date,p_usage_date);
   if not coalesce(p_is_makeup,false) then v_actual_usage_date := p_usage_date; end if;
   if coalesce(p_is_makeup,false) and v_actual_usage_date > p_usage_date then
