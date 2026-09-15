@@ -3491,7 +3491,8 @@ def financial_report_page(me):
                         "有效期限":purchase.get("expiry_date"),"課程狀態":historical_status,
                         "_含稅預收餘額":prepaid_balance})
                 historical_df=pd.DataFrame(historical_rows,columns=["成交日期","購買_ID","會員名稱","課程名稱","實際預收金額","累計銷課金額","實際預收剩餘金額","堂數","最後銷課日期","有效期限","課程狀態"])
-                historical_balance_total=_tax_display_amount(sum(x["_含稅預收餘額"] for x in historical_rows),historical_tax_mode)
+                # 畫面總計與下載明細採相同口徑：每筆先換算並四捨五入，再加總。
+                historical_balance_total=sum(int(x["實際預收剩餘金額"]) for x in historical_rows)
                 st.metric(f"截至 {historical_cutoff} 預收餘額總計（{historical_tax_mode}）",f"$ {historical_balance_total:,.0f}")
                 st.caption("本表只計算截止日期當日結束前的購課、付款、銷課、課程完成與中止；補單仍以銷課日期為截帳基準，截止日期之後的異動不會回溯影響結果。")
                 historical_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["實際預收金額","累計銷課金額","實際預收剩餘金額"]}
