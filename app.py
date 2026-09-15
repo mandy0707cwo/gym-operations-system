@@ -877,8 +877,12 @@ def usage_page(me):
                     selected=lookup[label]
                     with st.form(f'consume_{selected["purchase_id"]}'):
                         c1,c2=st.columns(2); usage_date=c1.date_input("銷課日期",date.today(),**coach_date_limit); c2.text_input("授課教練",value=selected["coach_name"],disabled=True)
-                        makeup_order=st.checkbox("補單",value=False,help="補登先前實際已完成的課程")
-                        actual_usage_date=st.date_input("實際銷課日期",date.today(),help="非補單時系統會自動使用銷課日期")
+                        if me["role"]=="admin":
+                            makeup_order=st.checkbox("補單",value=False,help="補登先前實際已完成的課程；僅系統管理員可使用")
+                            actual_usage_date=st.date_input("實際銷課日期",date.today(),help="非補單時系統會自動使用銷課日期")
+                        else:
+                            makeup_order=False
+                            actual_usage_date=usage_date
                         note=st.text_area("備註",placeholder="可輸入本次銷課備註"); submit=st.form_submit_button("確認扣除 1 堂")
                     per=Decimal(str(selected["remaining_amount"])) if selected["remaining_sessions"]==1 else (Decimal(str(selected["total_amount"]))/selected["total_sessions"]).quantize(Decimal("0.01"))
                     st.caption(f"本次預計扣除：1 堂／$ {per:,.0f}；最後一堂會自動扣完剩餘金額。")
@@ -3917,3 +3921,4 @@ try:
     {"每日營運":daily_page,"客戶管理":customer_admin_page,"課程購買":purchase_page,"銷課表":usage_page,"教練查詢":coach_query_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")
+
