@@ -799,7 +799,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             detail_balances=[x for x in detail_balances if detail_member_key in str(x.get("member_name") or "").casefold()]
         detail_balance_map={x["purchase_id"]:x for x in detail_balances}
         detail_purchase_ids=list(detail_balance_map)
-        detail_usages=(paged_rows(lambda: client().table("session_usages").select("id,purchase_id,usage_date,actual_usage_date,is_makeup,session_seq,coach_id,note,created_at")
+        detail_usages=(paged_rows(lambda: client().table("session_usages").select("id,purchase_id,usage_date,actual_usage_date,is_makeup,session_seq,coach_id,deducted_amount,note,created_at")
             .in_("purchase_id",detail_purchase_ids).order("usage_date").order("created_at").order("id")) if detail_purchase_ids else [])
         displayed_sequence=usage_sequence_by_date(detail_usages)
         detail_usages.sort(key=lambda x:(str(x.get("usage_date") or ""),str(x.get("created_at") or ""),str(x.get("id") or "")),reverse=True)
@@ -808,17 +808,27 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             balance=detail_balance_map.get(usage["purchase_id"],{})
             used_session_count=displayed_sequence.get(usage.get("id"),int(usage.get("session_seq") or 0))
             total_session_count=int(balance.get("total_sessions") or 0)
-            usage_detail_rows.append({"購買_ID":purchase_code_map.get(usage["purchase_id"],usage["purchase_id"]),
+            usage_detail_row={"購買_ID":purchase_code_map.get(usage["purchase_id"],usage["purchase_id"]),
                 "教練":next((name for name,coach_id in coaches.items() if coach_id==usage.get("coach_id")),"未知教練"),
                 "會員名稱":balance.get("member_name",""),"課程名稱":balance.get("course_name",""),
                 "銷課日期":usage["usage_date"],"實際銷課日期":usage.get("actual_usage_date") or usage["usage_date"],
                 "補單":"是" if usage.get("is_makeup") else "否","堂數":f"{used_session_count}／{total_session_count}",
-                "有效期限":balance.get("expiry_date")})
-        usage_detail_columns=["購買_ID","教練","會員名稱","課程名稱","銷課日期","實際銷課日期","補單","堂數","有效期限"]
+                "有效期限":balance.get("expiry_date")}
+            if enable_export:
+                usage_amount=float(usage.get("deducted_amount") or 0)
+                usage_detail_row["銷課金額（含稅）"]=usage_amount
+                usage_detail_row["銷課金額（未稅）"]=_tax_display_amount(usage_amount,"未稅")
+            usage_detail_rows.append(usage_detail_row)
+        usage_detail_columns=["購買_ID","教練","會員名稱","課程名稱","銷課日期","實際銷課日期"]
+        if enable_export:
+            usage_detail_columns.extend(["銷課金額（含稅）","銷課金額（未稅）"])
+        usage_detail_columns.extend(["補單","堂數","有效期限"])
         usage_history_df=pd.DataFrame(usage_detail_rows,columns=usage_detail_columns)
         export_sheets["銷課明細查詢"]=usage_history_df
         if usage_detail_rows:
-            st.dataframe(usage_history_df,hide_index=True,width="stretch")
+            usage_detail_config={name:st.column_config.NumberColumn(format="$ %.0f")
+                for name in ["銷課金額（含稅）","銷課金額（未稅）"]} if enable_export else {}
+            st.dataframe(usage_history_df,hide_index=True,width="stretch",column_config=usage_detail_config)
         else:
             st.info("目前沒有符合條件的銷課明細。")
 
