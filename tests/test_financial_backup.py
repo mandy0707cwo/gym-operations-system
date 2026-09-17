@@ -264,8 +264,17 @@ def test_monthly_project_usage_report_columns_and_category():
 
 def test_member_prepaid_summary_uses_requested_columns():
     source = APP_PATH.read_text(encoding="utf-8")
-    assert 'purchase_date,expiry_date,purchase_kind,payment_plan,installment_count,referral,note' in source
+    assert 'purchase_date,expiry_date,purchase_kind,payment_plan,installment_count,referral,note,status' in source
     assert '"教練":coach_name_map.get(purchase.get("coach_id"),"未知")' in source
-    assert '"購買類型":purchase_kind_label,"分期付清":payment_status' in source
+    assert '"購買類型":purchase_kind_label,"課程狀態":status_label_map.get' in source
+    assert '"課程結束日期":course_end_date_map.get(purchase["id"]),"分期付清":payment_status' in source
     assert '"醫生轉介":purchase.get("referral") or "","備註":purchase.get("note") or ""' in source
-    assert 'columns=["購買_ID","成交日期","會員名稱","堂數","課程名稱","教練","成交金額","有效日期","購買類型","分期付清","醫生轉介","備註"]' in source
+    assert 'columns=["購買_ID","成交日期","會員名稱","堂數","課程名稱","教練","成交金額","有效日期","購買類型","課程狀態","課程結束日期","分期付清","醫生轉介","備註"]' in source
+
+
+def test_member_prepaid_summary_resolves_course_end_date():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'completed_ids=[x["id"] for x in purchases if x.get("status")=="completed"]' in source
+    assert 'terminated_ids=[x["id"] for x in purchases if x.get("status") in ("expired","cancelled")]' in source
+    assert 'table("session_usages").select("purchase_id,usage_date")' in source
+    assert 'table("course_terminations").select("purchase_id,termination_date")' in source
