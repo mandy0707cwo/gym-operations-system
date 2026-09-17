@@ -401,10 +401,11 @@ def purchase_page(me):
     if not member_options:
         st.warning("尚無可使用的客戶資料。請先由系統管理員至左側「客戶管理」新增客戶，再建立課程購買。")
         return
-    courses=rows(client().table("course_catalog").select("course_name,course_type,session_hours").eq("active",True).order("course_name"))
+    courses=rows(client().table("course_catalog").select("course_name,course_type,report_category,session_hours").eq("active",True).order("course_name"))
     course_options={f'{x.get("course_type") or "未分類"}｜{x["course_name"]}':x["course_name"] for x in courses}
     course_names=list(course_options)
     course_hours={x["course_name"]:float(x.get("session_hours") or 1) for x in courses}
+    course_report_categories={x["course_name"]:str(x.get("report_category") or "未分類").strip() or "未分類" for x in courses}
     if not course_names:
         st.warning("尚未建立課程名稱，請由系統管理員先到「課程名稱管理」新增。")
         return
@@ -479,7 +480,8 @@ def purchase_page(me):
             try:
                 member_id=member_options[member_label]["id"]
                 p=rows(client().table("purchases").insert({"member_id":member_id,"purchase_kind":"first" if kind=="首次購買" else "renewal",
-                    "coach_id":allowed[coach_name],"course_name":course.strip(),"total_sessions":sessions,"session_hours":session_hours,"total_amount":amount,
+                    "coach_id":allowed[coach_name],"course_name":course.strip(),"report_category":course_report_categories.get(course,"未分類"),
+                    "total_sessions":sessions,"session_hours":session_hours,"total_amount":amount,
                     "purchase_date":str(purchased),"expiry_date":str(expiry),"payment_plan":"full" if plan=="未分期" else "installment",
                     "installment_count":count,"referral":referral.strip() or None,"note":purchase_note.strip() or None,"created_by":me["id"]}))[0]
                 client().table("purchase_payments").insert({"purchase_id":p["id"],"installment_no":1,"amount":paid,"paid_date":str(paid_date),"created_by":me["id"]}).execute()
@@ -1207,21 +1209,22 @@ def course_admin_page(me):
     if admin is None:
         st.error("尚未設定 SUPABASE_SECRET_KEY。")
         return
-    courses=rows(admin.table("course_catalog").select("id,course_name,course_type,session_hours,active,created_at").order("course_name"))
+    courses=rows(admin.table("course_catalog").select("id,course_name,course_type,report_category,session_hours,active,created_at").order("course_name"))
     course_map={f'{x.get("course_type") or "未分類"}｜{x["course_name"]}':x for x in courses}
     add_tab,delete_tab,edit_tab=st.tabs(["新增","刪除","修改"])
     with add_tab:
         with st.form("add_course",clear_on_submit=True):
-            c1,c2,c3=st.columns(3)
+            c1,c2,c3,c4=st.columns(4)
             course_name=c1.text_input("新增課程名稱").strip()
             course_type=c2.text_input("課程屬性").strip()
-            course_hours=c3.number_input("每堂課時數",0.25,24.0,1.0,step=0.25,format="%.2f")
+            report_category=c3.text_input("報表分類",placeholder="例如：訓練、英特－恢復").strip()
+            course_hours=c4.number_input("每堂課時數",0.25,24.0,1.0,step=0.25,format="%.2f")
             add_course=st.form_submit_button("新增課程",type="primary")
         if add_course:
-            if not course_name or not course_type: st.error("課程名稱與課程屬性不可空白。")
+            if not course_name or not course_type or not report_category: st.error("課程名稱、課程屬性與報表分類不可空白。")
             else:
                 try:
-                    admin.table("course_catalog").insert({"course_name":course_name,"course_type":course_type,"session_hours":course_hours,"active":True}).execute()
+                    admin.table("course_catalog").insert({"course_name":course_name,"course_type":course_type,"report_category":report_category,"session_hours":course_hours,"active":True}).execute()
                     st.success(f"已新增課程：{course_name}"); st.rerun()
                 except Exception as exc: st.error(f"新增失敗，請確認課程名稱是否重複：{exc}")
     with delete_tab:
@@ -1241,22 +1244,25 @@ def course_admin_page(me):
     with edit_tab:
         if not courses: st.info("目前尚未建立課程名稱。")
         else:
-            course_display=[{**x,"課程屬性":x.get("course_type") or "","active":"啟用" if x.get("active",True) else "停用"} for x in courses]
-            show_table(course_display,["課程屬性","course_name","session_hours","active","created_at"])
+            course_display=[{**x,"課程屬性":x.get("course_type") or "","報表分類":x.get("report_category") or "未分類","active":"啟用" if x.get("active",True) else "停用"} for x in courses]
+            show_table(course_display,["課程屬性","報表分類","course_name","session_hours","active","created_at"])
             selected_course=st.selectbox("選擇要修改的課程",list(course_map),key="course_edit_select")
             current=course_map[selected_course]
             with st.form("edit_course"):
-                c1,c2,c3=st.columns(3)
+                c1,c2,c3,c4=st.columns(4)
                 edited_name=c1.text_input("課程名稱",current["course_name"]).strip()
                 edited_type=c2.text_input("課程屬性",current.get("course_type") or "").strip()
-                edited_hours=c3.number_input("每堂課時數",0.25,24.0,float(current.get("session_hours") or 1),step=0.25,format="%.2f")
+                edited_report_category=c3.text_input("報表分類",current.get("report_category") or "未分類").strip()
+                edited_hours=c4.number_input("每堂課時數",0.25,24.0,float(current.get("session_hours") or 1),step=0.25,format="%.2f")
                 edited_active=st.checkbox("啟用課程",value=bool(current.get("active",True)))
                 save_course=st.form_submit_button("儲存修改",type="primary")
             if save_course:
-                if not edited_name or not edited_type: st.error("課程名稱與課程屬性不可空白。")
+                if not edited_name or not edited_type or not edited_report_category: st.error("課程名稱、課程屬性與報表分類不可空白。")
                 else:
                     try:
-                        admin.table("course_catalog").update({"course_name":edited_name,"course_type":edited_type,"session_hours":edited_hours,"active":edited_active}).eq("id",current["id"]).execute()
+                        admin.table("course_catalog").update({"course_name":edited_name,"course_type":edited_type,"report_category":edited_report_category,"session_hours":edited_hours,"active":edited_active}).eq("id",current["id"]).execute()
+                        # 首次設定分類時，替既有尚未分類的購買紀錄補上分類；已分類的歷史資料不回溯改寫。
+                        admin.table("purchases").update({"report_category":edited_report_category}).eq("course_name",current["course_name"]).eq("report_category","未分類").execute()
                         st.success("課程資料已修改；既有購買紀錄仍保留原成交內容。"); st.rerun()
                     except Exception as exc: st.error(f"修改失敗，請確認課程名稱是否重複：{exc}")
 
@@ -1958,7 +1964,7 @@ def member_course_io_page(me):
     for x in purchases:
         course_rows.append({"purchase_id":purchase_code_map[x["id"]],"member_name":member_names.get(x["member_id"],""),
             "purchase_kind":x["purchase_kind"],"coach_username":id_to_display_name.get(x["coach_id"],""),
-            "course_name":x["course_name"],"total_sessions":x["total_sessions"],"session_hours":x.get("session_hours",1),
+            "course_name":x["course_name"],"report_category":x.get("report_category") or "未分類","total_sessions":x["total_sessions"],"session_hours":x.get("session_hours",1),
             "total_amount":x["total_amount"],"purchase_date":x["purchase_date"],"expiry_date":x["expiry_date"],
             "payment_plan":x["payment_plan"],"installment_count":x["installment_count"],
             "paid_amount":paid_map.get(x["id"],0),"paid_date":paid_date_map.get(x["id"],""),
@@ -1987,7 +1993,7 @@ def member_course_io_page(me):
 
     st.divider(); st.subheader("匯入會員課程與銷課表")
     st.caption("請先下載範本。匯入會員課程時 purchase_id 可留空；匯入銷課表時 purchase_id 請填購買課程編號（成交日期＋序號，例如 20260817-001），亦相容舊版 UUID。")
-    course_template=pd.DataFrame(columns=["purchase_id","member_name","purchase_kind","coach_username","course_name","total_sessions","session_hours","total_amount","purchase_date","expiry_date","payment_plan","installment_count","paid_amount","paid_date","referral","note"])
+    course_template=pd.DataFrame(columns=["purchase_id","member_name","purchase_kind","coach_username","course_name","report_category","total_sessions","session_hours","total_amount","purchase_date","expiry_date","payment_plan","installment_count","paid_amount","paid_date","referral","note"])
     usage_template=pd.DataFrame(columns=["purchase_id","usage_date","actual_usage_date","is_makeup","coach_username","note"])
     st.download_button("下載匯入範本",_excel_bytes({"會員課程":course_template,"銷課表":usage_template}),
         file_name="會員課程與銷課表_匯入範本.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -2006,7 +2012,7 @@ def member_course_io_page(me):
                 errors.append("至少需要『會員課程』或『銷課表』工作表。")
             if "會員課程" in book.sheet_names:
                 df=pd.read_excel(book,"會員課程").fillna("")
-                required=set(course_template.columns)-{"purchase_id","referral","note"}
+                required=set(course_template.columns)-{"purchase_id","report_category","referral","note"}
                 if not required.issubset(df.columns): errors.append("會員課程欄位不完整。")
                 else:
                     for i,row in df.iterrows():
@@ -2033,6 +2039,7 @@ def member_course_io_page(me):
                             if expiry<purchased: raise ValueError("有效日期不可早於購買日期")
                             clean_courses.append({"source_id":source_id,"member_name":str(row["member_name"]).strip(),
                                 "coach_id":coach_reference_to_id[coach_key],"purchase_kind":kind,"course_name":str(row["course_name"]).strip(),
+                                "report_category":str(row.get("report_category","")).strip() or None,
                                 "total_sessions":int(row["total_sessions"]),"session_hours":float(row["session_hours"]),"total_amount":float(row["total_amount"]),
                                 "purchase_date":str(purchased),"expiry_date":str(expiry),"payment_plan":plan,"installment_count":int(row["installment_count"]),
                                 "paid_amount":float(row["paid_amount"] or 0),"paid_date":str(pd.to_datetime(row["paid_date"]).date()) if row["paid_date"] else str(purchased),
@@ -2145,10 +2152,13 @@ def member_course_io_page(me):
                         file_name=f"匯入重複資料明細_{date.today()}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 if st.button("確認匯入",type="primary"):
+                    import_catalog=rows(admin.table("course_catalog").select("course_name,report_category"))
+                    import_report_category={str(x.get("course_name") or "").strip():str(x.get("report_category") or "未分類").strip() or "未分類" for x in import_catalog}
                     for item in clean_courses:
                         existing=rows(admin.table("members").select("id").eq("member_name",item["member_name"]))
                         member_id=existing[0]["id"] if existing else rows(admin.table("members").insert({"member_name":item["member_name"],"created_by":me["id"]}))[0]["id"]
                         payload={k:v for k,v in item.items() if k not in ("source_id","member_name","paid_amount","paid_date")}
+                        payload["report_category"]=payload.get("report_category") or import_report_category.get(payload.get("course_name"),"未分類")
                         payload.update({"member_id":member_id,"created_by":me["id"]})
                         created=rows(admin.table("purchases").insert(payload))[0]
                         source_key=str(item.get("source_id") or "").strip().casefold()
@@ -3690,10 +3700,11 @@ def financial_report_page(me):
         except Exception:
             monthly_terminations=[]
         monthly_purchase_ids=list({x["purchase_id"] for x in monthly_usages+monthly_terminations})
-        monthly_purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,session_hours,total_sessions,total_amount,purchase_date,purchase_kind,referral,created_at").in_("id",monthly_purchase_ids)) if monthly_purchase_ids else []
+        monthly_purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,report_category,session_hours,total_sessions,total_amount,purchase_date,purchase_kind,referral,created_at").in_("id",monthly_purchase_ids)) if monthly_purchase_ids else []
         monthly_purchase_map={x["id"]:x for x in monthly_purchases}
-        monthly_course_catalog=rows(client().table("course_catalog").select("course_name,course_type"))
+        monthly_course_catalog=rows(client().table("course_catalog").select("course_name,course_type,report_category"))
         monthly_course_type={str(x.get("course_name") or "").strip():str(x.get("course_type") or "").strip() for x in monthly_course_catalog}
+        monthly_report_category={str(x.get("course_name") or "").strip():str(x.get("report_category") or "未分類").strip() or "未分類" for x in monthly_course_catalog}
         monthly_member_ids=list({x.get("member_id") for x in monthly_purchases if x.get("member_id")})
         monthly_members=rows(client().table("members").select("id,member_name").in_("id",monthly_member_ids)) if monthly_member_ids else []
         monthly_member_name={x["id"]:x["member_name"] for x in monthly_members}
@@ -3708,13 +3719,15 @@ def financial_report_page(me):
 
         all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at").order("purchase_date"))
         bonus_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
-        monthly_sales_df=pd.DataFrame([{"購買_ID":bonus_purchase_code_map.get(x["purchase_id"],x["purchase_id"]),
-            "日期":x["usage_date"],"姓名":monthly_member_name.get(monthly_purchase_map.get(x["purchase_id"],{}).get("member_id"),"未知"),
-            "銷課金額":_tax_display_amount(x.get("deducted_amount"),"未稅"),
+        monthly_sales_df=pd.DataFrame([{"日期":x["usage_date"],
+            "購買_ID":bonus_purchase_code_map.get(x["purchase_id"],x["purchase_id"]),
+            "姓名":monthly_member_name.get(monthly_purchase_map.get(x["purchase_id"],{}).get("member_id"),"未知"),
             "教練":monthly_coach_name.get(x.get("coach_id"),"未知"),
+            "報表分類":monthly_purchase_map.get(x["purchase_id"],{}).get("report_category") or monthly_report_category.get(monthly_purchase_map.get(x["purchase_id"],{}).get("course_name"),"未分類"),
+            "銷課金額":_tax_display_amount(x.get("deducted_amount"),"未稅"),
             "購買堂數":int(monthly_purchase_map.get(x["purchase_id"],{}).get("total_sessions") or 0),
             "購買課程":monthly_purchase_map.get(x["purchase_id"],{}).get("course_name") or ""} for x in monthly_usages],
-            columns=["購買_ID","日期","姓名","銷課金額","教練","購買堂數","購買課程"])
+            columns=["日期","購買_ID","姓名","教練","報表分類","銷課金額","購買堂數","購買課程"])
         monthly_stored_project_df=pd.DataFrame([{"專案":x["project_name"],"日期":x["entry_date"],"姓名":x.get("person_name") or "",
             "扣款金額（未稅）":_tax_display_amount(x.get("line_amount"),"未稅")} for x in monthly_projects if monthly_project_type.get(x.get("project_id"))=="stored"],
             columns=["專案","日期","姓名","扣款金額（未稅）"])
@@ -3922,4 +3935,3 @@ try:
     {"每日營運":daily_page,"客戶管理":customer_admin_page,"課程購買":purchase_page,"銷課表":usage_page,"教練查詢":coach_query_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")
-

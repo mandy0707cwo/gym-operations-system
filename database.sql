@@ -27,6 +27,7 @@ create table public.course_catalog (
   id uuid primary key default gen_random_uuid(),
   course_name text not null unique check (length(trim(course_name)) > 0),
   course_type text not null default '未分類' check (length(trim(course_type)) > 0),
+  report_category text not null default '未分類' check (length(trim(report_category)) > 0),
   session_hours numeric(4,2) not null default 1 check (session_hours > 0),
   created_at timestamptz not null default now()
 );
@@ -101,6 +102,7 @@ create table public.purchases (
   purchase_kind public.purchase_kind not null,
   coach_id uuid not null references public.profiles(id),
   course_name text not null check (length(trim(course_name)) > 0),
+  report_category text not null default '未分類' check (length(trim(report_category)) > 0),
   total_sessions integer not null check (total_sessions > 0),
   session_hours numeric(4,2) not null default 1 check (session_hours > 0),
   total_amount numeric(12,2) not null check (total_amount >= 0),
@@ -305,4 +307,3 @@ create policy cancellation_insert on public.session_cancellations for insert to 
 
 grant select on public.purchase_balances to authenticated;
 grant execute on function public.consume_session(uuid,date,uuid,text,boolean,date) to authenticated;
-
