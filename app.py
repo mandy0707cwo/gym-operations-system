@@ -26,7 +26,7 @@ LABELS = {
     "course_name":"課程名稱", "total_sessions":"原始堂數", "session_hours":"每堂課時數",
     "remaining_sessions":"剩餘堂數", "remaining_amount":"剩餘金額",
     "purchase_date":"成交日期", "usage_date":"銷課日期", "actual_usage_date":"實際銷課日期",
-    "is_makeup_label":"補單", "session_seq":"第幾堂", "deducted_amount":"扣課金額",
+    "is_makeup_label":"補單", "session_seq":"第幾堂", "deducted_amount":"扣課金額", "deducted_net_amount":"扣課未稅金額",
     "entry_date":"日期", "content":"內容", "hours":"時數",
     "deducted_hours":"應扣除時間", "deduction_reason":"扣除原因",
     "cancel_date":"取消日期", "cancelled_sessions":"上課取消堂數", "reason":"取消原因",
@@ -103,6 +103,11 @@ def usage_counts_for_execution(usage):
     usage_date=str(usage.get("usage_date") or "")
     actual_date=str(usage.get("actual_usage_date") or usage_date)
     return bool(usage_date) and usage_date[:7]==actual_date[:7]
+
+def usage_net_amount(usage):
+    """返回銷課時已固定入帳的未稅金額。舊資料庫尚未升級時保留查詢相容性。"""
+    stored=usage.get("deducted_net_amount")
+    return float(stored) if stored is not None else float(_tax_display_amount(usage.get("deducted_amount"),"未稅"))
 
 def usage_sequence_by_date(usage_records):
     """依同一購買課程的銷課日期與建立順序，計算畫面應顯示的累計堂次。"""
@@ -228,7 +233,7 @@ def show_table(data, columns=None):
     if columns:
         df = df[[c for c in columns if c in df.columns]]
     display_df=df.rename(columns=LABELS)
-    money_columns={LABELS.get(x,x) for x in ("total_amount","remaining_amount","deducted_amount","amount","unit_price","line_total","line_amount","price","stored_amount","used_amount")}
+    money_columns={LABELS.get(x,x) for x in ("total_amount","remaining_amount","deducted_amount","deducted_net_amount","amount","unit_price","line_total","line_amount","price","stored_amount","used_amount")}
     money_config={x:st.column_config.NumberColumn(format="$ %.0f") for x in money_columns if x in display_df.columns}
     st.dataframe(display_df, use_container_width=True, hide_index=True, column_config=money_config)
 
@@ -799,7 +804,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             detail_balances=[x for x in detail_balances if detail_member_key in str(x.get("member_name") or "").casefold()]
         detail_balance_map={x["purchase_id"]:x for x in detail_balances}
         detail_purchase_ids=list(detail_balance_map)
-        detail_usages=(paged_rows(lambda: client().table("session_usages").select("id,purchase_id,usage_date,actual_usage_date,is_makeup,session_seq,coach_id,deducted_amount,note,created_at")
+        detail_usages=(paged_rows(lambda: client().table("session_usages").select("id,purchase_id,usage_date,actual_usage_date,is_makeup,session_seq,coach_id,deducted_amount,deducted_net_amount,note,created_at")
             .in_("purchase_id",detail_purchase_ids).order("usage_date").order("created_at").order("id")) if detail_purchase_ids else [])
         displayed_sequence=usage_sequence_by_date(detail_usages)
         detail_usages.sort(key=lambda x:(str(x.get("usage_date") or ""),str(x.get("created_at") or ""),str(x.get("id") or "")),reverse=True)
@@ -817,7 +822,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             if enable_export:
                 usage_amount=float(usage.get("deducted_amount") or 0)
                 usage_detail_row["銷課金額（含稅）"]=usage_amount
-                usage_detail_row["銷課金額（未稅）"]=_tax_display_amount(usage_amount,"未稅")
+                usage_detail_row["銷課金額（未稅）"]=usage_net_amount(usage)
             usage_detail_rows.append(usage_detail_row)
         usage_detail_columns=["購買_ID","教練","會員名稱","課程名稱","銷課日期","實際銷課日期"]
         if enable_export:
@@ -829,6 +834,13 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             usage_detail_config={name:st.column_config.NumberColumn(format="$ %.0f")
                 for name in ["銷課金額（含稅）","銷課金額（未稅）"]} if enable_export else {}
             st.dataframe(usage_history_df,hide_index=True,width="stretch",column_config=usage_detail_config)
+            if enable_export:
+                usage_gross_total=sum(float(x.get("銷課金額（含稅）") or 0) for x in usage_detail_rows)
+                usage_net_total=sum(float(x.get("銷課金額（未稅）") or 0) for x in usage_detail_rows)
+                total_cols=st.columns(3)
+                total_cols[0].metric("銷課金額合計（含稅）",f"$ {usage_gross_total:,.0f}",border=True)
+                total_cols[1].metric("銷課金額合計（未稅）",f"$ {usage_net_total:,.0f}",border=True)
+                total_cols[2].metric("營業稅合計",f"$ {usage_gross_total-usage_net_total:,.0f}",border=True)
         else:
             st.info("目前沒有符合條件的銷課明細。")
 
@@ -1666,8 +1678,8 @@ def _financial_backup_frames(table_data):
         course_type_totals.setdefault(ct,{"received":0,"usage":0})["received"]+=float(payment.get("amount") or 0)
     for x in usages:
         p=purchase_map.get(x.get("purchase_id"),{}); ct=course_type_map.get(str(p.get("course_name") or "").strip(),"未分類")
-        course_type_totals.setdefault(ct,{"received":0,"usage":0})["usage"]+=float(x.get("deducted_amount") or 0)
-    course_type_rows=[{"課程屬性":k,"實際預收金額（未稅）":_tax_display_amount(v["received"],"未稅"),"銷課未稅金額":_tax_display_amount(v["usage"],"未稅")} for k,v in sorted(course_type_totals.items())]
+        course_type_totals.setdefault(ct,{"received":0,"usage":0})["usage"]+=usage_net_amount(x)
+    course_type_rows=[{"課程屬性":k,"實際預收金額（未稅）":_tax_display_amount(v["received"],"未稅"),"銷課未稅金額":round(v["usage"])} for k,v in sorted(course_type_totals.items())]
 
     termination_rows=[]
     for x in sorted(terminations,key=lambda r:str(r.get("termination_date") or ""),reverse=True):
@@ -1683,7 +1695,7 @@ def _financial_backup_frames(table_data):
         p=purchase_map.get(x.get("purchase_id"),{})
         usage_rows.append({"銷課日期":x.get("usage_date"),"購買_ID":purchase_codes.get(x.get("purchase_id"),""),"教練":coach_name.get(x.get("coach_id"),""),
             "會員名稱":member_name.get(p.get("member_id"),""),"課程名稱":p.get("course_name") or "","堂次":x.get("session_seq"),
-            "銷課時數":float(p.get("session_hours") or 1),"銷課金額（未稅）":_tax_display_amount(x.get("deducted_amount"),"未稅"),"備註":x.get("note") or ""})
+            "銷課時數":float(p.get("session_hours") or 1),"銷課金額（未稅）":usage_net_amount(x),"備註":x.get("note") or ""})
 
     coach_hours=[]; coach_revenues=[]
     trials=[x for x in table_data.get("trial_items",[]) if str(x.get("entry_date") or "")<=today]
@@ -1711,7 +1723,7 @@ def _financial_backup_frames(table_data):
         coach_hours.append({"報表月份":report_month,"教練":name,"體驗時數":trial_hours,"單堂時數":single_hours,"活動時數":event_hours,"專案時數":project_hours,
             "銷課時數":normal_hours,"可計執行時數":trial_hours+single_hours+event_hours+project_hours+normal_hours,"動磁波時數":magnetic_hours})
         trial_rev=sum(_tax_display_amount(x.get("amount"),"未稅") for x in month_trials if x.get("coach_id")==coach_id); single_rev=sum(_tax_display_amount(x.get("amount"),"未稅") for x in month_singles if x.get("coach_id")==coach_id)
-        project_rev=sum(_tax_display_amount(x.get("line_amount"),"未稅") for x in month_projects if x.get("coach_id")==coach_id); usage_rev=sum(_tax_display_amount(x.get("deducted_amount"),"未稅") for x in coach_usages)
+        project_rev=sum(_tax_display_amount(x.get("line_amount"),"未稅") for x in month_projects if x.get("coach_id")==coach_id); usage_rev=sum(usage_net_amount(x) for x in coach_usages)
         coach_revenues.append({"報表月份":report_month,"教練":name,"體驗項目金額（未稅）":round(trial_rev),"單堂銷售金額（未稅）":round(single_rev),"專案（未稅）":round(project_rev),"銷課（未稅）":round(usage_rev),"金額總計（未稅）":round(trial_rev+single_rev+project_rev+usage_rev)})
 
     bonus_rules=sorted([x for x in table_data.get("bonus_rules",[]) if x.get("active")],key=lambda x:str(x.get("effective_from") or ""),reverse=True)
@@ -1991,8 +2003,8 @@ def member_course_io_page(me):
             "member_name":member_names.get(p.get("member_id"),""),"course_name":p.get("course_name",""),
             "usage_date":x["usage_date"],"actual_usage_date":x.get("actual_usage_date") or x["usage_date"],
             "is_makeup":bool(x.get("is_makeup")),"coach_username":id_to_display_name.get(x["coach_id"],""),
-            "session_seq":x["session_seq"],"deducted_amount":x["deducted_amount"],"note":x.get("note") or ""})
-    usage_export_columns=["purchase_id","usage_id","member_name","course_name","usage_date","actual_usage_date","is_makeup","coach_username","session_seq","deducted_amount","note"]
+            "session_seq":x["session_seq"],"deducted_amount":x["deducted_amount"],"deducted_net_amount":usage_net_amount(x),"note":x.get("note") or ""})
+    usage_export_columns=["purchase_id","usage_id","member_name","course_name","usage_date","actual_usage_date","is_makeup","coach_username","session_seq","deducted_amount","deducted_net_amount","note"]
     trial_rows=rows(admin.table("trial_items").select("entry_date,member_name,content,detail_content,hours,amount,note,coach_id,created_at").order("entry_date"))
     single_sale_rows=rows(admin.table("single_sales").select("entry_date,member_name,content,hours,amount,note,coach_id,created_at").order("entry_date"))
     event_rows=rows(admin.table("event_supports").select("entry_date,content,hours,deducted_hours,deduction_reason,coach_id,created_at").order("entry_date"))
@@ -3411,7 +3423,7 @@ def financial_report_page(me):
             usage_page_size=1000
             usage_offset=0
             while True:
-                usage_query=(client().table("session_usages").select("purchase_id,coach_id,deducted_amount,usage_date,id")
+                usage_query=(client().table("session_usages").select("purchase_id,coach_id,deducted_amount,deducted_net_amount,usage_date,id")
                     .gte("usage_date",str(other_start)).lte("usage_date",str(other_end))
                     .order("usage_date",desc=True).order("id",desc=True)
                     .range(usage_offset,usage_offset+usage_page_size-1))
@@ -3430,13 +3442,13 @@ def financial_report_page(me):
                 course_name=str(purchase.get("course_name") or "").strip()
                 course_type=course_type_map.get(course_name,"未分類")
                 totals=course_type_totals.setdefault(course_type,{"received":0.0,"usage":0.0})
-                totals["usage"]+=float(usage.get("deducted_amount") or 0)
+                totals["usage"]+=usage_net_amount(usage)
             course_type_rows=[]
             for course_type,totals in sorted(course_type_totals.items()):
                 course_type_rows.append({
                     "課程屬性":course_type,
                     "實際預收金額（未稅）":_tax_display_amount(totals["received"],"未稅"),
-                    "銷課未稅金額":_tax_display_amount(totals["usage"],"未稅"),
+                    "銷課未稅金額":round(totals["usage"]),
                 })
             course_type_columns=["課程屬性","實際預收金額（未稅）","銷課未稅金額"]
             course_type_df=pd.DataFrame(course_type_rows,columns=course_type_columns)
@@ -3705,7 +3717,7 @@ def financial_report_page(me):
         st.markdown(f"- 報表期間：{month_start} 至 {month_end}")
 
         monthly_coaches=coach_options(); monthly_coach_name={v:k for k,v in monthly_coaches.items()}
-        monthly_usages=rows(client().table("session_usages").select("purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount")
+        monthly_usages=rows(client().table("session_usages").select("purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount,deducted_net_amount")
             .gte("usage_date",str(month_start)).lte("usage_date",str(month_end)).order("usage_date"))
         try:
             monthly_terminations=rows(client().table("course_terminations").select("purchase_id,termination_date,termination_type,remaining_amount,fee_amount,refund_amount,recognized_amount,completion_bonus_eligible,completion_bonus_coach_id,reason")
@@ -3737,7 +3749,7 @@ def financial_report_page(me):
             "姓名":monthly_member_name.get(monthly_purchase_map.get(x["purchase_id"],{}).get("member_id"),"未知"),
             "教練":monthly_coach_name.get(x.get("coach_id"),"未知"),
             "報表分類":monthly_purchase_map.get(x["purchase_id"],{}).get("report_category") or monthly_report_category.get(monthly_purchase_map.get(x["purchase_id"],{}).get("course_name"),"未分類"),
-            "銷課金額":_tax_display_amount(x.get("deducted_amount"),"未稅"),
+            "銷課金額":usage_net_amount(x),
             "購買堂數":int(monthly_purchase_map.get(x["purchase_id"],{}).get("total_sessions") or 0),
             "購買課程":monthly_purchase_map.get(x["purchase_id"],{}).get("course_name") or ""} for x in monthly_usages],
             columns=["日期","購買_ID","姓名","教練","報表分類","銷課金額","購買堂數","購買課程"])
@@ -3781,7 +3793,7 @@ def financial_report_page(me):
             trial_revenue=sum(_tax_display_amount(x.get("amount"),"未稅") for x in coach_trials)
             single_revenue=sum(_tax_display_amount(x.get("amount"),"未稅") for x in coach_singles)
             project_revenue=sum(_tax_display_amount(x.get("line_amount"),"未稅") for x in monthly_projects if x.get("coach_id")==coach_id)
-            usage_revenue=sum(_tax_display_amount(x.get("deducted_amount"),"未稅") for x in monthly_usages if x.get("coach_id")==coach_id)
+            usage_revenue=sum(usage_net_amount(x) for x in monthly_usages if x.get("coach_id")==coach_id)
             coach_revenue_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"體驗項目金額（未稅）":round(trial_revenue),"單堂銷售金額（未稅）":round(single_revenue),
                 "專案（未稅）":round(project_revenue),"銷課（未稅）":round(usage_revenue),"金額總計（未稅）":round(trial_revenue+single_revenue+project_revenue+usage_revenue)})
         monthly_hours_df=pd.DataFrame(coach_hour_rows,columns=["教練","體驗時數","單堂時數","活動時數","專案時數","銷課時數","可計執行時數","動磁波時數"])

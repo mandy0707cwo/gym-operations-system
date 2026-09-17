@@ -154,6 +154,7 @@ create table public.session_usages (
   coach_id uuid not null references public.profiles(id),
   session_seq integer not null check (session_seq > 0),
   deducted_amount numeric(12,2) not null check (deducted_amount >= 0),
+  deducted_net_amount numeric(12,2) not null check (deducted_net_amount >= 0),
   note text,
   created_at timestamptz not null default now(),
   created_by uuid not null references public.profiles(id),
@@ -215,6 +216,9 @@ declare
   v_used integer;
   v_next_seq integer;
   v_deducted numeric(12,2);
+  v_deducted_net numeric(12,2);
+  v_prior_gross numeric(12,2);
+  v_prior_net numeric(12,2);
   v_actual_usage_date date;
   v_row public.session_usages%rowtype;
 begin
@@ -247,8 +251,11 @@ begin
   else
     v_deducted := round(v_purchase.total_amount/v_purchase.total_sessions,2);
   end if;
-  insert into public.session_usages(purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount,note,created_by)
-  values(p_purchase_id,p_usage_date,v_actual_usage_date,coalesce(p_is_makeup,false),p_coach_id,v_next_seq,v_deducted,nullif(trim(p_note),''),auth.uid()) returning * into v_row;
+  select coalesce(sum(deducted_amount),0),coalesce(sum(deducted_net_amount),0)
+    into v_prior_gross,v_prior_net from public.session_usages where purchase_id=p_purchase_id;
+  v_deducted_net := round((v_prior_gross+v_deducted)/1.05,0)-v_prior_net;
+  insert into public.session_usages(purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount,deducted_net_amount,note,created_by)
+  values(p_purchase_id,p_usage_date,v_actual_usage_date,coalesce(p_is_makeup,false),p_coach_id,v_next_seq,v_deducted,v_deducted_net,nullif(trim(p_note),''),auth.uid()) returning * into v_row;
   insert into public.daily_operations(operation_date,coach_id,classes_held,classes_cancelled,trial_visits,trial_conversions)
   values(p_usage_date,p_coach_id,1,0,0,0)
   on conflict(operation_date,coach_id) do update
