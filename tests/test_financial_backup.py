@@ -219,3 +219,10 @@ def test_magnetic_wave_purchase_accepts_course_name_or_catalog_type():
     assert is_magnetic({"course_name": "動磁波課程"}, {})
     assert is_magnetic({"course_name": "身體平衡"}, {"身體平衡": "動磁波"})
     assert not is_magnetic({"course_name": "運動訓練"}, {"運動訓練": "一般課程"})
+
+
+def test_member_course_query_uses_actual_prepaid_balance():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert '"實際預收金額":payment["amount"]' in source
+    assert '"實際預收餘額":payment["amount"]-(total_amount-float(item["remaining_amount"]))' in source
+    assert 'detail_columns=["購買_ID","教練","會員名稱","課程名稱","時數","成交金額","實際預收金額","實際預收餘額"' in source
