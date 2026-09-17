@@ -9,11 +9,13 @@ import pandas as pd
 
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 CUSTOMER_MIGRATION_PATH = Path(__file__).resolve().parents[1] / "migration_customer_master_v1_12_21.sql"
+USAGE_NET_MIGRATION_PATH = Path(__file__).resolve().parents[1] / "migration_usage_net_amount_v1_12_42.sql"
 FUNCTIONS = {
     "is_magnetic_wave_course",
     "is_magnetic_wave_operation",
     "is_magnetic_wave_purchase",
     "usage_counts_for_execution",
+    "usage_net_amount",
     "usage_sequence_by_date",
     "course_status_label",
     "completed_purchase_ids",
@@ -230,8 +232,22 @@ def test_member_course_query_uses_actual_prepaid_balance():
 
 def test_usage_detail_query_displays_deducted_amount_after_actual_date():
     source = APP_PATH.read_text(encoding="utf-8")
-    assert 'coach_id,deducted_amount,note,created_at' in source
+    assert 'coach_id,deducted_amount,deducted_net_amount,note,created_at' in source
     assert 'usage_detail_row["銷課金額（含稅）"]=usage_amount' in source
-    assert 'usage_detail_row["銷課金額（未稅）"]=_tax_display_amount(usage_amount,"未稅")' in source
+    assert 'usage_detail_row["銷課金額（未稅）"]=usage_net_amount(usage)' in source
     assert 'usage_detail_columns.extend(["銷課金額（含稅）","銷課金額（未稅）"])' in source
     assert 'usage_detail_columns.extend(["補單","堂數","有效期限"])' in source
+
+
+def test_usage_net_amount_prefers_persisted_accounting_value():
+    usage_net = load_functions()["usage_net_amount"]
+    assert usage_net({"deducted_amount": 1690, "deducted_net_amount": 1609}) == 1609
+    assert usage_net({"deducted_amount": 1690}) == 1610
+
+
+def test_usage_net_amount_migration_allocates_rounding_difference():
+    migration = USAGE_NET_MIGRATION_PATH.read_text(encoding="utf-8")
+    assert "add column if not exists deducted_net_amount numeric(12,2)" in migration
+    assert "partition by purchase_id" in migration
+    assert "round((v_prior_gross+v_deducted)/1.05,0)-v_prior_net" in migration
+    assert "having round(sum(deducted_amount)/1.05,0) <> sum(deducted_net_amount)" in migration
