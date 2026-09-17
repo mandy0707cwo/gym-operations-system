@@ -116,7 +116,7 @@ def test_record_admin_performance_guards_are_present():
 def test_monthly_sales_columns_include_purchase_id_and_coach():
     source = APP_PATH.read_text(encoding="utf-8")
     assert '"購買_ID":bonus_purchase_code_map.get(x["purchase_id"],x["purchase_id"])' in source
-    assert 'columns=["購買_ID","日期","姓名","銷課金額","教練","購買堂數","購買課程"]' in source
+    assert 'columns=["日期","購買_ID","姓名","教練","報表分類","銷課金額","購買堂數","購買課程"]' in source
 
 
 def test_coach_query_is_a_sidebar_page_not_a_usage_tab():
