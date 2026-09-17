@@ -3114,7 +3114,7 @@ def financial_report_page(me):
         # 預收明細以付款日期判斷是否列入，包含查詢期間收到的分期款。
         period_payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").gte("paid_date",str(start)).lte("paid_date",str(end)).order("paid_date",desc=True))
         period_purchase_ids=list({x["purchase_id"] for x in period_payments})
-        purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,purchase_kind,payment_plan,installment_count,referral,note").in_("id",period_purchase_ids)) if period_purchase_ids else []
+        purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,purchase_kind,payment_plan,installment_count,referral,note,status").in_("id",period_purchase_ids)) if period_purchase_ids else []
         if selected_coach_id: purchases=[x for x in purchases if x.get("coach_id")==selected_coach_id]
         if selected_member_id: purchases=[x for x in purchases if x.get("member_id")==selected_member_id]
         purchase_ids=[x["id"] for x in purchases]
@@ -3136,6 +3136,16 @@ def financial_report_page(me):
             purchase_id=payment["purchase_id"]
             period_received_map[purchase_id]=period_received_map.get(purchase_id,0)+float(payment["amount"])
             period_payment_date_map[purchase_id]=max(str(payment["paid_date"]),period_payment_date_map.get(purchase_id,""))
+        status_label_map={"active":"進行中","completed":"已完成","expired":"逾期中止","cancelled":"退費中止"}
+        completed_ids=[x["id"] for x in purchases if x.get("status")=="completed"]
+        terminated_ids=[x["id"] for x in purchases if x.get("status") in ("expired","cancelled")]
+        completion_usages=rows(client().table("session_usages").select("purchase_id,usage_date").in_("purchase_id",completed_ids).order("usage_date",desc=True)) if completed_ids else []
+        termination_records=rows(client().table("course_terminations").select("purchase_id,termination_date").in_("purchase_id",terminated_ids).order("termination_date",desc=True)) if terminated_ids else []
+        course_end_date_map={}
+        for usage in completion_usages:
+            course_end_date_map.setdefault(usage["purchase_id"],usage.get("usage_date"))
+        for termination in termination_records:
+            course_end_date_map.setdefault(termination["purchase_id"],termination.get("termination_date"))
         balance_rows=[]
         for purchase in purchases:
             contracted=float(purchase["total_amount"])
@@ -3156,7 +3166,8 @@ def financial_report_page(me):
                 "成交日期":purchase.get("purchase_date"),"會員名稱":member_name_map.get(purchase["member_id"],""),
                 "課程名稱":purchase.get("course_name") or "","堂數":int(purchase.get("total_sessions") or 0),
                 "教練":coach_name_map.get(purchase.get("coach_id"),"未知"),"有效日期":purchase.get("expiry_date"),
-                "購買類型":purchase_kind_label,"分期付清":payment_status,
+                "購買類型":purchase_kind_label,"課程狀態":status_label_map.get(purchase.get("status"),purchase.get("status") or ""),
+                "課程結束日期":course_end_date_map.get(purchase["id"]),"分期付清":payment_status,
                 "醫生轉介":purchase.get("referral") or "","備註":purchase.get("note") or "",
                 "成交總金額":_tax_display_amount(contracted,detail_tax_mode) if purchase_in_period else None,"實際預收金額":_tax_display_amount(period_prepaid,detail_tax_mode),
                 "銷課金額":_tax_display_amount(used,detail_tax_mode),"剩餘金額":_tax_display_amount(remaining,detail_tax_mode),
@@ -3169,16 +3180,18 @@ def financial_report_page(me):
             "購買_ID":x["購買_ID"],"成交日期":x["成交日期"],"會員名稱":x["會員名稱"],"堂數":x["堂數"],
             "課程名稱":x["課程名稱"],"教練":x["教練"],
             "成交金額":_tax_display_amount(x["_含稅成交"],total_tax_mode) if x["_含稅成交"] else None,
-            "有效日期":x["有效日期"],"購買類型":x["購買類型"],"分期付清":x["分期付清"],
+            "有效日期":x["有效日期"],"購買類型":x["購買類型"],"課程狀態":x["課程狀態"],
+            "課程結束日期":x["課程結束日期"],"分期付清":x["分期付清"],
             "醫生轉介":x["醫生轉介"],"備註":x["備註"],
         } for x in balance_rows]
         prepaid_total_rows.append({
             "購買_ID":"合計","成交日期":None,"會員名稱":"","堂數":sum(x["堂數"] for x in balance_rows),
             "課程名稱":"","教練":"",
             "成交金額":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
-            "有效日期":None,"購買類型":"","分期付清":"","醫生轉介":"","備註":"",
+            "有效日期":None,"購買類型":"","課程狀態":"","課程結束日期":None,
+            "分期付清":"","醫生轉介":"","備註":"",
         })
-        prepaid_total_df=pd.DataFrame(prepaid_total_rows,columns=["購買_ID","成交日期","會員名稱","堂數","課程名稱","教練","成交金額","有效日期","購買類型","分期付清","醫生轉介","備註"])
+        prepaid_total_df=pd.DataFrame(prepaid_total_rows,columns=["購買_ID","成交日期","會員名稱","堂數","課程名稱","教練","成交金額","有效日期","購買類型","課程狀態","課程結束日期","分期付清","醫生轉介","備註"])
 
         # 預收餘額明細為截至今日的即時餘額，不受上方日期區間限制。
         outstanding_purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,status")
@@ -3199,7 +3212,6 @@ def financial_report_page(me):
             outstanding_used_map[usage["purchase_id"]]=outstanding_used_map.get(usage["purchase_id"],0)+float(usage.get("deducted_amount") or 0)
             outstanding_used_sessions_map[usage["purchase_id"]]=outstanding_used_sessions_map.get(usage["purchase_id"],0)+1
         outstanding_rows=[]
-        status_label_map={"active":"進行中","completed":"已完成","expired":"逾期中止","cancelled":"退費中止"}
         for purchase in outstanding_purchases:
             contracted=float(purchase.get("total_amount") or 0)
             received=min(outstanding_paid_map.get(purchase["id"],0),contracted)
