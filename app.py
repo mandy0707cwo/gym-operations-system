@@ -3114,7 +3114,7 @@ def financial_report_page(me):
         # 預收明細以付款日期判斷是否列入，包含查詢期間收到的分期款。
         period_payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").gte("paid_date",str(start)).lte("paid_date",str(end)).order("paid_date",desc=True))
         period_purchase_ids=list({x["purchase_id"] for x in period_payments})
-        purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,payment_plan,installment_count").in_("id",period_purchase_ids)) if period_purchase_ids else []
+        purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,purchase_kind,payment_plan,installment_count,referral,note").in_("id",period_purchase_ids)) if period_purchase_ids else []
         if selected_coach_id: purchases=[x for x in purchases if x.get("coach_id")==selected_coach_id]
         if selected_member_id: purchases=[x for x in purchases if x.get("member_id")==selected_member_id]
         purchase_ids=[x["id"] for x in purchases]
@@ -3151,9 +3151,13 @@ def financial_report_page(me):
                 payment_status=f'已付 {paid_count}/{int(purchase.get("installment_count") or 0)} 期'
             else:
                 payment_status="未付清"
+            purchase_kind_label="首次購買" if purchase.get("purchase_kind")=="first" else "續約" if purchase.get("purchase_kind")=="renewal" else purchase.get("purchase_kind") or ""
             balance_rows.append({"日期":period_payment_date_map.get(purchase["id"]),"購買_ID":financial_purchase_code_map.get(purchase["id"],""),
-                "會員名稱":member_name_map.get(purchase["member_id"],""),"課程名稱":purchase.get("course_name") or "","堂數":int(purchase.get("total_sessions") or 0),
-                "分期期數／付清":payment_status,
+                "成交日期":purchase.get("purchase_date"),"會員名稱":member_name_map.get(purchase["member_id"],""),
+                "課程名稱":purchase.get("course_name") or "","堂數":int(purchase.get("total_sessions") or 0),
+                "教練":coach_name_map.get(purchase.get("coach_id"),"未知"),"有效日期":purchase.get("expiry_date"),
+                "購買類型":purchase_kind_label,"分期付清":payment_status,
+                "醫生轉介":purchase.get("referral") or "","備註":purchase.get("note") or "",
                 "成交總金額":_tax_display_amount(contracted,detail_tax_mode) if purchase_in_period else None,"實際預收金額":_tax_display_amount(period_prepaid,detail_tax_mode),
                 "銷課金額":_tax_display_amount(used,detail_tax_mode),"剩餘金額":_tax_display_amount(remaining,detail_tax_mode),
                 "_含稅成交":contracted if purchase_in_period else 0,"_含稅預收":period_prepaid,"_含稅銷課":used,"_含稅剩餘":remaining})
@@ -3162,17 +3166,19 @@ def financial_report_page(me):
         totals_df=pd.DataFrame([{"成交總金額":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
             "實際預收總金額":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode)}])
         prepaid_total_rows=[{
-            "購買_ID":x["購買_ID"],"會員名稱":x["會員名稱"],"課程名稱":x["課程名稱"],"堂數":x["堂數"],
-            "分期期數／付清":x["分期期數／付清"],
+            "購買_ID":x["購買_ID"],"成交日期":x["成交日期"],"會員名稱":x["會員名稱"],"堂數":x["堂數"],
+            "課程名稱":x["課程名稱"],"教練":x["教練"],
             "成交金額":_tax_display_amount(x["_含稅成交"],total_tax_mode) if x["_含稅成交"] else None,
-            "實際預收金額":_tax_display_amount(x["_含稅預收"],total_tax_mode),
+            "有效日期":x["有效日期"],"購買類型":x["購買類型"],"分期付清":x["分期付清"],
+            "醫生轉介":x["醫生轉介"],"備註":x["備註"],
         } for x in balance_rows]
         prepaid_total_rows.append({
-            "購買_ID":"合計","會員名稱":"","課程名稱":"","堂數":sum(x["堂數"] for x in balance_rows),"分期期數／付清":"",
+            "購買_ID":"合計","成交日期":None,"會員名稱":"","堂數":sum(x["堂數"] for x in balance_rows),
+            "課程名稱":"","教練":"",
             "成交金額":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
-            "實際預收金額":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode),
+            "有效日期":None,"購買類型":"","分期付清":"","醫生轉介":"","備註":"",
         })
-        prepaid_total_df=pd.DataFrame(prepaid_total_rows,columns=["購買_ID","會員名稱","課程名稱","堂數","分期期數／付清","成交金額","實際預收金額"])
+        prepaid_total_df=pd.DataFrame(prepaid_total_rows,columns=["購買_ID","成交日期","會員名稱","堂數","課程名稱","教練","成交金額","有效日期","購買類型","分期付清","醫生轉介","備註"])
 
         # 預收餘額明細為截至今日的即時餘額，不受上方日期區間限制。
         outstanding_purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,status")
@@ -3239,7 +3245,7 @@ def financial_report_page(me):
             st.caption(f"以上總金額顯示為{total_tax_mode}；成交總金額只計算本期間成交資料，實際預收總金額為本期間實際收款。")
             st.markdown("**購買課程明細**")
             st.caption("每列為查詢期間內有實際收款的購買課程，包含分期款；非本期間成交者，成交金額留白。")
-            st.dataframe(center_member_report_columns(prepaid_total_df,["實際預收金額"]),hide_index=True,width="stretch",column_config=money_config)
+            st.dataframe(center_member_report_columns(prepaid_total_df,["成交金額"]),hide_index=True,width="stretch",column_config=money_config)
         with detail_tabs[1]:
             actual_prepaid_balance_total=_tax_display_amount(sum(x["_含稅預收餘額"] for x in outstanding_rows),detail_tax_mode)
             st.metric(f"目前預收餘額（{detail_tax_mode}）",f"$ {actual_prepaid_balance_total:,.0f}")
@@ -3736,11 +3742,14 @@ def financial_report_page(me):
         monthly_trial=rows(client().table("trial_items").select("entry_date,coach_id,content,course_type,hours,amount").gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date"))
         monthly_single=rows(client().table("single_sales").select("entry_date,coach_id,content,course_type,hours,amount").gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date"))
         monthly_events=rows(client().table("event_supports").select("entry_date,coach_id,hours,deducted_hours").gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date"))
-        monthly_projects=rows(client().table("project_entries").select("entry_date,project_id,project_name,person_name,coach_id,item_hours,quantity,line_amount")
+        monthly_projects=rows(client().table("project_entries").select("entry_date,project_id,project_catalog_id,project_name,person_name,coach_id,item_name,item_hours,quantity,line_amount")
             .gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date"))
         monthly_project_ids=list({x.get("project_id") for x in monthly_projects if x.get("project_id")})
         monthly_project_master=rows(client().table("projects").select("id,funding_type").in_("id",monthly_project_ids)) if monthly_project_ids else []
         monthly_project_type={x["id"]:x["funding_type"] for x in monthly_project_master}
+        monthly_project_catalog_ids=list({x.get("project_catalog_id") for x in monthly_projects if x.get("project_catalog_id")})
+        monthly_project_catalog=rows(client().table("project_catalog").select("id,course_type").in_("id",monthly_project_catalog_ids)) if monthly_project_catalog_ids else []
+        monthly_project_report_category={x["id"]:str(x.get("course_type") or "未分類").strip() or "未分類" for x in monthly_project_catalog}
 
         all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at").order("purchase_date"))
         bonus_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
@@ -3753,9 +3762,12 @@ def financial_report_page(me):
             "購買堂數":int(monthly_purchase_map.get(x["purchase_id"],{}).get("total_sessions") or 0),
             "購買課程":monthly_purchase_map.get(x["purchase_id"],{}).get("course_name") or ""} for x in monthly_usages],
             columns=["日期","購買_ID","姓名","教練","報表分類","銷課金額","購買堂數","購買課程"])
-        monthly_stored_project_df=pd.DataFrame([{"專案":x["project_name"],"日期":x["entry_date"],"姓名":x.get("person_name") or "",
-            "扣款金額（未稅）":_tax_display_amount(x.get("line_amount"),"未稅")} for x in monthly_projects if monthly_project_type.get(x.get("project_id"))=="stored"],
-            columns=["專案","日期","姓名","扣款金額（未稅）"])
+        monthly_stored_project_df=pd.DataFrame([{"日期":x["entry_date"],"專案":x["project_name"],
+            "教練":monthly_coach_name.get(x.get("coach_id"),"未知"),
+            "報表分類":monthly_project_report_category.get(x.get("project_catalog_id"),"未分類"),
+            "扣款金額（未稅）":_tax_display_amount(x.get("line_amount"),"未稅"),
+            "姓名":x.get("person_name") or ""} for x in monthly_projects if monthly_project_type.get(x.get("project_id"))=="stored"],
+            columns=["日期","專案","教練","報表分類","扣款金額（未稅）","姓名"])
         monthly_termination_rows=[]
         for item in monthly_terminations:
             purchase=monthly_purchase_map.get(item["purchase_id"],{})
