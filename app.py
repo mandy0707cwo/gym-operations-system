@@ -615,10 +615,12 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
                 "購買_ID":purchase_code_map.get(item["purchase_id"],item["purchase_id"]),
                 "教練":item.get("coach_name") or "未知教練","會員名稱":item["member_name"],"課程名稱":item["course_name"],
                 "時數":float(purchase.get("session_hours") or 1),"成交金額":total_amount,
-                "剩餘金額":float(item["remaining_amount"]),"堂數":f"{used_sessions}／{total_sessions}",
+                "實際預收金額":payment["amount"],
+                "實際預收餘額":payment["amount"]-(total_amount-float(item["remaining_amount"])),
+                "堂數":f"{used_sessions}／{total_sessions}",
                 "有效期限":item["expiry_date"],"付款狀況":payment_status,"課程狀況":course_status,
             })
-        detail_columns=["購買_ID","教練","會員名稱","課程名稱","時數","成交金額","剩餘金額","堂數","有效期限","付款狀況","課程狀況"]
+        detail_columns=["購買_ID","教練","會員名稱","課程名稱","時數","成交金額","實際預收金額","實際預收餘額","堂數","有效期限","付款狀況","課程狀況"]
         member_course_df=pd.DataFrame(detail,columns=detail_columns)
         export_sheets["會員課程查詢"]=member_course_df
         if detail:
@@ -630,7 +632,8 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
                     "課程名稱":st.column_config.TextColumn(width=95),
                     "時數":st.column_config.NumberColumn(format="%.2f",width=55),
                     "成交金額":st.column_config.NumberColumn(format="$ %.0f",width=85),
-                    "剩餘金額":st.column_config.NumberColumn(format="$ %.0f",width=85),
+                    "實際預收金額":st.column_config.NumberColumn(format="$ %.0f",width=95),
+                    "實際預收餘額":st.column_config.NumberColumn(format="$ %.0f",width=95),
                     "堂數":st.column_config.TextColumn(width=65),
                     "有效期限":st.column_config.TextColumn(width=90),
                     "付款狀況":st.column_config.TextColumn(width=115),
