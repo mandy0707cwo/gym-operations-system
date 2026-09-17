@@ -251,3 +251,21 @@ def test_usage_net_amount_migration_allocates_rounding_difference():
     assert "partition by purchase_id" in migration
     assert "round((v_prior_gross+v_deducted)/1.05,0)-v_prior_net" in migration
     assert "having round(sum(deducted_amount)/1.05,0) <> sum(deducted_net_amount)" in migration
+
+
+def test_monthly_project_usage_report_columns_and_category():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'select("entry_date,project_id,project_catalog_id,project_name,person_name,coach_id,item_name,item_hours,quantity,line_amount")' in source
+    assert 'monthly_project_report_category={x["id"]:str(x.get("course_type") or "未分類")' in source
+    assert '"教練":monthly_coach_name.get(x.get("coach_id"),"未知")' in source
+    assert '"報表分類":monthly_project_report_category.get(x.get("project_catalog_id"),"未分類")' in source
+    assert 'columns=["日期","專案","教練","報表分類","扣款金額（未稅）","姓名"]' in source
+
+
+def test_member_prepaid_summary_uses_requested_columns():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'purchase_date,expiry_date,purchase_kind,payment_plan,installment_count,referral,note' in source
+    assert '"教練":coach_name_map.get(purchase.get("coach_id"),"未知")' in source
+    assert '"購買類型":purchase_kind_label,"分期付清":payment_status' in source
+    assert '"醫生轉介":purchase.get("referral") or "","備註":purchase.get("note") or ""' in source
+    assert 'columns=["購買_ID","成交日期","會員名稱","堂數","課程名稱","教練","成交金額","有效日期","購買類型","分期付清","醫生轉介","備註"]' in source
