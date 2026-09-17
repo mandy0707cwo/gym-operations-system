@@ -226,3 +226,12 @@ def test_member_course_query_uses_actual_prepaid_balance():
     assert '"實際預收金額":payment["amount"]' in source
     assert '"實際預收餘額":payment["amount"]-(total_amount-float(item["remaining_amount"]))' in source
     assert 'detail_columns=["購買_ID","教練","會員名稱","課程名稱","時數","成交金額","實際預收金額","實際預收餘額"' in source
+
+
+def test_usage_detail_query_displays_deducted_amount_after_actual_date():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'coach_id,deducted_amount,note,created_at' in source
+    assert 'usage_detail_row["銷課金額（含稅）"]=usage_amount' in source
+    assert 'usage_detail_row["銷課金額（未稅）"]=_tax_display_amount(usage_amount,"未稅")' in source
+    assert 'usage_detail_columns.extend(["銷課金額（含稅）","銷課金額（未稅）"])' in source
+    assert 'usage_detail_columns.extend(["補單","堂數","有效期限"])' in source
