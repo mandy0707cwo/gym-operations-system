@@ -278,3 +278,12 @@ def test_member_prepaid_summary_resolves_course_end_date():
     assert 'terminated_ids=[x["id"] for x in purchases if x.get("status") in ("expired","cancelled")]' in source
     assert 'table("session_usages").select("purchase_id,usage_date")' in source
     assert 'table("course_terminations").select("purchase_id,termination_date")' in source
+
+
+def test_monthly_sales_uses_complete_paginated_sources():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'monthly_usages=paged_rows(lambda: client().table("session_usages")' in source
+    assert '.order("usage_date").order("id"))' in source
+    assert 'monthly_purchases=paged_rows(lambda: client().table("purchases")' in source
+    assert 'monthly_members=paged_rows(lambda: client().table("members")' in source
+    assert 'all_purchase_keys=paged_rows(lambda: client().table("purchases")' in source
