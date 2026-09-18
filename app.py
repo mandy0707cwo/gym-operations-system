@@ -1584,17 +1584,55 @@ def project_admin_page(me):
 
 def _excel_bytes(sheet_frames):
     output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter", datetime_format="yyyy-mm-dd") as writer:
+    with pd.ExcelWriter(output, engine="xlsxwriter", date_format="yyyy-mm-dd", datetime_format="yyyy-mm-dd hh:mm:ss") as writer:
+        date_cell_format = writer.book.add_format({"num_format": "yyyy-mm-dd"})
+        datetime_cell_format = writer.book.add_format({"num_format": "yyyy-mm-dd hh:mm:ss"})
         for sheet_name, frame in sheet_frames.items():
             safe_name = sheet_name[:31]
-            frame.to_excel(writer, sheet_name=safe_name, index=False)
+            export_frame = frame.copy()
+            column_formats = {}
+            for column in export_frame.columns:
+                column_name = str(column).strip()
+                normalized_name = column_name.lower()
+                is_datetime_column = (
+                    "時間" in column_name
+                    or normalized_name.endswith("_at")
+                    or normalized_name in {"created_at", "updated_at", "deleted_at"}
+                )
+                is_date_column = (
+                    "日期" in column_name
+                    or "有效期限" in column_name
+                    or column_name in {"成交日", "截止日", "生日"}
+                    or normalized_name.endswith("_date")
+                )
+                if not (is_date_column or is_datetime_column) or export_frame.empty:
+                    continue
+                original = export_frame[column]
+                nonblank = original.notna() & original.astype(str).str.strip().ne("")
+                if not nonblank.any():
+                    continue
+                parsed = pd.to_datetime(original, errors="coerce")
+                if not parsed[nonblank].notna().all():
+                    continue
+                converted = []
+                for raw_value, parsed_value in zip(original, parsed):
+                    if pd.isna(raw_value) or str(raw_value).strip() == "":
+                        converted.append(None)
+                        continue
+                    timestamp = pd.Timestamp(parsed_value)
+                    if timestamp.tzinfo is not None:
+                        timestamp = timestamp.tz_localize(None)
+                    converted.append(timestamp.to_pydatetime() if is_datetime_column else timestamp.date())
+                export_frame[column] = converted
+                column_formats[column] = datetime_cell_format if is_datetime_column else date_cell_format
+            export_frame.to_excel(writer, sheet_name=safe_name, index=False)
             worksheet = writer.sheets[safe_name]
             worksheet.freeze_panes(1, 0)
-            worksheet.autofilter(0, 0, max(len(frame), 1), max(len(frame.columns) - 1, 0))
-            for col_no, column in enumerate(frame.columns):
-                values = frame[column].fillna("").astype(str) if not frame.empty else pd.Series(dtype=str)
+            worksheet.autofilter(0, 0, max(len(export_frame), 1), max(len(export_frame.columns) - 1, 0))
+            for col_no, column in enumerate(export_frame.columns):
+                values = export_frame[column].fillna("").astype(str) if not export_frame.empty else pd.Series(dtype=str)
                 width = min(max([len(str(column))] + values.map(len).tolist()) + 2, 32)
-                worksheet.set_column(col_no, col_no, width)
+                worksheet.set_column(col_no, col_no, width, column_formats.get(column))
     return output.getvalue()
 
 def _financial_backup_frames(table_data):
