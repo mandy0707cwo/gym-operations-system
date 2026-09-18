@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
+from openpyxl import load_workbook
 
 
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
@@ -85,6 +86,25 @@ def test_financial_backup_contains_all_report_groups_and_balances():
     assert coach_revenue["金額總計（未稅）"] == 1476
     workbook = ns["_excel_bytes"](frames)
     assert len(workbook) > 1000
+
+
+def test_excel_export_writes_dates_as_native_excel_values():
+    export = load_functions()["_excel_bytes"]({
+        "日期檢查": pd.DataFrame([{
+            "日期": "2026-09-18",
+            "有效期限": "2027-09-18",
+            "建立時間": "2026-09-18T14:30:00",
+            "購買_ID": "20260918-001",
+        }])
+    })
+    sheet = load_workbook(BytesIO(export), data_only=True)["日期檢查"]
+    assert sheet["A2"].data_type == "d"
+    assert sheet["A2"].number_format == "yyyy-mm-dd"
+    assert sheet["B2"].data_type == "d"
+    assert sheet["C2"].data_type == "d"
+    assert sheet["C2"].number_format == "yyyy-mm-dd hh:mm:ss"
+    assert sheet["D2"].data_type == "s"
+    assert sheet["D2"].value == "20260918-001"
 
 
 def test_usage_sequence_uses_chronological_order_instead_of_bad_source_sequence():
