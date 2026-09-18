@@ -3735,21 +3735,22 @@ def financial_report_page(me):
         st.markdown(f"- 報表期間：{month_start} 至 {month_end}")
 
         monthly_coaches=coach_options(); monthly_coach_name={v:k for k,v in monthly_coaches.items()}
-        monthly_usages=rows(client().table("session_usages").select("purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount,deducted_net_amount")
-            .gte("usage_date",str(month_start)).lte("usage_date",str(month_end)).order("usage_date"))
+        monthly_usages=paged_rows(lambda: client().table("session_usages").select("id,purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount,deducted_net_amount")
+            .gte("usage_date",str(month_start)).lte("usage_date",str(month_end)).order("usage_date").order("id"))
         try:
             monthly_terminations=rows(client().table("course_terminations").select("purchase_id,termination_date,termination_type,remaining_amount,fee_amount,refund_amount,recognized_amount,completion_bonus_eligible,completion_bonus_coach_id,reason")
                 .gte("termination_date",str(month_start)).lte("termination_date",str(month_end)).order("termination_date"))
         except Exception:
             monthly_terminations=[]
         monthly_purchase_ids=list({x["purchase_id"] for x in monthly_usages+monthly_terminations})
-        monthly_purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,report_category,session_hours,total_sessions,total_amount,purchase_date,purchase_kind,referral,created_at").in_("id",monthly_purchase_ids)) if monthly_purchase_ids else []
+        monthly_purchases=paged_rows(lambda: client().table("purchases").select("id,member_id,coach_id,course_name,report_category,session_hours,total_sessions,total_amount,purchase_date,purchase_kind,referral,created_at")
+            .in_("id",monthly_purchase_ids).order("id")) if monthly_purchase_ids else []
         monthly_purchase_map={x["id"]:x for x in monthly_purchases}
         monthly_course_catalog=rows(client().table("course_catalog").select("course_name,course_type,report_category"))
         monthly_course_type={str(x.get("course_name") or "").strip():str(x.get("course_type") or "").strip() for x in monthly_course_catalog}
         monthly_report_category={str(x.get("course_name") or "").strip():str(x.get("report_category") or "未分類").strip() or "未分類" for x in monthly_course_catalog}
         monthly_member_ids=list({x.get("member_id") for x in monthly_purchases if x.get("member_id")})
-        monthly_members=rows(client().table("members").select("id,member_name").in_("id",monthly_member_ids)) if monthly_member_ids else []
+        monthly_members=paged_rows(lambda: client().table("members").select("id,member_name").in_("id",monthly_member_ids).order("id")) if monthly_member_ids else []
         monthly_member_name={x["id"]:x["member_name"] for x in monthly_members}
         monthly_trial=rows(client().table("trial_items").select("entry_date,coach_id,content,course_type,hours,amount").gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date"))
         monthly_single=rows(client().table("single_sales").select("entry_date,coach_id,content,course_type,hours,amount").gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date"))
@@ -3763,7 +3764,7 @@ def financial_report_page(me):
         monthly_project_catalog=rows(client().table("project_catalog").select("id,course_type").in_("id",monthly_project_catalog_ids)) if monthly_project_catalog_ids else []
         monthly_project_report_category={x["id"]:str(x.get("course_type") or "未分類").strip() or "未分類" for x in monthly_project_catalog}
 
-        all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at").order("purchase_date"))
+        all_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_date,created_at").order("purchase_date").order("created_at").order("id"))
         bonus_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
         monthly_sales_df=pd.DataFrame([{"日期":x["usage_date"],
             "購買_ID":bonus_purchase_code_map.get(x["purchase_id"],x["purchase_id"]),
