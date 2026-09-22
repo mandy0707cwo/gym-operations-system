@@ -903,7 +903,18 @@ def usage_page(me):
                     label=st.selectbox("選擇課程",list(lookup),key=f"usage_course_{member_map[member_name]}")
                     selected=lookup[label]
                     with st.form(f'consume_{selected["purchase_id"]}'):
-                        c1,c2=st.columns(2); usage_date=c1.date_input("銷課日期",date.today(),**coach_date_limit); c2.text_input("授課教練",value=selected["coach_name"],disabled=True)
+                        c1,c2=st.columns(2)
+                        usage_date=c1.date_input("銷課日期",date.today(),**coach_date_limit)
+                        if me["role"]=="admin":
+                            coach_names=list(coaches)
+                            original_coach_name=next((name for name,coach_id in coaches.items() if coach_id==selected.get("coach_id")),selected.get("coach_name"))
+                            original_coach_index=coach_names.index(original_coach_name) if original_coach_name in coach_names else 0
+                            usage_coach_name=c2.selectbox("授課教練",coach_names,index=original_coach_index,
+                                help="系統管理員可改為實際授課教練；預設為該課程的成交教練。")
+                            usage_coach_id=coaches[usage_coach_name]
+                        else:
+                            c2.text_input("授課教練",value=selected["coach_name"],disabled=True)
+                            usage_coach_id=selected["coach_id"]
                         if me["role"]=="admin":
                             makeup_order=st.checkbox("補單",value=False,help="補登先前實際已完成的課程；僅系統管理員可使用")
                             actual_usage_date=st.date_input("實際銷課日期",date.today(),help="非補單時系統會自動使用銷課日期")
@@ -921,7 +932,7 @@ def usage_page(me):
                             if makeup_order and effective_actual_date>usage_date:
                                 raise ValueError("補單的實際銷課日期不可晚於銷課日期")
                             client().rpc("consume_session",{"p_purchase_id":selected["purchase_id"],"p_usage_date":str(usage_date),
-                                "p_coach_id":selected["coach_id"],"p_note":note,"p_is_makeup":makeup_order,
+                                "p_coach_id":usage_coach_id,"p_note":note,"p_is_makeup":makeup_order,
                                 "p_actual_usage_date":str(effective_actual_date)}).execute()
                             st.success("扣課完成。"); st.rerun()
                         except Exception as exc: st.error(f"扣課失敗：{exc}")
