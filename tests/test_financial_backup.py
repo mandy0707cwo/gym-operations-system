@@ -11,6 +11,7 @@ from openpyxl import load_workbook
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 CUSTOMER_MIGRATION_PATH = Path(__file__).resolve().parents[1] / "migration_customer_master_v1_12_21.sql"
 USAGE_NET_MIGRATION_PATH = Path(__file__).resolve().parents[1] / "migration_usage_net_amount_v1_12_42.sql"
+PAYMENT_MANAGEMENT_MIGRATION_PATH = Path(__file__).resolve().parents[1] / "migration_installment_payment_management_v1_12_48.sql"
 FUNCTIONS = {
     "is_magnetic_wave_course",
     "is_magnetic_wave_operation",
@@ -307,3 +308,26 @@ def test_monthly_sales_uses_complete_paginated_sources():
     assert 'monthly_purchases=paged_rows(lambda: client().table("purchases")' in source
     assert 'monthly_members=paged_rows(lambda: client().table("members")' in source
     assert 'all_purchase_keys=paged_rows(lambda: client().table("purchases")' in source
+
+
+def test_admin_can_choose_usage_coach_while_other_roles_keep_purchase_coach():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'usage_coach_name=c2.selectbox("授課教練",coach_names,index=original_coach_index' in source
+    assert 'usage_coach_id=coaches[usage_coach_name]' in source
+    assert 'usage_coach_id=selected["coach_id"]' in source
+    assert '"p_coach_id":usage_coach_id' in source
+
+
+def test_installment_payment_management_is_admin_only_and_audited():
+    source = APP_PATH.read_text(encoding="utf-8")
+    migration = PAYMENT_MANAGEMENT_MIGRATION_PATH.read_text(encoding="utf-8")
+    assert 'me["role"]!="admin"' in source
+    assert '"分期付款管理"' in source
+    assert 'client().rpc("admin_correct_purchase_payment"' in source
+    assert 'client().rpc("admin_add_purchase_payment_supplement"' in source
+    assert '"purchase_payment_change_logs":"付款異動紀錄"' in source
+    assert "payment_kind in ('installment','supplement')" in migration
+    assert "where payment_kind='installment'" in migration
+    assert "if not public.is_admin()" in migration
+    assert "purchase_payment_change_logs" in migration
+    assert "補繳金額不可超過未付餘額" in migration
