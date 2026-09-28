@@ -1840,6 +1840,7 @@ def _full_system_backup_bytes(admin):
         "session_cancellations":"上課預約取消",
         "purchases":"課程購買",
         "purchase_payments":"付款紀錄",
+        "purchase_payment_change_logs":"付款異動紀錄",
         "session_usages":"銷課紀錄",
         "projects":"專案主檔",
         "project_catalog":"專案操作項目",
@@ -1870,7 +1871,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.35"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.48"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2959,17 +2960,186 @@ def customer_admin_page(me):
         except Exception as exc:
             st.warning(f"尚無法讀取修改紀錄，請確認客戶資料 SQL 已執行：{exc}")
 
+def installment_payment_admin_page(me):
+    st.subheader("分期付款管理")
+    st.caption("僅限系統管理員操作。輸入錯誤請更正原付款；實際短繳請登錄補繳款，補繳不增加分期期數。所有異動均保留稽核紀錄。")
+    admin=admin_client()
+    try:
+        purchases=paged_rows(lambda: admin.table("purchases")
+            .select("id,member_id,course_name,total_amount,purchase_date,installment_count,created_at")
+            .eq("payment_plan","installment").order("purchase_date",desc=True).order("created_at",desc=True))
+        members=rows(admin.table("members").select("id,member_name"))
+        all_purchase_keys=paged_rows(lambda: admin.table("purchases").select("id,purchase_date,created_at")
+            .order("purchase_date").order("created_at").order("id"))
+        purchase_ids=[x["id"] for x in purchases]
+        payments=(paged_rows(lambda: admin.table("purchase_payments")
+            .select("id,purchase_id,installment_no,amount,paid_date,payment_kind,created_at")
+            .in_("purchase_id",purchase_ids).order("paid_date",desc=True).order("created_at",desc=True))
+            if purchase_ids else [])
+    except Exception as exc:
+        st.error(f"尚未建立分期付款管理資料結構，請先執行 migration_installment_payment_management_v1_12_48.sql：{exc}")
+        return
+
+    member_name={x["id"]:x["member_name"] for x in members}
+    purchase_map={x["id"]:x for x in purchases}
+    purchase_code_map=_build_purchase_code_map(all_purchase_keys)
+    payment_totals={}
+    for payment in payments:
+        payment_totals[payment["purchase_id"]]=payment_totals.get(payment["purchase_id"],0)+float(payment.get("amount") or 0)
+
+    with st.form("installment_payment_search",border=False):
+        c1,c2=st.columns(2)
+        member_keyword=c1.text_input("會員名稱搜尋",placeholder="可輸入完整或部分姓名").strip().casefold()
+        purchase_keyword=c2.text_input("購買_ID 搜尋",placeholder="例如 20260901-001").strip().casefold()
+        st.form_submit_button("查詢",type="primary",width="stretch")
+
+    filtered=[]
+    for purchase in purchases:
+        code=purchase_code_map.get(purchase["id"],purchase["id"])
+        name=member_name.get(purchase.get("member_id"),"未知會員")
+        if member_keyword and member_keyword not in name.casefold(): continue
+        if purchase_keyword and purchase_keyword not in f'{code} {purchase["id"]}'.casefold(): continue
+        filtered.append(purchase)
+    st.caption(f"符合條件：{len(filtered)} 筆分期購買紀錄")
+    if not filtered:
+        st.info("查無分期購買紀錄。")
+        return
+
+    purchase_labels={}
+    for purchase in filtered:
+        paid=payment_totals.get(purchase["id"],0)
+        remaining=max(float(purchase["total_amount"])-paid,0)
+        code=purchase_code_map.get(purchase["id"],purchase["id"])
+        label=(f'{code}｜{member_name.get(purchase.get("member_id"),"未知會員")}｜{purchase["course_name"]}｜'
+            f'{int(purchase["installment_count"])} 期｜已收 $ {paid:,.0f}｜未付 $ {remaining:,.0f}')
+        purchase_labels[label]=purchase
+    selected_label=st.selectbox("選擇分期購買紀錄",list(purchase_labels),key="installment_admin_purchase")
+    selected_purchase=purchase_labels[selected_label]
+    selected_payments=[x for x in payments if x["purchase_id"]==selected_purchase["id"]]
+    selected_paid=payment_totals.get(selected_purchase["id"],0)
+    selected_remaining=max(float(selected_purchase["total_amount"])-selected_paid,0)
+
+    payment_rows=[]
+    for payment in sorted(selected_payments,key=lambda x:(str(x.get("paid_date") or ""),str(x.get("created_at") or ""))):
+        payment_rows.append({"付款日期":payment.get("paid_date"),"類型":"補繳款" if payment.get("payment_kind")=="supplement" else f'第 {payment.get("installment_no")} 期',
+            "支付金額":float(payment.get("amount") or 0),"付款紀錄_ID":payment["id"]})
+    st.dataframe(pd.DataFrame(payment_rows),hide_index=True,width="stretch",height="auto",row_height=28,
+        column_config={"支付金額":st.column_config.NumberColumn(format="$ %.0f")})
+    with st.container(horizontal=True):
+        st.metric("成交總金額",f'$ {float(selected_purchase["total_amount"]):,.0f}',border=True)
+        st.metric("實際預收金額",f"$ {selected_paid:,.0f}",border=True)
+        st.metric("未付餘額",f"$ {selected_remaining:,.0f}",border=True)
+
+    correction_tab,supplement_tab,audit_tab=st.tabs(["更正付款","登錄補繳款","異動紀錄"])
+    regular_payments=[x for x in selected_payments if x.get("payment_kind","installment")=="installment"]
+    with correction_tab:
+        if not regular_payments:
+            st.info("此購買紀錄沒有可更正的原始分期付款。")
+        else:
+            correction_labels={f'第 {x["installment_no"]} 期｜{x["paid_date"]}｜$ {float(x["amount"]):,.0f}':x for x in regular_payments}
+            correction_label=st.selectbox("選擇要更正的付款",list(correction_labels),key="payment_correction_select")
+            correction_payment=correction_labels[correction_label]
+            with st.form("payment_correction_form",enter_to_submit=False):
+                c1,c2=st.columns(2)
+                corrected_amount=c1.number_input("正確支付金額",min_value=1.0,max_value=10000000.0,
+                    value=float(correction_payment["amount"]),step=100.0,format="%.0f")
+                corrected_date=c2.date_input("正確付款日期",pd.to_datetime(correction_payment["paid_date"]).date())
+                correction_reason=st.text_area("更正原因（必填）",placeholder="例如：第二期金額輸入錯誤，依收款紀錄更正。")
+                request_correction=st.form_submit_button("檢查並準備更正",type="primary",width="stretch")
+            if request_correction:
+                if not correction_reason.strip(): st.error("請填寫更正原因。")
+                elif corrected_amount==float(correction_payment["amount"]) and str(corrected_date)==str(correction_payment["paid_date"]): st.error("金額與日期均未變更。")
+                else:
+                    st.session_state["pending_payment_correction"]={"payment_id":correction_payment["id"],"amount":corrected_amount,
+                        "paid_date":str(corrected_date),"reason":correction_reason.strip(),"label":correction_label}
+
+    with supplement_tab:
+        if selected_remaining<=0:
+            st.success("此購買紀錄已付清，無需登錄補繳款。")
+        else:
+            with st.form("payment_supplement_form",enter_to_submit=False):
+                c1,c2=st.columns(2)
+                supplement_amount=c1.number_input("補繳金額",min_value=0.01,max_value=float(selected_remaining),
+                    value=float(selected_remaining),step=100.0,format="%.0f")
+                supplement_date=c2.date_input("補繳日期",date.today())
+                supplement_reason=st.text_area("補繳原因（必填）",placeholder="例如：第二期實際短繳，今日補足剩餘款項。")
+                request_supplement=st.form_submit_button("檢查並準備補繳",type="primary",width="stretch")
+            if request_supplement:
+                if not supplement_reason.strip(): st.error("請填寫補繳原因。")
+                else:
+                    st.session_state["pending_payment_supplement"]={"purchase_id":selected_purchase["id"],"amount":supplement_amount,
+                        "paid_date":str(supplement_date),"reason":supplement_reason.strip(),"label":selected_label}
+
+    with audit_tab:
+        try:
+            logs=paged_rows(lambda: admin.table("purchase_payment_change_logs")
+                .select("action_type,installment_no,old_amount,new_amount,old_paid_date,new_paid_date,reason,changed_at,changed_by")
+                .eq("purchase_id",selected_purchase["id"]).order("changed_at",desc=True))
+            changed_by_ids=list({x.get("changed_by") for x in logs if x.get("changed_by")})
+            changers=rows(admin.table("profiles").select("id,display_name").in_("id",changed_by_ids)) if changed_by_ids else []
+            changer_name={x["id"]:x["display_name"] for x in changers}
+            log_rows=[{"異動時間":x.get("changed_at"),"異動類型":"補繳款" if x.get("action_type")=="supplement" else "更正付款",
+                "期次":x.get("installment_no"),"修改前金額":x.get("old_amount"),"修改後金額":x.get("new_amount"),
+                "修改前日期":x.get("old_paid_date"),"修改後日期":x.get("new_paid_date"),"原因":x.get("reason") or "",
+                "操作者":changer_name.get(x.get("changed_by"),"系統管理員")} for x in logs]
+            if log_rows:
+                st.dataframe(pd.DataFrame(log_rows),hide_index=True,width="stretch",height="auto",row_height=28,
+                    column_config={"異動時間":st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm"),
+                        "修改前金額":st.column_config.NumberColumn(format="$ %.0f"),"修改後金額":st.column_config.NumberColumn(format="$ %.0f")})
+            else: st.info("此購買紀錄尚無付款異動紀錄。")
+        except Exception as exc: st.warning(f"無法讀取付款異動紀錄：{exc}")
+
+    if st.session_state.get("pending_payment_correction"):
+        pending=st.session_state["pending_payment_correction"]
+        @st.dialog("確認更正付款",icon=":material/warning:",dismissible=False)
+        def confirm_payment_correction():
+            st.warning("確認後將修改原付款紀錄，並永久保存修改前後資料及更正原因。")
+            st.write(pending["label"])
+            st.write(f'更正後：{pending["paid_date"]}｜$ {pending["amount"]:,.0f}')
+            st.caption(f'原因：{pending["reason"]}')
+            c1,c2=st.columns(2)
+            if c1.button("取消",width="stretch",key="cancel_payment_correction"):
+                st.session_state.pop("pending_payment_correction",None); st.rerun()
+            if c2.button("確認更正",type="primary",width="stretch",key="confirm_payment_correction"):
+                try:
+                    client().rpc("admin_correct_purchase_payment",{"p_payment_id":pending["payment_id"],"p_amount":pending["amount"],
+                        "p_paid_date":pending["paid_date"],"p_reason":pending["reason"]}).execute()
+                    st.session_state.pop("pending_payment_correction",None); st.success("付款紀錄已更正並留下稽核紀錄。"); st.rerun()
+                except Exception as exc: st.error(f"更正失敗：{exc}")
+        confirm_payment_correction()
+
+    if st.session_state.get("pending_payment_supplement"):
+        pending=st.session_state["pending_payment_supplement"]
+        @st.dialog("確認登錄補繳款",icon=":material/warning:",dismissible=False)
+        def confirm_payment_supplement():
+            st.warning("確認後將新增補繳款；此筆款項不增加原分期期數，並會留下稽核紀錄。")
+            st.write(pending["label"])
+            st.write(f'補繳：{pending["paid_date"]}｜$ {pending["amount"]:,.0f}')
+            st.caption(f'原因：{pending["reason"]}')
+            c1,c2=st.columns(2)
+            if c1.button("取消",width="stretch",key="cancel_payment_supplement"):
+                st.session_state.pop("pending_payment_supplement",None); st.rerun()
+            if c2.button("確認補繳",type="primary",width="stretch",key="confirm_payment_supplement"):
+                try:
+                    client().rpc("admin_add_purchase_payment_supplement",{"p_purchase_id":pending["purchase_id"],"p_amount":pending["amount"],
+                        "p_paid_date":pending["paid_date"],"p_reason":pending["reason"]}).execute()
+                    st.session_state.pop("pending_payment_supplement",None); st.success("補繳款已登錄並留下稽核紀錄。"); st.rerun()
+                except Exception as exc: st.error(f"補繳失敗：{exc}")
+        confirm_payment_supplement()
+
+
 def data_management_page(me):
     st.header("資料管理")
     if me["role"]!="admin": st.warning("此頁僅限系統管理員使用。"); return
     if admin_client() is None: st.error("尚未設定 SUPABASE_SECRET_KEY。"); return
-    management_view=st.segmented_control("資料管理功能",["課程名稱管理","體驗項目管理","單堂銷售管理","專案管理","獎金規則管理","資料匯入／匯出","修改／刪除"],
+    management_view=st.segmented_control("資料管理功能",["課程名稱管理","體驗項目管理","單堂銷售管理","專案管理","獎金規則管理","分期付款管理","資料匯入／匯出","修改／刪除"],
         default="課程名稱管理",key="data_management_view",width="stretch")
     if management_view=="課程名稱管理": course_admin_page(me)
     elif management_view=="體驗項目管理": operation_item_admin_page(me,"trial","體驗項目管理")
     elif management_view=="單堂銷售管理": operation_item_admin_page(me,"single_sale","單堂銷售管理")
     elif management_view=="專案管理": project_admin_page(me)
     elif management_view=="獎金規則管理": bonus_rule_admin_page(me)
+    elif management_view=="分期付款管理": installment_payment_admin_page(me)
     elif management_view=="資料匯入／匯出":
         io_tab,usage_query_tab,backup_tab=st.tabs(["資料匯入／匯出","銷課查詢","一鍵下載備份"])
         with io_tab: member_course_io_page(me)
