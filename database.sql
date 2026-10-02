@@ -355,8 +355,14 @@ alter table public.purchase_payment_change_logs enable row level security;
 
 create policy profiles_read on public.profiles for select to authenticated using (active);
 create policy profiles_admin_update on public.profiles for update to authenticated using (public.is_admin()) with check (public.is_admin());
-create policy members_read on public.members for select to authenticated using (true);
+create policy members_read on public.members for select to authenticated using (
+  exists(select 1 from public.profiles where id=auth.uid() and role in ('coach','shared_coach','manager','admin') and active)
+);
 create policy members_insert on public.members for insert to authenticated with check (created_by=auth.uid());
+create policy members_update on public.members for update to authenticated
+using (exists(select 1 from public.profiles where id=auth.uid() and role in ('coach','shared_coach','manager','admin') and active))
+with check (exists(select 1 from public.profiles where id=auth.uid() and role in ('coach','shared_coach','manager','admin') and active));
+create policy members_delete on public.members for delete to authenticated using (public.is_admin());
 create policy course_catalog_read on public.course_catalog for select to authenticated using (true);
 create policy course_catalog_admin_insert on public.course_catalog for insert to authenticated with check (public.is_admin());
 create policy course_catalog_admin_update on public.course_catalog for update to authenticated using (public.is_admin()) with check (public.is_admin());

@@ -1871,7 +1871,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.55"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.56"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2925,6 +2925,29 @@ def customer_admin_page(me):
                         st.success("客戶資料已修改；原有購課、付款、銷課及中止紀錄均保留。"); st.rerun()
                     except Exception as exc: st.error(f"修改失敗：{exc}")
 
+            if is_admin:
+                st.markdown("#### 刪除客戶")
+                st.caption("只有完全沒有購課及銷課紀錄的客戶可以刪除；刪除後無法復原。")
+                delete_confirm=st.checkbox(
+                    f'我確認要永久刪除客戶「{current["member_name"]}」',
+                    key=f'customer_delete_confirm_{current["id"]}')
+                if st.button("永久刪除客戶",type="primary",disabled=not delete_confirm,
+                    key=f'customer_delete_{current["id"]}',width="stretch"):
+                    try:
+                        related_purchases=paged_rows(lambda: data_api.table("purchases")
+                            .select("id").eq("member_id",current["id"]).order("id"))
+                        purchase_ids=[item["id"] for item in related_purchases]
+                        related_usages=(paged_rows(lambda: data_api.table("session_usages")
+                            .select("id").in_("purchase_id",purchase_ids).order("id")) if purchase_ids else [])
+                        if related_purchases or related_usages:
+                            st.error(f"不可刪除：此客戶已有 {len(related_purchases)} 筆購課紀錄及 {len(related_usages)} 筆銷課紀錄。")
+                        else:
+                            data_api.table("members").delete().eq("id",current["id"]).execute()
+                            st.success("客戶資料已永久刪除。")
+                            st.rerun()
+                    except Exception as exc:
+                        st.error(f"刪除失敗：{exc}")
+
     if not is_admin:
         return
     with customer_audit_tab:
@@ -3421,21 +3444,31 @@ def general_queries_page(me):
         purchases=(paged_rows(lambda: client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,payment_plan,installment_count,purchase_date,created_at")
             .in_("id",ids).order("id")) if ids else [])
         purchase_map={x["id"]:x for x in purchases}; names=member_maps(); codes=purchase_codes(); keyword=member_keyword.casefold(); result=[]
+        status_cutoff=end or date.today()
+        status_payments=(paged_rows(lambda: client().table("purchase_payments")
+            .select("purchase_id,amount,paid_date").in_("purchase_id",ids).lte("paid_date",str(status_cutoff))
+            .order("paid_date").order("purchase_id")) if ids else [])
+        received_by_purchase={}
+        for status_payment in status_payments:
+            pid=status_payment["purchase_id"]
+            received_by_purchase[pid]=received_by_purchase.get(pid,0)+float(status_payment.get("amount") or 0)
         for payment in payments:
             purchase=purchase_map.get(payment["purchase_id"])
             if not purchase: continue
             member_name=names.get(purchase.get("member_id"),"")
             if keyword and keyword not in member_name.casefold(): continue
-            if payment.get("payment_kind")=="supplement": status="補繳款"; status_group="補繳款"
+            if payment.get("payment_kind")=="supplement": payment_term="補繳款"
             elif purchase.get("payment_plan")=="installment":
-                status=f'第 {int(payment.get("installment_no") or 0)}/{int(purchase.get("installment_count") or 0)} 期'; status_group="分期"
-            else: status="付清"; status_group="付清"
-            if installment_filter!="全部" and status_group!=installment_filter: continue
+                payment_term=f'第 {int(payment.get("installment_no") or 0)}/{int(purchase.get("installment_count") or 0)} 期'
+            else: payment_term="付清"
+            payment_status="付清" if received_by_purchase.get(payment["purchase_id"],0)>=float(purchase.get("total_amount") or 0) else "未付清"
+            if installment_filter!="全部" and payment_status!=installment_filter: continue
             gross=float(payment.get("amount") or 0)
             result.append({"成交／預收日期":payment.get("paid_date"),"購買_ID":codes.get(payment["purchase_id"],payment["purchase_id"]),
                 "會員":member_name,"教練":coach_name_map.get(purchase.get("coach_id"),"未知教練"),"課程名稱":purchase.get("course_name") or "",
-                "堂數":int(purchase.get("total_sessions") or 0),"預收金額（含稅）":gross,"預收金額（未稅）":_tax_display_amount(gross,"未稅"),"分期狀態":status})
-        frame=pd.DataFrame(result,columns=["成交／預收日期","購買_ID","會員","教練","課程名稱","堂數","預收金額（含稅）","預收金額（未稅）","分期狀態"])
+                "堂數":int(purchase.get("total_sessions") or 0),"預收金額（含稅）":gross,"預收金額（未稅）":_tax_display_amount(gross,"未稅"),
+                "付款期次":payment_term,"分期狀態":payment_status})
+        frame=pd.DataFrame(result,columns=["成交／預收日期","購買_ID","會員","教練","課程名稱","堂數","預收金額（含稅）","預收金額（未稅）","付款期次","分期狀態"])
         c1,c2=st.columns(2)
         c1.metric("預收金額總計（未稅）",f'$ {frame["預收金額（未稅）"].sum() if not frame.empty else 0:,.0f}',border=True)
         c2.metric("預收金額總計（含稅）",f'$ {frame["預收金額（含稅）"].sum() if not frame.empty else 0:,.0f}',border=True)
@@ -3549,7 +3582,7 @@ def general_queries_page(me):
                 else: render_prepaid_results(start=start,end=end,key=f"日期_{start}_{end}")
         with member_tab:
             with st.form("general_prepaid_member_form",border=False):
-                c1,c2=st.columns(2); keyword=c1.text_input("會員",placeholder="輸入完整或部分會員名稱",key="gpi_member").strip(); payment_status=c2.selectbox("分期狀態",["全部","付清","分期","補繳款"],key="gpi_status")
+                c1,c2=st.columns(2); keyword=c1.text_input("會員",placeholder="輸入完整或部分會員名稱",key="gpi_member").strip(); payment_status=c2.selectbox("分期狀態",["全部","付清","未付清"],key="gpi_status")
                 submitted=st.form_submit_button("查詢",type="primary",width="stretch")
             if submitted: render_prepaid_results(member_keyword=keyword,installment_filter=payment_status,key=f"會員_{keyword or '全部'}_{payment_status}")
 

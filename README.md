@@ -1,6 +1,6 @@
 # 秀傳運醫營運系統
 
-> 目前版本：v1.12.55。左側「各項查詢」提供銷課、成交、預收收入及預收餘額查詢，含日期／會員等子分頁、含稅／未稅總計與 Excel 下載。本版不需執行 Supabase SQL。
+> 目前版本：v1.12.56。教練可新增、查詢及修改全部客戶；系統管理員可刪除無購課／銷課紀錄的客戶。預收收入已分開顯示付款期次及付清狀態。本版需執行 `migration_customer_full_access_delete_v1_12_56.sql`。
 
 完整功能、權限、資料邏輯、部署、備份及維護說明請參考 [`SYSTEM_DOCUMENTATION.md`](SYSTEM_DOCUMENTATION.md)；歷次變更請參考 [`CHANGELOG.md`](CHANGELOG.md)。
 
