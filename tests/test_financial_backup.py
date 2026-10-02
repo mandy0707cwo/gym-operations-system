@@ -11,6 +11,7 @@ from openpyxl import load_workbook
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 CUSTOMER_MIGRATION_PATH = Path(__file__).resolve().parents[1] / "migration_customer_master_v1_12_21.sql"
 USAGE_NET_MIGRATION_PATH = Path(__file__).resolve().parents[1] / "migration_usage_net_amount_v1_12_42.sql"
+FINAL_SESSION_ROUNDING_MIGRATION_PATH = Path(__file__).resolve().parents[1] / "migration_usage_final_session_rounding_v1_12_50.sql"
 PAYMENT_MANAGEMENT_MIGRATION_PATH = Path(__file__).resolve().parents[1] / "migration_installment_payment_management_v1_12_48.sql"
 FUNCTIONS = {
     "is_magnetic_wave_course",
@@ -145,7 +146,7 @@ def test_monthly_sales_columns_include_purchase_id_and_coach():
 def test_coach_query_is_a_sidebar_page_not_a_usage_tab():
     source = APP_PATH.read_text(encoding="utf-8")
     assert 'register_tab,cancel_tab=st.tabs(["銷課登錄","上課預約取消"])' in source
-    assert 'pages=["每日營運","課程購買","銷課表","教練查詢"]' in source
+    assert 'pages=["每日營運","客戶管理","課程購買","銷課表","教練查詢"]' in source
     assert '"教練查詢":coach_query_page' in source
 
 
@@ -183,7 +184,7 @@ def test_customer_management_preserves_existing_member_ids():
     source = APP_PATH.read_text(encoding="utf-8")
     migration = CUSTOMER_MIGRATION_PATH.read_text(encoding="utf-8")
     assert 'def customer_admin_page(me):' in source
-    assert '["客戶管理","課程名稱管理"' in source
+    assert 'pages=["每日營運","客戶管理","課程購買","銷課表","教練查詢"]' in source
     assert 'admin.table("members").update' in source
     assert "alter table public.members add column if not exists phone text;" in migration
     assert "update public.members m" in migration
@@ -194,7 +195,8 @@ def test_customer_management_preserves_existing_member_ids():
 
 def test_customer_audit_and_rls_are_protected():
     migration = CUSTOMER_MIGRATION_PATH.read_text(encoding="utf-8")
-    assert "security invoker" in migration
+    assert "security definer" in migration
+    assert "revoke all on function public.audit_member_change() from public,anon,authenticated" in migration
     assert "alter table public.member_change_logs enable row level security" in migration
     assert "using (public.is_admin())" in migration
     assert "responsible_coach_id=(select auth.uid())" in migration
@@ -274,6 +276,26 @@ def test_usage_net_amount_migration_allocates_rounding_difference():
     assert "having round(sum(deducted_amount)/1.05,0) <> sum(deducted_net_amount)" in migration
 
 
+def test_final_session_rounding_migration_absorbs_all_net_rounding_difference():
+    migration = FINAL_SESSION_ROUNDING_MIGRATION_PATH.read_text(encoding="utf-8")
+    assert "if v_used + 1 = v_purchase.total_sessions then" in migration
+    assert "round(v_purchase.total_amount/1.05,0)-v_prior_net" in migration
+    assert "round((v_purchase.total_amount/v_purchase.total_sessions)/1.05,0)" in migration
+    assert "update public.session_usages" not in migration
+    assert "having count(u.id)=p.total_sessions" in migration
+
+
+def test_final_session_rounding_example_matches_accounting_total():
+    gross_total = Decimal("20280")
+    session_count = 12
+    contract_net = (gross_total / Decimal("1.05")).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    regular_net = ((gross_total / session_count) / Decimal("1.05")).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    final_net = contract_net - regular_net * (session_count - 1)
+    assert regular_net == Decimal("1610")
+    assert final_net == Decimal("1604")
+    assert regular_net * (session_count - 1) + final_net == Decimal("19314")
+
+
 def test_monthly_project_usage_report_columns_and_category():
     source = APP_PATH.read_text(encoding="utf-8")
     assert 'select("entry_date,project_id,project_catalog_id,project_name,person_name,coach_id,item_name,item_hours,quantity,line_amount")' in source
@@ -331,3 +353,86 @@ def test_installment_payment_management_is_admin_only_and_audited():
     assert "if not public.is_admin()" in migration
     assert "purchase_payment_change_logs" in migration
     assert "補繳金額不可超過未付餘額" in migration
+
+
+def test_general_queries_are_admin_only_and_submit_gated():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'def general_queries_page(me):' in source
+    assert 'if me["role"]!="admin":' in source
+    assert 'pages.extend(["各項查詢", "財務報表", "帳號與權限管理", "資料管理"])' in source
+    assert 'general_usage_date_form' in source
+    assert 'general_usage_member_form' in source
+    assert 'general_purchase_date_form' in source
+    assert 'general_purchase_cutoff_form' in source
+    assert 'general_prepaid_date_form' in source
+    assert 'general_prepaid_member_form' in source
+    assert 'general_balance_net_form' in source
+    assert 'general_balance_gross_form' in source
+
+
+def test_general_query_columns_and_accounting_sources():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'columns=["日期","購買_ID","會員","教練","購買課程","銷課金額（含稅）","銷課金額（未稅）","購買堂數","銷課堂次","時數"]' in source
+    assert '"銷課金額（未稅）":usage_net_amount(usage)' in source
+    assert 'columns=["成交日期","購買_ID","會員","教練","課程名稱","堂數"' in source
+    assert '"成交金額（未稅）":_tax_display_amount(gross,"未稅")' in source
+    assert 'paid_net[pid]=paid_net.get(pid,0)+_tax_display_amount(item.get("amount"),"未稅")' in source
+    assert '"已收金額（未稅）":paid_net.get(pid,0)' in source
+    assert '.lte("paid_date",str(cutoff))' in source
+    assert '.lte("usage_date",str(cutoff))' in source
+
+
+def test_general_query_totals_match_displayed_rows():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'c1.metric("銷課金額總計（未稅）"' in source
+    assert 'c2.metric("銷課金額總計（含稅）"' in source
+    assert 'c1.metric("成交金額總計（未稅）"' in source
+    assert 'c2.metric("成交金額總計（含稅）"' in source
+    assert 'c1.metric("預收金額總計（未稅）"' in source
+    assert 'c2.metric("預收金額總計（含稅）"' in source
+
+
+def test_prepaid_income_query_is_submit_gated_and_uses_payment_date():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'usage_tab,purchase_tab,prepaid_tab,balance_tab=st.tabs(["銷課查詢","成交總表","預收收入查詢","預收餘額查詢"])' in source
+    assert 'with st.form("general_prepaid_date_form",border=False):' in source
+    assert 'with st.form("general_prepaid_member_form",border=False):' in source
+    assert 'if start is not None: query=query.gte("paid_date",str(start))' in source
+    assert 'if end is not None: query=query.lte("paid_date",str(end))' in source
+    assert 'if keyword and keyword not in member_name.casefold():' in source
+
+
+def test_prepaid_income_query_columns_status_and_totals():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'columns=["成交／預收日期","購買_ID","會員","教練","課程名稱","堂數"' in source
+    prepaid_block=source[source.index('with prepaid_tab:'):source.index('def financial_report_page(me):')]
+    assert '"購買":' not in prepaid_block
+    assert '"預收金額（未稅）":_tax_display_amount(gross,"未稅")' in source
+    assert '"付款期次":payment_term,"分期狀態":payment_status' in source
+    assert 'payment_term="補繳款"' in source
+    assert "payment_term=f'第 {int(payment.get(\"installment_no\") or 0)}/{int(purchase.get(\"installment_count\") or 0)} 期'" in source
+    assert 'payment_status="付清" if received_by_purchase.get(payment["purchase_id"],0)>=' in source
+    assert 'selectbox("分期狀態",["全部","付清","未付清"]' in source
+
+
+def test_customer_full_access_and_safe_admin_delete():
+    source = APP_PATH.read_text(encoding="utf-8")
+    migration = (APP_PATH.parent / "migration_customer_full_access_delete_v1_12_56.sql").read_text(encoding="utf-8")
+    assert 'st.markdown("#### 刪除客戶")' in source
+    assert 'if related_purchases or related_usages:' in source
+    assert 'data_api.table("members").delete().eq("id",current["id"]).execute()' in source
+    assert "role in ('coach','shared_coach','manager','admin')" in migration
+    assert 'create policy members_delete' in migration
+    assert 'on delete cascade' in migration
+
+
+def test_general_query_downloads_and_prepaid_balance_formula():
+    source = APP_PATH.read_text(encoding="utf-8")
+    assert 'st.download_button("下載 Excel"' in source
+    assert 'download_frame("銷課查詢"' in source
+    assert 'download_frame("成交總表"' in source
+    assert 'download_frame("預收收入查詢"' in source
+    assert 'download_frame(f"預收餘額（{suffix}）"' in source
+    assert 'received-used_amount-expired-fee-refund' in source
+    assert 'recognized_amount,fee_amount,refund_amount' in source
+    assert 'usage_net_amount(x)' in source
