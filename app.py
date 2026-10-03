@@ -1722,13 +1722,13 @@ def _financial_backup_frames(table_data):
     referral_rows=[{"醫生轉介":k[0],"會員名稱":member_name.get(k[1],""),**v} for k,v in sorted(referral_groups.items())]
     course_type_map={str(x.get("course_name") or "").strip():str(x.get("course_type") or "未分類").strip() or "未分類" for x in table_data.get("course_catalog",[])}
     course_type_totals={}
-    for payment in payments:
+    for payment in _allocate_payment_net_amounts(purchases,payments):
         p=purchase_map.get(payment.get("purchase_id"),{}); ct=course_type_map.get(str(p.get("course_name") or "").strip(),"未分類")
-        course_type_totals.setdefault(ct,{"received":0,"usage":0})["received"]+=float(payment.get("amount") or 0)
+        course_type_totals.setdefault(ct,{"received":0,"usage":0})["received"]+=payment["_net_amount"]
     for x in usages:
         p=purchase_map.get(x.get("purchase_id"),{}); ct=course_type_map.get(str(p.get("course_name") or "").strip(),"未分類")
         course_type_totals.setdefault(ct,{"received":0,"usage":0})["usage"]+=usage_net_amount(x)
-    course_type_rows=[{"課程屬性":k,"實際預收金額（未稅）":_tax_display_amount(v["received"],"未稅"),"銷課未稅金額":round(v["usage"])} for k,v in sorted(course_type_totals.items())]
+    course_type_rows=[{"課程屬性":k,"實際預收金額（未稅）":v["received"],"銷課未稅金額":round(v["usage"])} for k,v in sorted(course_type_totals.items())]
 
     termination_rows=[]
     for x in sorted(terminations,key=lambda r:str(r.get("termination_date") or ""),reverse=True):
@@ -1871,7 +1871,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.56"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.58"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -3183,6 +3183,31 @@ def _tax_display_amount(amount, tax_mode):
     if tax_mode=="未稅": value=value/Decimal("1.05")
     return int(value.quantize(Decimal("1"),rounding=ROUND_HALF_UP))
 
+def _allocate_payment_net_amounts(purchases, payments):
+    """依收款日、建立時間、ID分攤未稅額；呼叫端須先載入截至截止日的全部前期收款。"""
+    purchase_map={x["id"]:x for x in purchases}
+    balances={}; result=[]
+    for payment in sorted(payments,key=lambda x:(str(x.get("paid_date") or ""),str(x.get("created_at") or ""),str(x.get("id") or ""))):
+        pid=payment["purchase_id"]
+        if pid not in purchase_map:
+            raise ValueError("收款找不到對應購課資料，無法計算未稅尾差；請先確認購買_ID。")
+        total=Decimal(str(purchase_map[pid].get("total_amount") or 0))
+        amount=Decimal(str(payment.get("amount") or 0))
+        if not total.is_finite() or not amount.is_finite() or total<0 or amount<0:
+            raise ValueError("成交或收款金額異常，無法計算未稅尾差；請先查核原始資料。")
+        prior_gross,prior_net=balances.get(pid,(Decimal("0"),0))
+        cumulative=prior_gross+amount
+        net=_tax_display_amount(amount,"未稅")
+        if cumulative>=total and amount>0:
+            # 實際付清的那一筆吸收尾差；超收另計未稅，不能截掉真實超收。
+            target=_tax_display_amount(total,"未稅")+_tax_display_amount(cumulative-total,"未稅")
+            net=target-prior_net
+        if net<0:
+            raise ValueError("前期未稅四捨五入已超過整筆未稅額，請人工查核收款尾差；系統不自動歸零。")
+        balances[pid]=(cumulative,prior_net+net)
+        result.append({**payment,"_net_amount":net})
+    return result
+
 def _bonus_rule_for_date(rules,event_date):
     target=pd.to_datetime(event_date).date()
     applicable=[]
@@ -3342,21 +3367,26 @@ def general_queries_page(me):
         st.download_button("下載 Excel",payload,file_name=file_name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch",key=f"download_{file_name}")
 
-    def render_usage_results(*,start=None,end=None,member_keyword="",coach_name="全部教練",key):
+    def render_usage_results(*,start=None,end=None,member_keyword="",coach_name="全部教練",purchase_keyword="",key):
         selected_coach_id=coaches.get(coach_name) if coach_name!="全部教練" else None
+        codes=purchase_codes()
+        purchase_keyword=purchase_keyword.strip().casefold()
+        matched_purchase_ids=[pid for pid,code in codes.items()
+            if purchase_keyword in str(code).casefold() or purchase_keyword in str(pid).casefold()] if purchase_keyword else []
         def usage_query_builder():
             query=(client().table("session_usages")
                 .select("id,purchase_id,usage_date,coach_id,session_seq,deducted_amount,deducted_net_amount,created_at")
                 .order("usage_date",desc=True).order("created_at",desc=True).order("id",desc=True))
             if start is not None: query=query.gte("usage_date",str(start))
             if end is not None: query=query.lte("usage_date",str(end))
+            if purchase_keyword: query=query.in_("purchase_id",matched_purchase_ids)
             return query.eq("coach_id",selected_coach_id) if selected_coach_id else query
-        usages=paged_rows(usage_query_builder)
+        usages=paged_rows(usage_query_builder) if not purchase_keyword or matched_purchase_ids else []
         ids=list({item["purchase_id"] for item in usages})
         purchases=(paged_rows(lambda: client().table("purchases")
             .select("id,member_id,course_name,total_sessions,session_hours").in_("id",ids).order("id")) if ids else [])
         purchase_map={item["id"]:item for item in purchases}
-        names=member_maps(); codes=purchase_codes(); keyword=member_keyword.casefold()
+        names=member_maps(); keyword=member_keyword.casefold()
         result=[]
         for usage in usages:
             purchase=purchase_map.get(usage["purchase_id"],{})
@@ -3393,9 +3423,9 @@ def general_queries_page(me):
                 .in_("purchase_id",ids).lte("termination_date",str(cutoff)).order("termination_date").order("id")) if ids else [])
         except Exception: terminations=[]
         paid={}; paid_net={}; paid_terms={}; used={}; last_used={}
-        for item in payments:
+        for item in _allocate_payment_net_amounts(purchases,payments):
             pid=item["purchase_id"]; paid[pid]=paid.get(pid,0)+float(item.get("amount") or 0)
-            paid_net[pid]=paid_net.get(pid,0)+_tax_display_amount(item.get("amount"),"未稅")
+            paid_net[pid]=paid_net.get(pid,0)+item["_net_amount"]
             if item.get("installment_no") is not None: paid_terms.setdefault(pid,set()).add(int(item["installment_no"]))
         for item in usages:
             pid=item["purchase_id"]; used[pid]=used.get(pid,0)+1
@@ -3438,7 +3468,7 @@ def general_queries_page(me):
             query=(client().table("purchase_payments").select("id,purchase_id,installment_no,amount,paid_date,payment_kind,created_at")
                 .order("paid_date",desc=True).order("created_at",desc=True).order("id",desc=True))
             if start is not None: query=query.gte("paid_date",str(start))
-            if end is not None: query=query.lte("paid_date",str(end))
+            query=query.lte("paid_date",str(end or date.today()))
             return query
         payments=paged_rows(payment_query_builder); ids=list({x["purchase_id"] for x in payments})
         purchases=(paged_rows(lambda: client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,payment_plan,installment_count,purchase_date,created_at")
@@ -3446,8 +3476,10 @@ def general_queries_page(me):
         purchase_map={x["id"]:x for x in purchases}; names=member_maps(); codes=purchase_codes(); keyword=member_keyword.casefold(); result=[]
         status_cutoff=end or date.today()
         status_payments=(paged_rows(lambda: client().table("purchase_payments")
-            .select("purchase_id,amount,paid_date").in_("purchase_id",ids).lte("paid_date",str(status_cutoff))
-            .order("paid_date").order("purchase_id")) if ids else [])
+            .select("id,purchase_id,amount,paid_date,created_at").in_("purchase_id",ids).lte("paid_date",str(status_cutoff))
+            .order("paid_date").order("created_at").order("id")) if ids else [])
+        allocated_payments=_allocate_payment_net_amounts(purchases,status_payments)
+        payment_net_map={x["id"]:x["_net_amount"] for x in allocated_payments}
         received_by_purchase={}
         for status_payment in status_payments:
             pid=status_payment["purchase_id"]
@@ -3466,18 +3498,18 @@ def general_queries_page(me):
             gross=float(payment.get("amount") or 0)
             result.append({"成交／預收日期":payment.get("paid_date"),"購買_ID":codes.get(payment["purchase_id"],payment["purchase_id"]),
                 "會員":member_name,"教練":coach_name_map.get(purchase.get("coach_id"),"未知教練"),"課程名稱":purchase.get("course_name") or "",
-                "堂數":int(purchase.get("total_sessions") or 0),"預收金額（含稅）":gross,"預收金額（未稅）":_tax_display_amount(gross,"未稅"),
+                "堂數":int(purchase.get("total_sessions") or 0),"預收金額（含稅）":gross,"預收金額（未稅）":payment_net_map[payment["id"]],
                 "付款期次":payment_term,"分期狀態":payment_status})
         frame=pd.DataFrame(result,columns=["成交／預收日期","購買_ID","會員","教練","課程名稱","堂數","預收金額（含稅）","預收金額（未稅）","付款期次","分期狀態"])
         c1,c2=st.columns(2)
         c1.metric("預收金額總計（未稅）",f'$ {frame["預收金額（未稅）"].sum() if not frame.empty else 0:,.0f}',border=True)
         c2.metric("預收金額總計（含稅）",f'$ {frame["預收金額（含稅）"].sum() if not frame.empty else 0:,.0f}',border=True)
         st.caption(f"符合搜尋條件：{len(frame)} 筆")
-        if frame.empty: st.info("查無符合條件的預收收入資料。")
+        if frame.empty: st.info("查無符合條件的實際預收收入資料。")
         else:
             st.dataframe(frame,hide_index=True,width="stretch",column_config={"成交／預收日期":st.column_config.DateColumn(format="YYYY-MM-DD"),
                 "預收金額（含稅）":st.column_config.NumberColumn(format="$ %.0f"),"預收金額（未稅）":st.column_config.NumberColumn(format="$ %.0f")})
-            download_frame("預收收入查詢",frame,f"預收收入查詢_{key}.xlsx")
+            download_frame("實際預收收入",frame,f"實際預收收入_{key}.xlsx")
 
     def render_balance_results(cutoff,member_keyword,tax_mode,key):
         names=member_maps(); codes=purchase_codes(); keyword=member_keyword.casefold()
@@ -3496,14 +3528,14 @@ def general_queries_page(me):
                 .in_("purchase_id",ids).lte("termination_date",str(cutoff)).order("termination_date").order("id")) if ids else [])
         except Exception: terminations=[]
         payment_by={}; usage_by={}; termination_by={}
-        for x in payments: payment_by.setdefault(x["purchase_id"],[]).append(x)
+        for x in _allocate_payment_net_amounts(purchases,payments): payment_by.setdefault(x["purchase_id"],[]).append(x)
         for x in usages: usage_by.setdefault(x["purchase_id"],[]).append(x)
         for x in terminations: termination_by[x["purchase_id"]]=x
         suffix="未稅" if tax_mode=="未稅" else "含稅"; result=[]
         for purchase in purchases:
             pid=purchase["id"]; purchase_payments=payment_by.get(pid,[]); purchase_usages=usage_by.get(pid,[]); termination=termination_by.get(pid)
             if tax_mode=="未稅":
-                received=sum(_tax_display_amount(x.get("amount"),"未稅") for x in purchase_payments)
+                received=sum(x["_net_amount"] for x in purchase_payments)
                 used_amount=sum(usage_net_amount(x) for x in purchase_usages)
                 expired=_tax_display_amount(termination.get("recognized_amount"),"未稅") if termination and termination.get("termination_type")=="expired" else 0
                 fee=_tax_display_amount(termination.get("fee_amount"),"未稅") if termination and termination.get("termination_type")=="refund" else 0
@@ -3533,7 +3565,7 @@ def general_queries_page(me):
             st.dataframe(frame,hide_index=True,width="stretch",column_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in money_columns})
             download_frame(f"預收餘額（{suffix}）",frame,f"預收餘額_{suffix}_{key}.xlsx")
 
-    usage_tab,purchase_tab,prepaid_tab,balance_tab=st.tabs(["銷課查詢","成交總表","預收收入查詢","預收餘額查詢"])
+    usage_tab,purchase_tab,prepaid_tab,balance_tab=st.tabs(["銷課查詢","成交總表","實際預收收入","預收餘額查詢"])
     with usage_tab:
         date_tab,member_tab=st.tabs(["日期區間","會員查詢"])
         with date_tab:
@@ -3545,9 +3577,13 @@ def general_queries_page(me):
                 else: render_usage_results(start=start,end=end,key=f"日期_{start}_{end}")
         with member_tab:
             with st.form("general_usage_member_form",border=False):
-                c1,c2=st.columns(2); keyword=c1.text_input("會員",placeholder="輸入完整或部分會員名稱",key="gu_member").strip(); coach=c2.selectbox("教練",["全部教練"]+list(coaches),key="gu_coach")
+                c1,c2,c3=st.columns(3)
+                keyword=c1.text_input("會員",placeholder="輸入完整或部分會員名稱",key="gu_member").strip()
+                coach=c2.selectbox("教練",["全部教練"]+list(coaches),key="gu_coach")
+                purchase_keyword=c3.text_input("購買_ID",placeholder="例如 20260414-003，可輸入部分編號",key="gu_purchase_id").strip()
                 submitted=st.form_submit_button("查詢",type="primary",width="stretch")
-            if submitted: render_usage_results(member_keyword=keyword,coach_name=coach,key=f"會員_{keyword or '全部'}_{coach}")
+            if submitted: render_usage_results(member_keyword=keyword,coach_name=coach,purchase_keyword=purchase_keyword,
+                key=f"會員_{keyword or '全部'}_{coach}_{purchase_keyword or '全部購買'}")
 
     with purchase_tab:
         date_tab,cutoff_tab=st.tabs(["日期區間","截止日期"])
@@ -3639,7 +3675,7 @@ def financial_report_page(me):
         financial_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
 
         # 預收明細以付款日期判斷是否列入，包含查詢期間收到的分期款。
-        period_payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").gte("paid_date",str(start)).lte("paid_date",str(end)).order("paid_date",desc=True))
+        period_payments=paged_rows(lambda: client().table("purchase_payments").select("id,purchase_id,amount,paid_date,created_at").gte("paid_date",str(start)).lte("paid_date",str(end)).order("paid_date",desc=True).order("id",desc=True))
         period_purchase_ids=list({x["purchase_id"] for x in period_payments})
         purchases=rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,purchase_kind,payment_plan,installment_count,referral,note,status").in_("id",period_purchase_ids)) if period_purchase_ids else []
         if selected_coach_id: purchases=[x for x in purchases if x.get("coach_id")==selected_coach_id]
@@ -3647,7 +3683,9 @@ def financial_report_page(me):
         purchase_ids=[x["id"] for x in purchases]
         period_payments=[x for x in period_payments if x["purchase_id"] in set(purchase_ids)]
         balance_usages=rows(client().table("session_usages").select("purchase_id,deducted_amount,usage_date").in_("purchase_id",purchase_ids).lte("usage_date",str(end))) if purchase_ids else []
-        balance_payments=rows(client().table("purchase_payments").select("purchase_id,installment_no,amount,paid_date").in_("purchase_id",purchase_ids).lte("paid_date",str(end))) if purchase_ids else []
+        balance_payments=paged_rows(lambda: client().table("purchase_payments").select("id,purchase_id,installment_no,amount,paid_date,created_at").in_("purchase_id",purchase_ids).lte("paid_date",str(end)).order("paid_date").order("id")) if purchase_ids else []
+        allocated_balance_payments=_allocate_payment_net_amounts(purchases,balance_payments)
+        period_net_by_id={x["id"]:x["_net_amount"] for x in allocated_balance_payments}
         used_amount_map={}
         for usage in balance_usages:
             used_amount_map[usage["purchase_id"]]=used_amount_map.get(usage["purchase_id"],0)+float(usage["deducted_amount"])
@@ -3657,11 +3695,12 @@ def financial_report_page(me):
             received_amount_map[payment["purchase_id"]]=received_amount_map.get(payment["purchase_id"],0)+float(payment["amount"])
             if payment.get("installment_no") is not None:
                 paid_installments_map.setdefault(payment["purchase_id"],set()).add(int(payment["installment_no"]))
-        period_received_map={}
+        period_received_map={}; period_received_net_map={}
         period_payment_date_map={}
         for payment in period_payments:
             purchase_id=payment["purchase_id"]
             period_received_map[purchase_id]=period_received_map.get(purchase_id,0)+float(payment["amount"])
+            period_received_net_map[purchase_id]=period_received_net_map.get(purchase_id,0)+period_net_by_id[payment["id"]]
             period_payment_date_map[purchase_id]=max(str(payment["paid_date"]),period_payment_date_map.get(purchase_id,""))
         status_label_map={"active":"進行中","completed":"已完成","expired":"逾期中止","cancelled":"退費中止"}
         completed_ids=[x["id"] for x in purchases if x.get("status")=="completed"]
@@ -3696,13 +3735,13 @@ def financial_report_page(me):
                 "購買類型":purchase_kind_label,"課程狀態":status_label_map.get(purchase.get("status"),purchase.get("status") or ""),
                 "課程結束日期":course_end_date_map.get(purchase["id"]),"分期付清":payment_status,
                 "醫生轉介":purchase.get("referral") or "","備註":purchase.get("note") or "",
-                "成交總金額":_tax_display_amount(contracted,detail_tax_mode) if purchase_in_period else None,"實際預收金額":_tax_display_amount(period_prepaid,detail_tax_mode),
+                "成交總金額":_tax_display_amount(contracted,detail_tax_mode) if purchase_in_period else None,"實際預收金額":period_received_net_map.get(purchase["id"],0) if detail_tax_mode=="未稅" else _tax_display_amount(period_prepaid,detail_tax_mode),
                 "銷課金額":_tax_display_amount(used,detail_tax_mode),"剩餘金額":_tax_display_amount(remaining,detail_tax_mode),
-                "_含稅成交":contracted if purchase_in_period else 0,"_含稅預收":period_prepaid,"_含稅銷課":used,"_含稅剩餘":remaining})
+                "_含稅成交":contracted if purchase_in_period else 0,"_含稅預收":period_prepaid,"_未稅預收":period_received_net_map.get(purchase["id"],0),"_含稅銷課":used,"_含稅剩餘":remaining})
         balance_rows.sort(key=lambda x:str(x.get("日期") or ""),reverse=True)
         balance_df=pd.DataFrame(balance_rows,columns=["日期","會員名稱","成交總金額","實際預收金額","銷課金額","剩餘金額"])
         totals_df=pd.DataFrame([{"成交總金額":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
-            "實際預收總金額":_tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode)}])
+            "實際預收總金額":sum(x["_未稅預收"] for x in balance_rows) if total_tax_mode=="未稅" else _tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode)}])
         prepaid_total_rows=[{
             "購買_ID":x["購買_ID"],"成交日期":x["成交日期"],"會員名稱":x["會員名稱"],"堂數":x["堂數"],
             "課程名稱":x["課程名稱"],"教練":x["教練"],
@@ -3729,14 +3768,16 @@ def financial_report_page(me):
         outstanding_payments=paged_rows(lambda: client().table("purchase_payments").select("id,purchase_id,amount,paid_date,created_at")
             .in_("purchase_id",outstanding_ids).lte("paid_date",str(date.today()))
             .order("paid_date").order("created_at").order("id")) if outstanding_ids else []
-        outstanding_usages=paged_rows(lambda: client().table("session_usages").select("id,purchase_id,deducted_amount,usage_date,created_at")
+        outstanding_usages=paged_rows(lambda: client().table("session_usages").select("id,purchase_id,deducted_amount,deducted_net_amount,usage_date,created_at")
             .in_("purchase_id",outstanding_ids).lte("usage_date",str(date.today()))
             .order("usage_date").order("created_at").order("id")) if outstanding_ids else []
-        outstanding_paid_map={}; outstanding_used_map={}; outstanding_used_sessions_map={}
-        for payment in outstanding_payments:
+        outstanding_paid_map={}; outstanding_paid_net_map={}; outstanding_used_map={}; outstanding_used_net_map={}; outstanding_used_sessions_map={}
+        for payment in _allocate_payment_net_amounts(outstanding_purchases,outstanding_payments):
             outstanding_paid_map[payment["purchase_id"]]=outstanding_paid_map.get(payment["purchase_id"],0)+float(payment.get("amount") or 0)
+            outstanding_paid_net_map[payment["purchase_id"]]=outstanding_paid_net_map.get(payment["purchase_id"],0)+payment["_net_amount"]
         for usage in outstanding_usages:
             outstanding_used_map[usage["purchase_id"]]=outstanding_used_map.get(usage["purchase_id"],0)+float(usage.get("deducted_amount") or 0)
+            outstanding_used_net_map[usage["purchase_id"]]=outstanding_used_net_map.get(usage["purchase_id"],0)+usage_net_amount(usage)
             outstanding_used_sessions_map[usage["purchase_id"]]=outstanding_used_sessions_map.get(usage["purchase_id"],0)+1
         outstanding_rows=[]
         for purchase in outstanding_purchases:
@@ -3750,11 +3791,14 @@ def financial_report_page(me):
             # 已完成、逾期中止及退費中止均視為已結清，不再列為可使用的預收餘額；
             # 但保留明細列，讓財務人員可查閱其實收、銷課及最終課程狀態。
             prepaid_balance=raw_prepaid_balance if purchase.get("status")=="active" else 0
+            received_net=outstanding_paid_net_map.get(purchase["id"],0)
+            used_net=outstanding_used_net_map.get(purchase["id"],0)
+            prepaid_net_balance=max(received_net-used_net,0) if purchase.get("status")=="active" else 0
             if purchase.get("status")=="active" and (prepaid_balance<=0 or remaining_sessions<=0): continue
             outstanding_rows.append({"成交日期":purchase.get("purchase_date"),"購買_ID":financial_purchase_code_map.get(purchase["id"],""),
                 "會員名稱":member_name_map.get(purchase.get("member_id"),""),"課程名稱":purchase.get("course_name") or "",
-                "實際預收金額":_tax_display_amount(received,detail_tax_mode),"累計銷課金額":_tax_display_amount(used,detail_tax_mode),
-                "實際預收剩餘金額":_tax_display_amount(prepaid_balance,detail_tax_mode),"堂數":f"{used_sessions}／{total_sessions}",
+                "實際預收金額":received_net if detail_tax_mode=="未稅" else _tax_display_amount(received,detail_tax_mode),"累計銷課金額":used_net if detail_tax_mode=="未稅" else _tax_display_amount(used,detail_tax_mode),
+                "實際預收剩餘金額":prepaid_net_balance if detail_tax_mode=="未稅" else _tax_display_amount(prepaid_balance,detail_tax_mode),"堂數":f"{used_sessions}／{total_sessions}",
                 "有效期限":purchase.get("expiry_date"),
                 "課程狀態":status_label_map.get(purchase.get("status"),purchase.get("status") or ""),
                 "_含稅預收餘額":prepaid_balance})
@@ -3786,7 +3830,7 @@ def financial_report_page(me):
             st.caption("每列為查詢期間內有實際收款的購買課程，包含分期款；非本期間成交者，成交金額留白。")
             st.dataframe(center_member_report_columns(prepaid_total_df,["成交金額"]),hide_index=True,width="stretch",column_config=money_config)
         with detail_tabs[1]:
-            actual_prepaid_balance_total=_tax_display_amount(sum(x["_含稅預收餘額"] for x in outstanding_rows),detail_tax_mode)
+            actual_prepaid_balance_total=sum(x["實際預收剩餘金額"] for x in outstanding_rows)
             st.metric(f"目前預收餘額（{detail_tax_mode}）",f"$ {actual_prepaid_balance_total:,.0f}")
             st.caption(f"本表不受上方日期區間限制，列出截至 {date.today()} 的進行中、已完成、逾期中止及退費中止課程。已完成與已中止課程視為結清，目前預收餘額顯示為 0；教練及會員篩選仍然有效。目前顯示：{detail_tax_mode}金額。")
             st.dataframe(center_member_report_columns(outstanding_balance_df,["實際預收金額","實際預收剩餘金額"]),hide_index=True,width="stretch",column_config=money_config)
@@ -3945,13 +3989,17 @@ def financial_report_page(me):
             course_type_map={str(x.get("course_name") or "").strip():str(x.get("course_type") or "未分類").strip() or "未分類" for x in course_catalog}
             course_type_totals={}
             other_payments=paged_rows(lambda: client().table("purchase_payments")
-                .select("purchase_id,amount,paid_date,id")
+                .select("purchase_id,amount,paid_date,id,created_at")
                 .gte("paid_date",str(other_start)).lte("paid_date",str(other_end))
                 .order("paid_date",desc=True).order("id",desc=True))
             payment_purchase_ids=list({x.get("purchase_id") for x in other_payments if x.get("purchase_id")})
-            payment_purchases=(rows(client().table("purchases").select("id,member_id,coach_id,course_name").in_("id",payment_purchase_ids))
+            payment_purchases=(paged_rows(lambda: client().table("purchases").select("id,member_id,coach_id,course_name,total_amount").in_("id",payment_purchase_ids).order("id"))
                 if payment_purchase_ids else [])
             payment_purchase_map={x["id"]:x for x in payment_purchases}
+            prior_other_payments=(paged_rows(lambda: client().table("purchase_payments")
+                .select("id,purchase_id,amount,paid_date,created_at").in_("purchase_id",payment_purchase_ids)
+                .lte("paid_date",str(other_end)).order("paid_date").order("id")) if payment_purchase_ids else [])
+            other_net_by_id={x["id"]:x["_net_amount"] for x in _allocate_payment_net_amounts(payment_purchases,prior_other_payments)}
             for payment in other_payments:
                 purchase=payment_purchase_map.get(payment.get("purchase_id"),{})
                 if selected_other_coach_id and purchase.get("coach_id")!=selected_other_coach_id: continue
@@ -3959,7 +4007,7 @@ def financial_report_page(me):
                 course_name=str(purchase.get("course_name") or "").strip()
                 course_type=course_type_map.get(course_name,"未分類")
                 totals=course_type_totals.setdefault(course_type,{"received":0.0,"usage":0.0})
-                totals["received"]+=float(payment.get("amount") or 0)
+                totals["received"]+=other_net_by_id[payment["id"]]
 
             # 銷課依實際銷課日期、授課教練篩選；會員與課程屬性則由原購買紀錄關聯。
             usage_purchase_records=rows(client().table("purchases").select("id,member_id,course_name"))
@@ -3992,7 +4040,7 @@ def financial_report_page(me):
             for course_type,totals in sorted(course_type_totals.items()):
                 course_type_rows.append({
                     "課程屬性":course_type,
-                    "實際預收金額（未稅）":_tax_display_amount(totals["received"],"未稅"),
+                    "實際預收金額（未稅）":totals["received"],
                     "銷課未稅金額":round(totals["usage"]),
                 })
             course_type_columns=["課程屬性","實際預收金額（未稅）","銷課未稅金額"]
@@ -4031,14 +4079,15 @@ def financial_report_page(me):
                     .lte("paid_date",str(historical_cutoff)).order("paid_date").order("created_at").order("id")) if historical_ids else [])
                 # 歷史預收餘額以「銷課日期」為截帳基準；截止日後才登錄的補單不回溯改寫歷史餘額。
                 historical_usages=(paged_rows(lambda: client().table("session_usages")
-                    .select("id,purchase_id,deducted_amount,usage_date,actual_usage_date,created_at").in_("purchase_id",historical_ids)
+                    .select("id,purchase_id,deducted_amount,deducted_net_amount,usage_date,actual_usage_date,created_at").in_("purchase_id",historical_ids)
                     .lte("usage_date",str(historical_cutoff)).order("usage_date").order("created_at").order("id")) if historical_ids else [])
                 historical_terminations=(paged_rows(lambda: client().table("course_terminations")
                     .select("id,purchase_id,termination_type,termination_date,created_at").in_("purchase_id",historical_ids)
                     .lte("termination_date",str(historical_cutoff)).order("termination_date").order("created_at").order("id")) if historical_ids else [])
-                historical_paid_map={}; historical_usage_map={}; historical_termination_map={}
-                for payment in historical_payments:
+                historical_paid_map={}; historical_paid_net_map={}; historical_usage_map={}; historical_termination_map={}
+                for payment in _allocate_payment_net_amounts(historical_purchases,historical_payments):
                     historical_paid_map[payment["purchase_id"]]=historical_paid_map.get(payment["purchase_id"],0)+float(payment.get("amount") or 0)
+                    historical_paid_net_map[payment["purchase_id"]]=historical_paid_net_map.get(payment["purchase_id"],0)+payment["_net_amount"]
                 for usage in historical_usages:
                     historical_usage_map.setdefault(usage["purchase_id"],{})[usage["id"]]=usage
                 for termination in historical_terminations:
@@ -4061,12 +4110,15 @@ def financial_report_page(me):
                     else: historical_status="進行中"
                     raw_balance=max(received-used,0)
                     prepaid_balance=raw_balance if historical_status=="進行中" else 0
+                    received_net=historical_paid_net_map.get(purchase_id,0)
+                    used_net=sum(usage_net_amount(x) for x in purchase_usages)
+                    prepaid_net_balance=max(received_net-used_net,0) if historical_status=="進行中" else 0
                     if historical_status=="進行中" and (prepaid_balance<=0 or remaining_sessions<=0): continue
                     historical_rows.append({"成交日期":purchase.get("purchase_date"),"購買_ID":historical_code_map.get(purchase_id,""),
                         "會員名稱":member_name_map.get(purchase.get("member_id"),""),"課程名稱":purchase.get("course_name") or "",
-                        "實際預收金額":_tax_display_amount(received,historical_tax_mode),
-                        "累計銷課金額":_tax_display_amount(used,historical_tax_mode),
-                        "實際預收剩餘金額":_tax_display_amount(prepaid_balance,historical_tax_mode),
+                        "實際預收金額":received_net if historical_tax_mode=="未稅" else _tax_display_amount(received,historical_tax_mode),
+                        "累計銷課金額":used_net if historical_tax_mode=="未稅" else _tax_display_amount(used,historical_tax_mode),
+                        "實際預收剩餘金額":prepaid_net_balance if historical_tax_mode=="未稅" else _tax_display_amount(prepaid_balance,historical_tax_mode),
                         "堂數":f"{used_sessions}／{total_sessions}","最後銷課日期":last_usage_date or None,
                         "有效期限":purchase.get("expiry_date"),"課程狀態":historical_status,
                         "_含稅預收餘額":prepaid_balance})

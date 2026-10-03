@@ -25,6 +25,7 @@ FUNCTIONS = {
     "_excel_bytes",
     "_financial_backup_frames",
     "_tax_display_amount",
+    "_allocate_payment_net_amounts",
     "_bonus_rule_for_date",
     "_bonus_eligibility",
     "_build_purchase_code_map",
@@ -166,7 +167,7 @@ def test_project_items_support_course_type():
 
 def test_course_type_report_uses_actual_received_amount():
     source = APP_PATH.read_text(encoding="utf-8")
-    assert '"實際預收金額（未稅）":_tax_display_amount(totals["received"],"未稅")' in source
+    assert '"實際預收金額（未稅）":totals["received"]' in source
     assert '.gte("paid_date",str(other_start)).lte("paid_date",str(other_end))' in source
     frames = load_functions()["_financial_backup_frames"](sample_tables())
     row = frames["財務-課程屬性"].iloc[0]
@@ -376,7 +377,7 @@ def test_general_query_columns_and_accounting_sources():
     assert '"銷課金額（未稅）":usage_net_amount(usage)' in source
     assert 'columns=["成交日期","購買_ID","會員","教練","課程名稱","堂數"' in source
     assert '"成交金額（未稅）":_tax_display_amount(gross,"未稅")' in source
-    assert 'paid_net[pid]=paid_net.get(pid,0)+_tax_display_amount(item.get("amount"),"未稅")' in source
+    assert 'paid_net[pid]=paid_net.get(pid,0)+item["_net_amount"]' in source
     assert '"已收金額（未稅）":paid_net.get(pid,0)' in source
     assert '.lte("paid_date",str(cutoff))' in source
     assert '.lte("usage_date",str(cutoff))' in source
@@ -394,11 +395,11 @@ def test_general_query_totals_match_displayed_rows():
 
 def test_prepaid_income_query_is_submit_gated_and_uses_payment_date():
     source = APP_PATH.read_text(encoding="utf-8")
-    assert 'usage_tab,purchase_tab,prepaid_tab,balance_tab=st.tabs(["銷課查詢","成交總表","預收收入查詢","預收餘額查詢"])' in source
+    assert 'usage_tab,purchase_tab,prepaid_tab,balance_tab=st.tabs(["銷課查詢","成交總表","實際預收收入","預收餘額查詢"])' in source
     assert 'with st.form("general_prepaid_date_form",border=False):' in source
     assert 'with st.form("general_prepaid_member_form",border=False):' in source
     assert 'if start is not None: query=query.gte("paid_date",str(start))' in source
-    assert 'if end is not None: query=query.lte("paid_date",str(end))' in source
+    assert 'query=query.lte("paid_date",str(end or date.today()))' in source
     assert 'if keyword and keyword not in member_name.casefold():' in source
 
 
@@ -407,7 +408,7 @@ def test_prepaid_income_query_columns_status_and_totals():
     assert 'columns=["成交／預收日期","購買_ID","會員","教練","課程名稱","堂數"' in source
     prepaid_block=source[source.index('with prepaid_tab:'):source.index('def financial_report_page(me):')]
     assert '"購買":' not in prepaid_block
-    assert '"預收金額（未稅）":_tax_display_amount(gross,"未稅")' in source
+    assert '"預收金額（未稅）":payment_net_map[payment["id"]]' in source
     assert '"付款期次":payment_term,"分期狀態":payment_status' in source
     assert 'payment_term="補繳款"' in source
     assert "payment_term=f'第 {int(payment.get(\"installment_no\") or 0)}/{int(purchase.get(\"installment_count\") or 0)} 期'" in source
@@ -431,7 +432,7 @@ def test_general_query_downloads_and_prepaid_balance_formula():
     assert 'st.download_button("下載 Excel"' in source
     assert 'download_frame("銷課查詢"' in source
     assert 'download_frame("成交總表"' in source
-    assert 'download_frame("預收收入查詢"' in source
+    assert 'download_frame("實際預收收入"' in source
     assert 'download_frame(f"預收餘額（{suffix}）"' in source
     assert 'received-used_amount-expired-fee-refund' in source
     assert 'recognized_amount,fee_amount,refund_amount' in source
