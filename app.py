@@ -1871,7 +1871,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.58"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.59"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -3446,9 +3446,11 @@ def general_queries_page(me):
                 "教練":coach_name_map.get(purchase.get("coach_id"),"未知教練"),"課程名稱":purchase.get("course_name") or "",
                 "堂數":total_sessions,"成交金額（含稅）":gross,"成交金額（未稅）":_tax_display_amount(gross,"未稅"),
                 "已收金額（含稅）":received,"已收金額（未稅）":paid_net.get(pid,0),
-                "課程期限":purchase.get("expiry_date"),"狀態":status,"結束日期":end_date,"分期狀態":installment_status})
+                "課程期限":purchase.get("expiry_date"),"狀態":status,"結束日期":end_date,"分期狀態":installment_status,
+                "購買類型":{"first":"首次購買","renewal":"續課"}.get(purchase.get("purchase_kind"),purchase.get("purchase_kind") or ""),
+                "醫生轉介":purchase.get("referral") or "","備註":purchase.get("note") or ""})
         return pd.DataFrame(result,columns=["成交日期","購買_ID","會員","教練","課程名稱","堂數","成交金額（含稅）","成交金額（未稅）",
-            "已收金額（含稅）","已收金額（未稅）","課程期限","狀態","結束日期","分期狀態"])
+            "已收金額（含稅）","已收金額（未稅）","課程期限","狀態","結束日期","分期狀態","購買類型","醫生轉介","備註"])
 
     def render_purchase_results(frame,key):
         c1,c2=st.columns(2)
@@ -3594,7 +3596,7 @@ def general_queries_page(me):
             if submitted:
                 if start>end: st.error("開始日期不可晚於結束日期。")
                 else:
-                    purchases=paged_rows(lambda: client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,payment_plan,installment_count,created_at")
+                    purchases=paged_rows(lambda: client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,payment_plan,installment_count,purchase_kind,referral,note,created_at")
                         .gte("purchase_date",str(start)).lte("purchase_date",str(end)).order("purchase_date",desc=True).order("id",desc=True))
                     render_purchase_results(build_purchase_results(purchases,end),f"日期_{start}_{end}")
         with cutoff_tab:
@@ -3603,7 +3605,7 @@ def general_queries_page(me):
                 c4,c5=st.columns(2); status=c4.selectbox("課程狀態",["全部","進行中","已完成","逾期中止","退費中止"],key="gp_status"); payment_status=c5.selectbox("分期狀態",["全部","付清","未付清"],key="gp_payment")
                 submitted=st.form_submit_button("查詢",type="primary",width="stretch")
             if submitted:
-                purchases=paged_rows(lambda: client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,payment_plan,installment_count,created_at")
+                purchases=paged_rows(lambda: client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,payment_plan,installment_count,purchase_kind,referral,note,created_at")
                     .lte("purchase_date",str(cutoff)).order("purchase_date",desc=True).order("id",desc=True))
                 render_purchase_results(build_purchase_results(purchases,cutoff,keyword,coach,status,payment_status),f"截止_{cutoff}")
 

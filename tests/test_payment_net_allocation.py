@@ -139,7 +139,7 @@ class ReportTests(unittest.TestCase):
             "download_frame": lambda label, frame, filename: setattr(self, "download", frame.copy())})
         tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
         page = next(x for x in tree.body if isinstance(x, ast.FunctionDef) and x.name == "general_queries_page")
-        renderers = [x for x in page.body if isinstance(x, ast.FunctionDef) and x.name in {"render_prepaid_results", "build_purchase_results", "render_balance_results"}]
+        renderers = [x for x in page.body if isinstance(x, ast.FunctionDef) and x.name in {"render_prepaid_results", "build_purchase_results", "render_purchase_results", "render_balance_results"}]
         exec(compile(ast.Module(body=renderers, type_ignores=[]), str(APP_PATH), "exec"), self.ns)
 
     def test_last_period_receipt_and_excel_have_correct_tail(self):
@@ -183,6 +183,50 @@ class ReportTests(unittest.TestCase):
         self.ns["render_prepaid_results"](member_keyword="不存在", key="empty")
         self.assertIsNone(self.download)
         self.assertEqual(self.metrics["預收金額總計（未稅）"], "$ 0")
+
+    def test_purchase_last_three_columns_and_excel_match(self):
+        purchase = self.tables["purchases"][0]
+        purchase.update(purchase_kind="first", referral="測試醫師", note="購課時備註\n第二行")
+        frame = self.ns["build_purchase_results"](self.tables["purchases"], date(2026, 10, 3))
+        self.assertEqual(frame.columns.tolist()[-3:], ["購買類型", "醫生轉介", "備註"])
+        self.assertEqual(frame.iloc[0]["購買類型"], "首次購買")
+        self.assertEqual(frame.iloc[0]["醫生轉介"], "測試醫師")
+        self.assertEqual(frame.iloc[0]["備註"], "購課時備註\n第二行")
+        self.ns["render_purchase_results"](frame, "columns")
+        pd.testing.assert_frame_equal(self.frame, self.download)
+        self.assertEqual(self.metrics["成交金額總計（未稅）"], "$ 15,086")
+        self.assertEqual(self.metrics["成交金額總計（含稅）"], "$ 15,840")
+        sheet = load_workbook(BytesIO(self.ns["_excel_bytes"]({"成交總表": self.download})), data_only=True).active
+        self.assertEqual([cell.value for cell in sheet[1]][-3:], ["購買類型", "醫生轉介", "備註"])
+        self.assertEqual([cell.value for cell in sheet[2]][-3:], ["首次購買", "測試醫師", "購課時備註\n第二行"])
+        self.assertEqual(sheet["A2"].data_type, "d")
+
+    def test_purchase_types_and_nulls_are_preserved(self):
+        purchase = self.tables["purchases"][0]
+        for kind, label in (("first", "首次購買"), ("renewal", "續課"), ("legacy", "legacy"), (None, "")):
+            with self.subTest(kind=kind):
+                purchase.update(purchase_kind=kind, referral=None, note=None)
+                row = self.ns["build_purchase_results"](self.tables["purchases"], date(2026, 10, 3)).iloc[0]
+                self.assertEqual(row["購買類型"], label)
+                self.assertEqual(row["醫生轉介"], "")
+                self.assertEqual(row["備註"], "")
+                self.assertEqual(row["已收金額（未稅）"], 15086)
+
+    def test_empty_purchase_results_keep_columns(self):
+        frame = self.ns["build_purchase_results"]([], date(2026, 10, 3))
+        self.assertTrue(frame.empty)
+        self.assertEqual(frame.columns.tolist()[-3:], ["購買類型", "醫生轉介", "備註"])
+        self.ns["render_purchase_results"](frame, "empty")
+        self.assertIsNone(self.download)
+        self.assertEqual(self.metrics["成交金額總計（未稅）"], "$ 0")
+
+    def test_both_purchase_search_paths_select_new_fields(self):
+        tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
+        page = next(x for x in tree.body if isinstance(x, ast.FunctionDef) and x.name == "general_queries_page")
+        expected = "id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,payment_plan,installment_count,purchase_kind,referral,note,created_at"
+        selects = [x for x in ast.walk(page) if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute)
+                   and x.func.attr == "select" and x.args and isinstance(x.args[0], ast.Constant) and x.args[0].value == expected]
+        self.assertEqual(len(selects), 2)
 
 
 if __name__ == "__main__": unittest.main()
