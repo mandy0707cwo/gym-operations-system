@@ -395,7 +395,45 @@ def daily_page(me):
             show_table(project_rows,["entry_date","project_name","person_name","coach_name","item_name","item_hours","quantity","execution_hours","unit_price","line_total","note"])
 
 def purchase_page(me):
-    st.header("課程購買")
+    st.header("購買及分期")
+    names=["課程購買","登錄後續期款"]+(["課程中止"] if me.get("role")=="admin" else [])
+    tabs=st.tabs(names,key="purchase_installment_tab",on_change="rerun")
+    for tab,name in zip(tabs,names):
+        if not tab.open:
+            continue
+        with tab:
+            if name=="課程購買":
+                course_purchase_entry(me)
+            elif name=="登錄後續期款":
+                installment_payment_entry(me)
+            elif me.get("role")=="admin":
+                course_termination_report_page(me)
+
+def _entry_saved(prefix,message):
+    """成功確認後換新欄位鍵，下次執行才清空，不重設其他分頁。"""
+    key=f"{prefix}_form_revision"
+    st.session_state[key]=st.session_state.get(key,0)+1
+    st.session_state[f"{prefix}_success"]=message
+    st.rerun()
+
+def _entry_success(prefix):
+    message=st.session_state.pop(f"{prefix}_success",None)
+    if message:
+        st.success(message)
+
+def _confirmed_write(response,field,expected=None):
+    """必須收到有效回傳紀錄才顯示成功及清空；不重試未知結果。"""
+    data=getattr(response,"data",None)
+    records=data if isinstance(data,list) else [data] if isinstance(data,dict) else []
+    if len(records)!=1 or not isinstance(records[0],dict) or not records[0].get("id"):
+        raise ValueError("未收到資料庫寫入確認，請先查核是否已入帳；勿直接重送。")
+    if expected is not None and records[0].get(field)!=expected:
+        raise ValueError("寫入回傳資料不符，請先查核原始紀錄；勿直接重送。")
+    return records[0]
+
+def course_purchase_entry(me):
+    st.subheader("課程購買")
+    _entry_success("purchase")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
     coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
     members=rows(client().table("members").select("id,member_name,phone,referral,responsible_coach_id,note").eq("active",True).order("member_name"))
@@ -430,30 +468,26 @@ def purchase_page(me):
     default_coach_index=coach_names.index(default_coach_name) if default_coach_name in coach_names else None
     default_referral=str(selected_member.get("referral") or "")
     default_purchase_note=str(selected_member.get("note") or "")
-    with st.form(f"purchase_{purchase_revision}",clear_on_submit=True,enter_to_submit=False):
+    with st.form(f"purchase_{purchase_revision}",clear_on_submit=False,enter_to_submit=False):
         c1,c2=st.columns(2)
-        kind=c1.selectbox("購買類型",["首次購買","續課"])
+        kind=c1.selectbox("購買類型",["首次購買","續課"],index=None,placeholder="請選擇購買類型",key=f"purchase_kind_{purchase_revision}")
         coach_name=c2.selectbox("指導教練",coach_names,index=default_coach_index,placeholder="請選擇教練",
             key=f"purchase_coach_{purchase_revision}_{selected_member_id}")
         c1,c2,c3=st.columns(3)
-        sessions=c1.number_input("課程堂數",1,999,value=None,placeholder="請輸入堂數")
-        session_hours=c2.number_input("每堂課時數",0.25,24.0,value=selected_session_hours,step=0.25,format="%.2f",placeholder="選擇課程後自動帶入",disabled=True)
-        amount=c3.number_input("成交總金額",0.0,10000000.0,value=None,step=100.0,format="%.0f",placeholder="請輸入金額")
+        sessions=c1.number_input("課程堂數",1,999,value=None,placeholder="請輸入堂數",key=f"purchase_sessions_{purchase_revision}")
+        session_hours=c2.number_input("每堂課時數",0.25,24.0,value=selected_session_hours,step=0.25,format="%.2f",placeholder="選擇課程後自動帶入",disabled=True,key=f"purchase_hours_{purchase_revision}_{course}")
+        amount=c3.number_input("成交總金額",0.0,10000000.0,value=None,step=100.0,format="%.0f",placeholder="請輸入金額",key=f"purchase_amount_{purchase_revision}")
         c1,c2=st.columns(2)
-        purchased=c1.date_input("購買日期",date.today(),**coach_date_limit)
-        try:
-            default_expiry=purchased.replace(year=purchased.year+1)
-        except ValueError:
-            default_expiry=purchased.replace(year=purchased.year+1,day=28)
-        expiry=c2.date_input("有效日期",value=default_expiry)
+        purchased=c1.date_input("購買日期",value=None,key=f"purchase_date_{purchase_revision}",**coach_date_limit)
+        expiry=c2.date_input("有效日期",value=None,key=f"purchase_expiry_{purchase_revision}")
         referral=st.text_input("醫生轉介",value=default_referral,key=f"purchase_referral_{purchase_revision}_{selected_member_id}")
         purchase_note=st.text_area("備註",value=default_purchase_note,key=f"purchase_note_{purchase_revision}_{selected_member_id}")
         if plan=="分期":
-            count=st.selectbox("總期數",[2,3],index=None,placeholder="請選擇總期數")
+            count=st.selectbox("總期數",[2,3],index=None,placeholder="請選擇總期數",key=f"purchase_count_{purchase_revision}")
             c1,c2,c3=st.columns(3)
-            installment_no=c1.number_input("此次為第幾期",value=1,disabled=True)
-            paid=c2.number_input("此次支付金額",0.0,10000000.0,value=None,step=100.0,format="%.0f",placeholder="請輸入支付金額")
-            paid_date=c3.date_input("支付日期",date.today(),**coach_date_limit)
+            installment_no=c1.number_input("此次為第幾期",value=1,disabled=True,key=f"purchase_first_period_{purchase_revision}")
+            paid=c2.number_input("此次支付金額",0.0,10000000.0,value=None,step=100.0,format="%.0f",placeholder="請輸入支付金額",key=f"purchase_paid_{purchase_revision}")
+            paid_date=c3.date_input("支付日期",value=None,key=f"purchase_paid_date_{purchase_revision}",**coach_date_limit)
         elif plan=="未分期":
             count=1
             installment_no=1
@@ -468,31 +502,48 @@ def purchase_page(me):
         if member_label is None: errors.append("請選擇已建立的客戶")
         if coach_name is None: errors.append("請選擇指導教練")
         if course is None: errors.append("請選擇課程名稱")
+        if kind not in ("首次購買","續課"): errors.append("請選擇購買類型")
         if sessions is None: errors.append("請輸入課程堂數")
         if session_hours is None: errors.append("請選擇課程以帶入每堂課時數")
         if amount is None: errors.append("請輸入成交總金額")
+        if purchased is None: errors.append("請選擇購買日期")
         if expiry is None: errors.append("請選擇有效日期")
-        elif expiry<purchased: errors.append("有效日期不可早於購買日期")
-        if me["role"]=="coach" and purchased<date.today(): errors.append("教練的購買日期只能填寫今天或未來日期")
+        elif purchased is not None and expiry<purchased: errors.append("有效日期不可早於購買日期")
+        if me["role"]=="coach" and purchased is not None and purchased<date.today(): errors.append("教練的購買日期只能填寫今天或未來日期")
         if me["role"]=="coach" and paid_date is not None and paid_date<date.today(): errors.append("教練的支付日期只能填寫今天或未來日期")
         if plan is None: errors.append("請選擇付款方式")
         if plan=="分期" and count is None: errors.append("請選擇總期數")
         if paid is None or paid<=0: errors.append("此次支付金額須大於 0")
+        if paid_date is None: errors.append("請選擇支付日期")
         if paid is not None and amount is not None and paid>amount: errors.append("此次支付金額不可大於成交總金額")
         if installment_no is not None and installment_no!=1: errors.append("新購買紀錄應先登錄第 1 期；後續期款請由付款功能登錄")
         if errors: st.error("；".join(errors))
         else:
             try:
                 member_id=member_options[member_label]["id"]
-                p=rows(client().table("purchases").insert({"member_id":member_id,"purchase_kind":"first" if kind=="首次購買" else "renewal",
+                # 一次呼叫資料庫交易；禁止退回購課、付款各寫一次的舊流程。
+                result=_confirmed_write(client().rpc("create_purchase_with_first_payment",{"p_purchase":{"member_id":member_id,"purchase_kind":"first" if kind=="首次購買" else "renewal",
                     "coach_id":allowed[coach_name],"course_name":course.strip(),"report_category":course_report_categories.get(course,"未分類"),
                     "total_sessions":sessions,"session_hours":session_hours,"total_amount":amount,
                     "purchase_date":str(purchased),"expiry_date":str(expiry),"payment_plan":"full" if plan=="未分期" else "installment",
-                    "installment_count":count,"referral":referral.strip() or None,"note":purchase_note.strip() or None,"created_by":me["id"]}))[0]
-                client().table("purchase_payments").insert({"purchase_id":p["id"],"installment_no":1,"amount":paid,"paid_date":str(paid_date),"created_by":me["id"]}).execute()
-                st.session_state[purchase_revision_key]=purchase_revision+1
-                st.success("購買與首期付款紀錄已建立。"); st.rerun()
-            except Exception as exc: st.error(f"建立失敗：{exc}")
+                    "installment_count":count,"referral":referral.strip() or None,"note":purchase_note.strip() or None},
+                    "p_first_payment":{"amount":paid,"paid_date":str(paid_date)}}).execute(),"id")
+                if not result.get("payment_id") or result.get("purchase_id")!=result["id"]:
+                    raise ValueError("未收到完整購課及首期付款確認，請先查核是否已入帳；勿直接重送。")
+                _entry_saved("purchase","購買與首期付款紀錄已建立，欄位已清空。")
+            except Exception as exc:
+                if getattr(exc,"code",None)=="PGRST202":
+                    st.error("購課交易功能尚未建立，請系統管理員先執行 v1.13.6 升級 SQL；本次未改用舊的分開寫入流程。")
+                else:
+                    st.error(f"購課與首期付款未完成或結果未確認：{exc}")
+                    st.warning("資料庫拒絕時兩筆都不會建立；若為連線中斷或未收到成功回覆，請先查核兩筆是否已入帳，勿直接重送。輸入欄位已保留。")
+
+def installment_payment_entry(me):
+    st.subheader("登錄後續期款")
+    _entry_success("payment")
+    coaches=coach_options()
+    coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
+    revision=st.session_state.get("payment_form_revision",0)
     purchases=rows(client().table("purchase_balances").select("purchase_id,member_name,course_name,coach_id"))
     operational_ids=set(coaches.values())
     purchases=[x for x in purchases if x.get("coach_id")==me["id"]] if me["role"]=="coach" else [x for x in purchases if x.get("coach_id") in operational_ids]
@@ -520,27 +571,32 @@ def purchase_page(me):
         lookup[f'{purchase_code}｜{purchase["member_name"]}｜{purchase["course_name"]}｜{int(plan["installment_count"])} 期｜未付 $ {unpaid_amount:,.0f}']={
             "id":purchase["purchase_id"],"purchase_code":purchase_code,"paid_numbers":paid["numbers"],"unpaid_amount":unpaid_amount}
     if lookup:
-        st.subheader("登錄後續期款")
-        with st.form("payment"):
-            label=st.selectbox("購買紀錄",list(lookup))
-            selected_payment=lookup[label]
+        label=st.selectbox("購買紀錄",list(lookup),index=None,placeholder="請選擇購買紀錄",key=f"payment_purchase_{revision}")
+        selected_payment=lookup.get(label)
+        with st.form(f"payment_{revision}",clear_on_submit=False,enter_to_submit=False):
             c1,c2,c3=st.columns(3)
-            installment_choice=c1.selectbox("期次",["第 2 期","第 3 期"])
-            pay_amount=c2.number_input("支付金額",1.0,10000000.0,step=100.0,format="%.0f")
-            pay_date=c3.date_input("付款日期",date.today())
-            no=2 if installment_choice=="第 2 期" else 3
-            st.caption(f'本次付款沿用購買課程編號：{selected_payment["purchase_code"]}；不會建立新的 purchase_id。')
+            installment_choice=c1.selectbox("期次",["第 2 期","第 3 期"],index=None,placeholder="請選擇期次",key=f"payment_period_{revision}")
+            pay_amount=c2.number_input("支付金額",1.0,10000000.0,value=None,step=100.0,format="%.0f",placeholder="請輸入金額",key=f"payment_amount_{revision}")
+            pay_date=c3.date_input("付款日期",value=None,key=f"payment_date_{revision}",**coach_date_limit)
+            no={"第 2 期":2,"第 3 期":3}.get(installment_choice)
+            if selected_payment:
+                st.caption(f'本次付款沿用購買課程編號：{selected_payment["purchase_code"]}；不會建立新的 purchase_id。')
             add=st.form_submit_button("新增付款")
         if add:
             try:
+                if selected_payment is None or no is None or pay_amount is None or pay_date is None:
+                    raise ValueError("請完整選擇購買紀錄、期次、支付金額及付款日期")
+                if me["role"]=="coach" and pay_date<date.today():
+                    raise ValueError("教練的付款日期只能填寫今天或未來日期")
                 if int(no) in selected_payment["paid_numbers"]:
                     raise ValueError(f"第 {int(no)} 期已登錄，不可重複")
                 if float(pay_amount)>float(selected_payment["unpaid_amount"]):
                     raise ValueError("支付金額不可超過未付金額")
-                client().table("purchase_payments").insert({"purchase_id":selected_payment["id"],"installment_no":no,"amount":pay_amount,"paid_date":str(pay_date),"created_by":me["id"]}).execute()
-                st.success("付款紀錄已新增。")
-                st.rerun()
+                _confirmed_write(client().table("purchase_payments").insert({"purchase_id":selected_payment["id"],"installment_no":no,"amount":pay_amount,"paid_date":str(pay_date),"created_by":me["id"]}).execute(),"purchase_id",selected_payment["id"])
+                _entry_saved("payment","付款紀錄已新增，欄位已清空。")
             except Exception as exc: st.error(f"新增失敗（請檢查期次是否重複或超出設定）：{exc}")
+    else:
+        st.info("目前沒有可登錄後續期款的未付清課程。")
 
 def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
     export_sheets={}
@@ -1879,7 +1935,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.4"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.6"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2808,7 +2864,7 @@ def customer_admin_page(me):
                         "responsible_coach_id":coaches.get(new_coach),"initial_contact_date":str(new_initial_date) if new_initial_date else None,
                         "customer_status":status_values[new_status_label],"emergency_contact":new_emergency_contact or None,
                         "emergency_phone":new_emergency_phone or None,"note":new_note or None,"active":True,"created_by":me["id"],"updated_by":me["id"]}).execute()
-                    st.success("客戶資料已新增，現在可至左側「課程購買」選擇此客戶建立購買紀錄。"); st.rerun()
+                    st.success("客戶資料已新增，現在可至左側「購買及分期 → 課程購買」選擇此客戶建立購買紀錄。"); st.rerun()
                 except ValueError as exc: st.error(str(exc))
                 except Exception as exc: st.error(f"新增失敗：{exc}")
 
@@ -3247,6 +3303,11 @@ def _build_purchase_code_map(purchases):
     return code_map
 
 def course_termination_report_page(me):
+    if me.get("role")!="admin":
+        st.warning("課程中止僅限系統管理員使用。")
+        return
+    _entry_success("termination")
+    revision=st.session_state.get("termination_form_revision",0)
     st.subheader("課程中止")
     st.caption("逾期餘額轉列入帳；退費金額為剩餘金額扣除選擇性 20% 手續費。兩者均不計入銷課及執行時數。")
     coaches=coach_options(); coach_name_map={v:k for k,v in coaches.items()}
@@ -3275,16 +3336,16 @@ def course_termination_report_page(me):
         if not option_map:
             st.info("目前沒有可中止的有效課程。")
         else:
-            selected_label=st.selectbox("選擇會員課程",list(option_map),index=None,placeholder="請選擇尚有餘額的課程")
+            selected_label=st.selectbox("選擇會員課程",list(option_map),index=None,placeholder="請選擇尚有餘額的課程",key=f"termination_purchase_{revision}")
             selected=option_map.get(selected_label) if selected_label else None
-            termination_label=st.segmented_control("中止類型",["逾期中止","退費中止"],default="逾期中止")
+            termination_label=st.segmented_control("中止類型",["逾期中止","退費中止"],default=None,key=f"termination_kind_{revision}")
             charge_fee=False; bonus_eligible=False; bonus_coach=None
             if termination_label=="退費中止":
-                charge_fee=st.checkbox("收取剩餘金額 20% 手續費",value=True)
-            else:
-                bonus_eligible=st.checkbox("計算結單獎金",value=False)
+                charge_fee=st.checkbox("收取剩餘金額 20% 手續費",value=False,key=f"termination_fee_{revision}")
+            elif termination_label=="逾期中止":
+                bonus_eligible=st.checkbox("計算結單獎金",value=False,key=f"termination_bonus_{revision}")
                 if bonus_eligible:
-                    bonus_coach=st.selectbox("結單獎金歸屬教練",list(coaches),index=None,placeholder="請選擇教練")
+                    bonus_coach=st.selectbox("結單獎金歸屬教練",list(coaches),index=None,placeholder="請選擇教練",key=f"termination_bonus_coach_{revision}")
             if selected:
                 remaining=Decimal(str(selected.get("remaining_amount") or 0))
                 fee=(remaining*Decimal("0.20")).quantize(Decimal("0.01"),rounding=ROUND_HALF_UP) if charge_fee else Decimal("0")
@@ -3293,28 +3354,29 @@ def course_termination_report_page(me):
                 c1.metric("退費前剩餘金額",f"$ {remaining:,.0f}")
                 c2.metric("手續費",f"$ {fee:,.0f}")
                 c3.metric("實際退費金額",f"$ {refund:,.0f}")
-            with st.form("course_termination_form",enter_to_submit=False):
-                termination_date=st.date_input("中止日期",date.today())
-                reason=st.text_input("中止原因")
-                note=st.text_area("備註")
+            with st.form(f"course_termination_form_{revision}",clear_on_submit=False,enter_to_submit=False):
+                termination_date=st.date_input("中止日期",value=None,key=f"termination_date_{revision}")
+                reason=st.text_input("中止原因",key=f"termination_reason_{revision}")
+                note=st.text_area("備註",key=f"termination_note_{revision}")
                 submitted=st.form_submit_button("確認中止課程",type="primary",width="stretch")
             if submitted:
                 errors=[]
                 if selected is None: errors.append("請選擇會員課程")
+                if termination_label not in ("逾期中止","退費中止"): errors.append("請選擇中止類型")
+                if termination_date is None: errors.append("請選擇中止日期")
                 if not reason.strip(): errors.append("請填寫中止原因")
                 if termination_label=="逾期中止" and bonus_eligible and bonus_coach is None: errors.append("請選擇結單獎金歸屬教練")
                 if errors:
                     st.error("；".join(errors)+"。")
                 else:
                     try:
-                        client().rpc("terminate_course",{
+                        _confirmed_write(client().rpc("terminate_course",{
                             "p_purchase_id":selected["purchase_id"],"p_termination_date":str(termination_date),
                             "p_termination_type":"expired" if termination_label=="逾期中止" else "refund",
                             "p_charge_fee":charge_fee,"p_completion_bonus_eligible":bonus_eligible,
                             "p_completion_bonus_coach_id":coaches.get(bonus_coach),"p_reason":reason.strip(),
-                            "p_note":note.strip() or None}).execute()
-                        st.success("課程已中止，帳務金額已記錄；本筆不會增加執行時數。")
-                        st.rerun()
+                            "p_note":note.strip() or None}).execute(),"purchase_id",selected["purchase_id"])
+                        _entry_saved("termination","課程已中止，帳務金額已記錄，欄位已清空；本筆不會增加執行時數。")
                     except Exception as exc:
                         st.error(f"課程中止失敗：{exc}")
 
@@ -4569,7 +4631,7 @@ user=login(); me=profile(user.id)
 with st.sidebar:
     st.title("🏋️ 營運管理")
     st.write(f'{me["display_name"]}｜{ROLE_LABELS.get(me["role"],me["role"])}')
-    pages=["每日營運","客戶管理","課程購買","銷課表","教練查詢"]
+    pages=["每日營運","客戶管理","購買及分期","銷課表","教練查詢"]
     if me["role"] in ("manager","admin"): pages.append("主管 Dashboard")
     if me["role"] == "admin":
         pages.extend(["各項查詢", "財務報表", "帳號與權限管理", "資料管理"])
@@ -4580,6 +4642,7 @@ with st.sidebar:
 collapse_sidebar_on_mobile()
 
 try:
-    {"每日營運":daily_page,"客戶管理":customer_admin_page,"課程購買":purchase_page,"銷課表":usage_page,"教練查詢":coach_query_page,"各項查詢":general_queries_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
+    {"每日營運":daily_page,"客戶管理":customer_admin_page,"購買及分期":purchase_page,"銷課表":usage_page,"教練查詢":coach_query_page,"各項查詢":general_queries_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")
+

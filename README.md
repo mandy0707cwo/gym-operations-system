@@ -1,5 +1,7 @@
 # 秀傳運醫營運系統
 
+> v1.13.6：購買及分期分為課程購買、登錄後續期款及僅管理員可操作的課程中止；成功確認後清空欄位。購課及首期付款改為同一交易，資料庫拒絕任一步均回滾。正式 migration atomic_purchase_v1_13_6 已執行並驗證；使用者已同意提交部署，線上完成狀態以部署紀錄為準。本版包含未單獨發布的 v1.13.5，不啟用活動方案測試。操作見 [UPGRADE_v1.13.6.md](UPGRADE_v1.13.6.md)，測試及既有安全警示見 [VERIFICATION_v1.13.6.md](VERIFICATION_v1.13.6.md)。
+
 > v1.13.4：已儲值專案截止日期欄位更名為「總儲值金額(含稅)」；日期區間在執行日期後新增專案名稱，畫面與 Excel 同步。計算與權限不變，不需 SQL。2026-10-04 使用者已同意發布；線上完成狀態以部署紀錄為準。操作見 [UPGRADE_v1.13.4.md](UPGRADE_v1.13.4.md)，測試見 [VERIFICATION_v1.13.4.md](VERIFICATION_v1.13.4.md)。
 
 > 發布版本：v1.13.3（2026-10-04 已同意提交及部署，線上完成狀態以部署紀錄為準）。專案查詢金額整元顯示、日期由舊到新；日期區間表格移除前期餘額；截止日期餘額總計列於表格及 Excel 最後一列。原始精度與計算不變，不需 SQL。詳見 [UPGRADE_v1.13.3.md](UPGRADE_v1.13.3.md)、[CHANGELOG_v1.13.3.md](CHANGELOG_v1.13.3.md)、[SYSTEM_DOCUMENTATION_v1.13.3.md](SYSTEM_DOCUMENTATION_v1.13.3.md)、[資料字典_v1.13.3.md](資料字典_v1.13.3.md)、[VERIFICATION_v1.13.3.md](VERIFICATION_v1.13.3.md)。活動方案試行暫停，不在發布範圍。

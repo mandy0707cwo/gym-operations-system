@@ -147,7 +147,7 @@ def test_monthly_sales_columns_include_purchase_id_and_coach():
 def test_coach_query_is_a_sidebar_page_not_a_usage_tab():
     source = APP_PATH.read_text(encoding="utf-8")
     assert 'register_tab,cancel_tab=st.tabs(["銷課登錄","上課預約取消"])' in source
-    assert 'pages=["每日營運","客戶管理","課程購買","銷課表","教練查詢"]' in source
+    assert 'pages=["每日營運","客戶管理","購買及分期","銷課表","教練查詢"]' in source
     assert '"教練查詢":coach_query_page' in source
 
 
@@ -185,7 +185,7 @@ def test_customer_management_preserves_existing_member_ids():
     source = APP_PATH.read_text(encoding="utf-8")
     migration = CUSTOMER_MIGRATION_PATH.read_text(encoding="utf-8")
     assert 'def customer_admin_page(me):' in source
-    assert 'pages=["每日營運","客戶管理","課程購買","銷課表","教練查詢"]' in source
+    assert 'pages=["每日營運","客戶管理","購買及分期","銷課表","教練查詢"]' in source
     assert 'admin.table("members").update' in source
     assert "alter table public.members add column if not exists phone text;" in migration
     assert "update public.members m" in migration
@@ -395,7 +395,8 @@ def test_general_query_totals_match_displayed_rows():
 
 def test_prepaid_income_query_is_submit_gated_and_uses_payment_date():
     source = APP_PATH.read_text(encoding="utf-8")
-    assert 'usage_tab,purchase_tab,prepaid_tab,balance_tab=st.tabs(["銷課查詢","成交總表","實際預收收入","預收餘額查詢"])' in source
+    assert 'usage_tab,purchase_tab,prepaid_tab,balance_tab,project_tab=st.tabs(' in source
+    assert '["銷課查詢","成交總表","實際預收收入","預收餘額查詢","專案查詢"]' in source
     assert 'with st.form("general_prepaid_date_form",border=False):' in source
     assert 'with st.form("general_prepaid_member_form",border=False):' in source
     assert 'if start is not None: query=query.gte("paid_date",str(start))' in source
