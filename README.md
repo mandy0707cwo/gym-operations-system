@@ -1,6 +1,7 @@
 # 秀傳運醫營運系統
 
-> 目前版本：v1.12.59。「各項查詢 → 成交總表」最後新增購買類型、醫生轉介、備註，畫面與 Excel 下載同步更新。保留 v1.12.58 的收款與銷課尾差規則；本版無需 Supabase SQL。
+> 發布版本：v1.13.1（專案查詢，2026-10-04已同意提交）；部署結果以線上驗收為準。本次無資料庫結構異動，不需執行 Supabase SQL。詳見 [`UPGRADE_v1.13.1.md`](UPGRADE_v1.13.1.md)。活動方案測試暫不使用，本次發布排除其入口與模組，本機檔案保留。新版功能與版本紀錄見 [`SYSTEM_DOCUMENTATION_v1.13.1.md`](SYSTEM_DOCUMENTATION_v1.13.1.md)、[`CHANGELOG_v1.13.1.md`](CHANGELOG_v1.13.1.md)。新版資料來源見 [`資料字典_v1.13.1.md`](資料字典_v1.13.1.md)。
+
 
 完整功能、權限、資料邏輯、部署、備份及維護說明請參考 [`SYSTEM_DOCUMENTATION.md`](SYSTEM_DOCUMENTATION.md)；歷次變更請參考 [`CHANGELOG.md`](CHANGELOG.md)。
 
@@ -66,7 +67,7 @@ SUPABASE_SECRET_KEY = "YOUR_SUPABASE_SECRET_KEY"
 - 專案建立後，再管理該專案的操作項目、時數與價格。
 - 每日營運專案依操作項目與數量計算金額；已儲值專案餘額不足時不允許建立紀錄。
 - 財務報表第四分頁提供已儲值使用明細、儲值狀況及未儲值使用明細。
-- 既有專案會先保留為未儲值。請將「黃柏文」改為已儲值並輸入實際儲值金額；系統不會自行假設該金額。
+- 既有專案會先保留為未儲值。請由管理員將需要儲值的專案改為已儲值並輸入實際儲值金額；系統不會自行假設該金額。
 
 `SUPABASE_SECRET_KEY` 只用於主管從 App 寄送教練邀請，必須存放於 Streamlit Secrets，絕不可提交到 GitHub。可使用新版 `sb_secret_...`；舊專案則使用 `service_role` key。
 

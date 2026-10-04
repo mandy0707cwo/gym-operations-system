@@ -1593,7 +1593,7 @@ def project_admin_page(me):
                             st.success("操作項目已修改；歷史單據內容不受影響。"); st.rerun()
                         except Exception as exc: st.error(f"修改失敗：{exc}")
 
-def _excel_bytes(sheet_frames):
+def _excel_bytes(sheet_frames,number_formats=None):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter", date_format="yyyy-mm-dd", datetime_format="yyyy-mm-dd hh:mm:ss") as writer:
         date_cell_format = writer.book.add_format({"num_format": "yyyy-mm-dd"})
@@ -1601,7 +1601,8 @@ def _excel_bytes(sheet_frames):
         for sheet_name, frame in sheet_frames.items():
             safe_name = sheet_name[:31]
             export_frame = frame.copy()
-            column_formats = {}
+            column_formats = {column:writer.book.add_format({"num_format":fmt})
+                for column,fmt in (number_formats or {}).items() if column in frame.columns}
             for column in export_frame.columns:
                 column_name = str(column).strip()
                 normalized_name = column_name.lower()
@@ -1871,7 +1872,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.12.59"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.1"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -3346,6 +3347,19 @@ def general_queries_page(me):
         st.warning("此頁僅限系統管理員使用。")
         return
 
+    usage_tab,purchase_tab,prepaid_tab,balance_tab,project_tab=st.tabs(
+        ["銷課查詢","成交總表","實際預收收入","預收餘額查詢","專案查詢"], key="general_query_main_tab", on_change="rerun")
+    if project_tab.open:
+        with project_tab:
+            from project_queries import render_project_queries
+            def project_query_excel(frames):
+                gross_fields=["前期餘額","金額（含稅）","金額合計（含稅）","專案執行總計（含稅）","前期餘額（含稅）"]
+                net_fields=["金額（未稅）","金額合計（未稅）","專案執行總計（未稅）"]
+                return _excel_bytes(frames,number_formats={**{x:'"$"#,##0.00;("$"#,##0.00)' for x in gross_fields},
+                    **{x:'"$"#,##0;("$"#,##0)' for x in net_fields},"時數":"0.##"})
+            render_project_queries(me,client,paged_rows,_tax_display_amount,project_query_excel)
+        return
+
     coach_records=paged_rows(lambda: client().table("profiles").select("id,display_name,role,active")
         .eq("role","coach").order("display_name").order("id"))
     coaches={item["display_name"]:item["id"] for item in coach_records}
@@ -3567,7 +3581,6 @@ def general_queries_page(me):
             st.dataframe(frame,hide_index=True,width="stretch",column_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in money_columns})
             download_frame(f"預收餘額（{suffix}）",frame,f"預收餘額_{suffix}_{key}.xlsx")
 
-    usage_tab,purchase_tab,prepaid_tab,balance_tab=st.tabs(["銷課查詢","成交總表","實際預收收入","預收餘額查詢"])
     with usage_tab:
         date_tab,member_tab=st.tabs(["日期區間","會員查詢"])
         with date_tab:
