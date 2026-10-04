@@ -53,7 +53,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report['deposited_gross'], 11550)
         self.assertEqual(report['balance_gross'], 5250)
         self.assertEqual(report['balance_net'], 5000)
-        self.assertEqual(report['frame']['期初/期間儲值金額'].dropna().tolist(), [11550])
+        self.assertEqual(report['frame']['總儲值金額(含稅)'].dropna().tolist(), [11550])
         self.assertEqual(len(report['frame']), 3)
         self.assertEqual(report['frame']['教練'].unique().tolist(), ['測試教練'])
 
@@ -67,10 +67,26 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(self.report()['frame']['時數'].tolist(), [1, 1])
 
     def test_exact_columns_range(self):
-        self.assertEqual(self.report()['frame'].columns.tolist(), ['執行日期', '教練', '使用者', '執行項目', '時數', '金額（含稅）', '金額（未稅）'])
+        self.assertEqual(self.report()['frame'].columns.tolist(), ['執行日期', '專案名稱', '教練', '使用者', '執行項目', '時數', '金額（含稅）', '金額（未稅）'])
 
     def test_exact_columns_cutoff(self):
-        self.assertEqual(self.report('cutoff')['frame'].columns.tolist(), ['專案名稱', '期初/期間儲值金額', '日期', '教練', '使用者', '項目', '時數', '金額（含稅）', '金額（未稅）'])
+        self.assertEqual(self.report('cutoff')['frame'].columns.tolist(), ['專案名稱', '總儲值金額(含稅)', '日期', '教練', '使用者', '項目', '時數', '金額（含稅）', '金額（未稅）'])
+
+    def test_range_project_name_on_every_row_without_affecting_totals(self):
+        report = self.report()
+        self.assertEqual(report['frame']['專案名稱'].tolist(), ['虛構儲值專案', '虛構儲值專案'])
+        self.assertEqual((report['gross'], report['net'], report['opening']), (5250, 5000, 9450))
+        empty = self.report(start='2026-08-15', end='2026-08-20')['frame']
+        self.assertEqual(empty.columns.tolist(), report['frame'].columns.tolist())
+
+    def test_cutoff_label_renamed_and_no_duplicate_tax_suffix(self):
+        frame = project_report_frame(self.report('cutoff'), 'cutoff')
+        self.assertIn('總儲值金額(含稅)', frame.columns)
+        self.assertNotIn('期初/期間儲值金額', frame.columns)
+        self.assertEqual(frame['總儲值金額(含稅)'].dropna().tolist(), [11550])
+        formats = project_excel_number_formats()
+        self.assertIn('總儲值金額(含稅)', formats)
+        self.assertFalse(any('期初/期間儲值金額' in name for name in formats))
 
     def test_oldest_dates_first_and_typed(self):
         self.assertEqual(self.report()['frame']['執行日期'].tolist(), [date(2026, 8, 1), date(2026, 8, 31)])
@@ -185,13 +201,16 @@ class ReportTests(unittest.TestCase):
         self.assertIsInstance(ws['A2'].value, datetime)
         self.assertEqual(ws['A2'].number_format, 'yyyy-mm-dd')
         self.assertEqual(ws.freeze_panes, 'A2')
-        self.assertEqual(ws['F2'].number_format, project_excel_number_formats()['金額（含稅）'])
-        self.assertEqual(ws['G2'].number_format, project_excel_number_formats()['金額（未稅）'])
-        self.assertEqual(ws['E2'].number_format, '0.##')
+        self.assertEqual([cell.value for cell in ws[1]], report['frame'].columns.tolist())
+        self.assertEqual(ws['B2'].value, '虛構儲值專案')
+        self.assertEqual(ws['B3'].value, '虛構儲值專案')
+        self.assertEqual(ws['G2'].number_format, project_excel_number_formats()['金額（含稅）'])
+        self.assertEqual(ws['H2'].number_format, project_excel_number_formats()['金額（未稅）'])
+        self.assertEqual(ws['F2'].number_format, '0.##')
         self.assertNotIn('.00', wb['查詢摘要']['B2'].number_format)
         self.assertEqual(wb['查詢摘要']['A1'].value, '專案執行總計（未稅）')
         self.assertEqual(wb['查詢摘要']['B1'].value, '專案執行總計（含稅）')
-        self.assertEqual(sum(ws.cell(i, 7).value for i in (2, 3)), wb['查詢摘要']['A2'].value)
+        self.assertEqual(sum(ws.cell(i, 8).value for i in (2, 3)), wb['查詢摘要']['A2'].value)
         self.assertNotIn('前期餘額', [cell.value for cell in ws[1]])
 
     def test_excel_whole_display_preserves_fractional_source(self):
@@ -200,7 +219,7 @@ class ReportTests(unittest.TestCase):
         excel = next(x for x in tree.body if isinstance(x, ast.FunctionDef) and x.name == '_excel_bytes')
         ns = {'BytesIO': BytesIO, 'pd': pd}
         exec(compile(ast.Module(body=[excel], type_ignores=[]), '<excel>', 'exec'), ns)
-        frame = pd.DataFrame([{'專案餘額總計（含稅）': 3380.5, '期初/期間儲值金額（含稅）': 3380.5}])
+        frame = pd.DataFrame([{'專案餘額總計（含稅）': 3380.5, '總儲值金額(含稅)': 3380.5}])
         wb = load_workbook(BytesIO(ns['_excel_bytes']({'查詢摘要': frame}, number_formats=project_excel_number_formats())), data_only=True)
         for cell in wb['查詢摘要'][2]:
             self.assertEqual(cell.value, 3380.5)
@@ -272,6 +291,9 @@ class ReportTests(unittest.TestCase):
         wb = load_workbook(BytesIO(payload), data_only=True)
         ws = wb['查詢結果']
         self.assertEqual(ws.max_row, 5)
+        self.assertEqual(ws['B1'].value, '總儲值金額(含稅)')
+        self.assertEqual(ws['B2'].value, 11550)
+        self.assertEqual(ws['B2'].number_format, project_excel_number_formats()['總儲值金額(含稅)'])
         self.assertEqual(ws['A5'].value, '專案餘額總計')
         self.assertEqual((ws['H5'].value, ws['I5'].value), (5250, 5000))
         self.assertIsNone(ws['C5'].value)
@@ -311,4 +333,3 @@ class ReportTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-

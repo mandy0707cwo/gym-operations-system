@@ -1,5 +1,7 @@
 # 秀傳運醫營運系統
 
+> v1.13.4：已儲值專案截止日期欄位更名為「總儲值金額(含稅)」；日期區間在執行日期後新增專案名稱，畫面與 Excel 同步。計算與權限不變，不需 SQL。2026-10-04 使用者已同意發布；線上完成狀態以部署紀錄為準。操作見 [UPGRADE_v1.13.4.md](UPGRADE_v1.13.4.md)，測試見 [VERIFICATION_v1.13.4.md](VERIFICATION_v1.13.4.md)。
+
 > 發布版本：v1.13.3（2026-10-04 已同意提交及部署，線上完成狀態以部署紀錄為準）。專案查詢金額整元顯示、日期由舊到新；日期區間表格移除前期餘額；截止日期餘額總計列於表格及 Excel 最後一列。原始精度與計算不變，不需 SQL。詳見 [UPGRADE_v1.13.3.md](UPGRADE_v1.13.3.md)、[CHANGELOG_v1.13.3.md](CHANGELOG_v1.13.3.md)、[SYSTEM_DOCUMENTATION_v1.13.3.md](SYSTEM_DOCUMENTATION_v1.13.3.md)、[資料字典_v1.13.3.md](資料字典_v1.13.3.md)、[VERIFICATION_v1.13.3.md](VERIFICATION_v1.13.3.md)。活動方案試行暫停，不在發布範圍。
 
 

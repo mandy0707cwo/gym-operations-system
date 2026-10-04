@@ -80,6 +80,10 @@ class UITests(unittest.TestCase):
         self.assertEqual(app.metric[0].value, '$ 1,000')
         self.assertEqual(app.metric[1].value, '$ 1,050')
         self.assertEqual(app.dataframe[0].value['教練'].tolist(), ['測試教練'])
+        self.assertEqual(app.dataframe[0].value.columns.tolist()[:3], ['執行日期', '專案名稱', '教練'])
+        self.assertEqual(app.dataframe[0].value['專案名稱'].tolist(), ['測試儲值'])
+        self.assertEqual(list(app.session_state['exported']['查詢結果'][0])[:3], ['執行日期', '專案名稱', '教練'])
+        self.assertEqual(app.session_state['exported']['查詢結果'][0]['專案名稱'], '測試儲值')
         self.assertEqual(app.dataframe[0].value['時數'].tolist(), [1])
         self.assertNotIn('前期餘額', app.dataframe[0].value.columns)
         self.assertNotIn('前期餘額', app.session_state['exported']['查詢結果'][0])
@@ -103,7 +107,9 @@ class UITests(unittest.TestCase):
         self.assertEqual(app.dataframe[0].value['教練'].iloc[0], '測試教練')
         self.assertEqual([m.label for m in app.metric], ['專案餘額（未稅）', '專案餘額（含稅）'])
         self.assertEqual([m.value for m in app.metric], ['$ 9,000', '$ 9,450'])
-        self.assertEqual(app.dataframe[0].value['期初/期間儲值金額'].dropna().tolist(), [10500])
+        self.assertEqual(app.dataframe[0].value['總儲值金額(含稅)'].dropna().tolist(), [10500])
+        self.assertFalse(any('期初/期間儲值金額' in name for name in app.dataframe[0].value.columns))
+        self.assertTrue(any('總儲值金額(含稅)' in item.value for item in app.caption))
         self.assertNotIn('前期餘額', app.dataframe[0].value.columns)
         self.assertEqual(app.dataframe[0].value.iloc[-1]['專案名稱'], '專案餘額總計')
         self.assertEqual(app.session_state['exported']['查詢結果'][-1]['專案名稱'], '專案餘額總計')
@@ -111,7 +117,8 @@ class UITests(unittest.TestCase):
         summary = app.session_state['exported']['查詢摘要'][0]
         self.assertEqual(summary['專案餘額總計（含稅）'], 9450)
         self.assertEqual(summary['專案餘額總計（未稅）'], 9000)
-        self.assertEqual(summary['期初/期間儲值金額（含稅）'], 10500)
+        self.assertEqual(summary['總儲值金額(含稅)'], 10500)
+        self.assertFalse(any('期初/期間儲值金額' in name for name in summary))
         self.assertEqual(summary['資料筆數'], 1)
         self.assertEqual(len(app.session_state['exported']['查詢結果']), 2)
 
@@ -129,7 +136,7 @@ class UITests(unittest.TestCase):
         app = self.app(); self.submit(app)
         before = app.session_state['reads'].count('project_entries')
         result = app.session_state['project_query_range_result']
-        result['_report_version'] = 'v1.13.2'
+        result['_report_version'] = 'v1.13.3'
         app.session_state['project_query_range_result'] = result
         app.run()
         self.assertEqual(app.session_state['reads'].count('project_entries'), before)
@@ -172,4 +179,3 @@ class UITests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
-
