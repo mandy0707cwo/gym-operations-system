@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 
 import pandas as pd
 
-PROJECT_QUERY_VERSION = "v1.13.2"
+PROJECT_QUERY_VERSION = "v1.13.3"
 
 
 def deposit_amount(entry):
@@ -18,13 +18,12 @@ def deposit_amount(entry):
 
 def project_excel_number_formats():
     """僅調整顯示格式；儲存格保留來源數值與日期型別。"""
-    cents = ["金額（含稅）", "金額合計（含稅）", "專案執行金額合計（含稅）"]
-    whole = ["前期餘額", "前期餘額（含稅）", "期初/期間儲值金額", "期初/期間儲值金額（含稅）",
+    whole = ["金額（含稅）", "金額合計（含稅）", "專案執行金額合計（含稅）",
+             "前期餘額", "前期餘額（含稅）", "期初/期間儲值金額", "期初/期間儲值金額（含稅）",
              "專案執行總計（含稅）", "專案餘額（含稅）", "專案餘額總計（含稅）",
              "金額（未稅）", "金額合計（未稅）", "專案執行總計（未稅）", "專案餘額（未稅）",
              "專案餘額總計（未稅）", "專案執行金額合計（未稅）"]
-    return {**{x: '"$"#,##0.00;("$"#,##0.00)' for x in cents},
-            **{x: '"$"#,##0;("$"#,##0)' for x in whole}, "時數": "0.##"}
+    return {**{x: '"$"#,##0;("$"#,##0)' for x in whole}, "時數": "0.##"}
 
 
 def amount(value, field):
@@ -72,7 +71,7 @@ def execution_report(project, entries, deposits, coach_names, tax, *, mode, end,
                          if report_date(x["entry_date"]) < opening_boundary), Decimal(0))
         opening = prior_deposits - prior_used
     visible = [x for x in history if mode == "cutoff" or report_date(x["entry_date"]) >= start]
-    visible.sort(key=lambda x: (str(x["entry_date"]), str(x.get("created_at") or ""), str(x["id"])), reverse=True)
+    visible.sort(key=lambda x: (str(x["entry_date"]), str(x.get("created_at") or ""), str(x["id"])))
     result = []
     gross_total = Decimal(0)
     net_total = 0
@@ -88,8 +87,7 @@ def execution_report(project, entries, deposits, coach_names, tax, *, mode, end,
                   "金額（含稅）": float(gross), "金額（未稅）": net}
         coach = coach_names.get(entry.get("coach_id"), "未指定" if not entry.get("coach_id") else "未知教練")
         if mode == "range":
-            row = {"前期餘額": float(opening) if index == 0 else None,
-                   "執行日期": report_date(entry["entry_date"]), "教練": coach, "使用者": common["使用者"],
+            row = {"執行日期": report_date(entry["entry_date"]), "教練": coach, "使用者": common["使用者"],
                    "執行項目": entry.get("item_name") or "", **common}
         elif mode == "cutoff":
             row = {"專案名稱": project["project_name"], "期初/期間儲值金額": float(deposited) if index == 0 else None,
@@ -102,7 +100,7 @@ def execution_report(project, entries, deposits, coach_names, tax, *, mode, end,
                    "金額（含稅）": float(gross), "備註": entry.get("note") or ""}
         result.append(row)
     columns = {
-        "range": ["前期餘額", "執行日期", "教練", "使用者", "執行項目", "時數", "金額（含稅）", "金額（未稅）"],
+        "range": ["執行日期", "教練", "使用者", "執行項目", "時數", "金額（含稅）", "金額（未稅）"],
         "cutoff": ["專案名稱", "期初/期間儲值金額", "日期", "教練", "使用者", "項目", "時數", "金額（含稅）", "金額（未稅）"],
         "unfunded": ["日期", "專案名稱", "教練", "使用者", "項目", "時數", "金額（含稅）", "備註"],
     }[mode]
@@ -116,13 +114,25 @@ def execution_report(project, entries, deposits, coach_names, tax, *, mode, end,
             "start": start, "end": end, "project_name": project["project_name"]}
 
 
+def project_report_frame(result, mode):
+    """明細與總計分離計算；畫面及 Excel 共用最後一列餘額的呈現結果。"""
+    frame = result["frame"].copy(deep=True)
+    if mode == "cutoff":
+        footer = {column: None for column in frame.columns}
+        footer.update({"專案名稱": "專案餘額總計", "金額（含稅）": result["balance_gross"],
+                       "金額（未稅）": result["balance_net"]})
+        # 不將餘額列回原始明細，避免影響交易筆數及執行金額合計。
+        frame.loc[len(frame)] = footer
+    return frame
+
+
 def deposit_report(project, deposits, tax, today):
     """儲值、後續儲值及負數沖銷都保留；不重複加上主檔 stored_amount。"""
     if project["funding_type"] != "stored":
         raise ValueError("只有已儲值專案可查詢儲值明細。")
     today = report_date(today)
     visible = [x for x in deposits if x.get("project_id") == project["id"] and report_date(x["deposit_date"]) <= today]
-    visible.sort(key=lambda x: (str(x["deposit_date"]), str(x.get("created_at") or ""), str(x["id"])), reverse=True)
+    visible.sort(key=lambda x: (str(x["deposit_date"]), str(x.get("created_at") or ""), str(x["id"])))
     result = []
     for entry in visible:
         gross = deposit_amount(entry)
@@ -223,7 +233,8 @@ def render_project_queries(me, client, paged_rows, tax, excel_bytes):
                                             "專案餘額總計（含稅）": result["balance_gross"], "專案餘額總計（未稅）": result["balance_net"],
                                             "餘額計算方式": "截至截止日累計含稅儲值（含沖銷）－累計含稅執行；未稅餘額沿用共用換算"})
                         result["_report_version"] = PROJECT_QUERY_VERSION
-                        result["payload"] = excel_bytes({"查詢結果": result["frame"], "查詢摘要": pd.DataFrame([summary])})
+                        result["report_frame"] = project_report_frame(result, mode)
+                        result["payload"] = excel_bytes({"查詢結果": result["report_frame"], "查詢摘要": pd.DataFrame([summary])})
                         # 只留該使用者最新查詢，避免保留過多報表與切換分頁誤讀。
                         for old_mode in ["range", "cutoff", "deposit", "unfunded"]:
                             st.session_state.pop(f"project_query_{old_mode}_result", None)
@@ -245,21 +256,23 @@ def render_project_queries(me, client, paged_rows, tax, excel_bytes):
                 metric_net = result["balance_net"] if mode == "cutoff" else result["net"]
                 metric_gross = result["balance_gross"] if mode == "cutoff" else result["gross"]
                 c1.metric(f"{label}（未稅）", f"$ {metric_net:,.0f}", border=True)
-                c2.metric(f"{label}（含稅）", f"$ {metric_gross:,.2f}" if mode == "deposit" else f"$ {metric_gross:,.0f}", border=True)
+                c2.metric(f"{label}（含稅）", f"$ {metric_gross:,.0f}", border=True)
                 if mode == "range":
                     st.caption(f"前期餘額（含稅）：$ {result['opening']:,.0f}；截至 {result['opening_boundary'] - pd.Timedelta(days=1)} 的累計儲值（含沖銷）扣除累計執行金額，不包含起始日當天或之後的儲值與執行。")
                 elif mode == "cutoff":
                     st.caption(f"期初/期間儲值金額（含稅）：$ {result['deposited_gross']:,.0f}；為截至截止日的累計儲值（含沖銷）。專案餘額＝累計儲值－累計執行金額；未稅餘額沿用系統共用換算。")
                 else:
                     st.caption("截至今日的期初儲值、後續儲值及沖銷明細；沖銷以負數列示。")
-            money = {x: st.column_config.NumberColumn(format="$ %.2f" if x == "金額（含稅）" else "$ %.0f")
+            frame = result["report_frame"]
+            money = {x: st.column_config.NumberColumn(format="$ %.0f")
                      for x in ["前期餘額", "期初/期間儲值金額", "金額（含稅）", "金額（未稅）"] if x in result["frame"].columns}
             if result["frame"].empty:
                 st.info("查無符合條件的專案紀錄。")
-            else:
-                st.dataframe(result["frame"], hide_index=True, width="stretch", column_config={**money,
-                             **{x: st.column_config.DateColumn(format="YYYY-MM-DD") for x in ["日期", "執行日期"] if x in result["frame"].columns}})
+            if not frame.empty:
+                st.dataframe(frame, hide_index=True, width="stretch", column_config={**money,
+                             **{x: st.column_config.DateColumn(format="YYYY-MM-DD") for x in ["日期", "執行日期"] if x in frame.columns}})
             if mode == "cutoff":
-                st.markdown(f"**專案餘額總計**　含稅 $ {result['balance_gross']:,.0f}　／　未稅 $ {result['balance_net']:,.0f}")
+                st.caption("表格最後一列為專案餘額總計，不屬於執行交易；日期由舊到新，金額僅顯示整元，原始數值精度不變。")
             st.download_button("下載 Excel", result["payload"], file_name=f"專案查詢_{mode}_{result['end']}_{PROJECT_QUERY_VERSION}.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key=f"{prefix}_download", on_click="ignore", width="stretch")
+

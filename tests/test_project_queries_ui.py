@@ -81,6 +81,9 @@ class UITests(unittest.TestCase):
         self.assertEqual(app.metric[1].value, '$ 1,050')
         self.assertEqual(app.dataframe[0].value['教練'].tolist(), ['測試教練'])
         self.assertEqual(app.dataframe[0].value['時數'].tolist(), [1])
+        self.assertNotIn('前期餘額', app.dataframe[0].value.columns)
+        self.assertNotIn('前期餘額', app.session_state['exported']['查詢結果'][0])
+        self.assertIn('前期餘額（含稅）', app.session_state['exported']['查詢摘要'][0])
         self.assertEqual(len(app.get('download_button')), 1)
         self.assertEqual(app.session_state['exported']['查詢摘要'][0]['專案執行總計（未稅）'], 1000)
 
@@ -97,30 +100,36 @@ class UITests(unittest.TestCase):
         self.assertNotIn('project_entries', app.session_state['reads'])
         self.submit(app)
         self.assertIn('教練', app.dataframe[0].value.columns)
-        self.assertEqual(app.dataframe[0].value['教練'].tolist(), ['測試教練'])
+        self.assertEqual(app.dataframe[0].value['教練'].iloc[0], '測試教練')
         self.assertEqual([m.label for m in app.metric], ['專案餘額（未稅）', '專案餘額（含稅）'])
         self.assertEqual([m.value for m in app.metric], ['$ 9,000', '$ 9,450'])
-        self.assertEqual(app.dataframe[0].value['期初/期間儲值金額'].tolist(), [10500])
+        self.assertEqual(app.dataframe[0].value['期初/期間儲值金額'].dropna().tolist(), [10500])
         self.assertNotIn('前期餘額', app.dataframe[0].value.columns)
-        self.assertTrue(any('專案餘額總計' in x.value for x in app.markdown))
+        self.assertEqual(app.dataframe[0].value.iloc[-1]['專案名稱'], '專案餘額總計')
+        self.assertEqual(app.session_state['exported']['查詢結果'][-1]['專案名稱'], '專案餘額總計')
+        self.assertEqual(app.session_state['exported']['查詢結果'][-1]['金額（含稅）'], 9450)
         summary = app.session_state['exported']['查詢摘要'][0]
         self.assertEqual(summary['專案餘額總計（含稅）'], 9450)
         self.assertEqual(summary['專案餘額總計（未稅）'], 9000)
         self.assertEqual(summary['期初/期間儲值金額（含稅）'], 10500)
+        self.assertEqual(summary['資料筆數'], 1)
+        self.assertEqual(len(app.session_state['exported']['查詢結果']), 2)
 
     def test_cutoff_empty_execution_still_shows_balance_and_download(self):
         app = self.app(); app.session_state['test_mode'] = '截止日期'
         app.session_state['test_no_entries'] = True; app.run(); self.submit(app)
-        self.assertEqual(len(app.dataframe), 0)
+        self.assertEqual(len(app.dataframe), 1)
         self.assertEqual([m.value for m in app.metric], ['$ 10,000', '$ 10,500'])
-        self.assertTrue(any('專案餘額總計' in x.value for x in app.markdown))
+        self.assertEqual(app.dataframe[0].value.iloc[-1]['專案名稱'], '專案餘額總計')
+        self.assertEqual(app.session_state['exported']['查詢結果'][-1]['金額（含稅）'], 10500)
+        self.assertEqual(app.session_state['exported']['查詢摘要'][0]['資料筆數'], 0)
         self.assertEqual(len(app.get('download_button')), 1)
 
     def test_old_version_snapshot_requires_requery(self):
         app = self.app(); self.submit(app)
         before = app.session_state['reads'].count('project_entries')
         result = app.session_state['project_query_range_result']
-        result['_report_version'] = 'v1.13.1'
+        result['_report_version'] = 'v1.13.2'
         app.session_state['project_query_range_result'] = result
         app.run()
         self.assertEqual(app.session_state['reads'].count('project_entries'), before)
@@ -133,6 +142,7 @@ class UITests(unittest.TestCase):
         self.assertNotIn('profiles', app.session_state['reads'])
         self.assertEqual(app.metric[0].label, '累計儲值金額（未稅）')
         self.assertEqual(app.metric[0].value, '$ 10,000')
+        self.assertEqual(app.metric[1].value, '$ 10,500')
 
     def test_unfunded_columns_and_only_needed_tables(self):
         app = self.app(); app.session_state['test_funding'] = '未儲值專案'; app.run(); self.submit(app, 'u')
@@ -162,3 +172,4 @@ class UITests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
