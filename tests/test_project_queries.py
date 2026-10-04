@@ -12,7 +12,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from project_queries import execution_report, deposit_report
+from project_queries import execution_report, deposit_report, project_excel_number_formats
 
 
 def tax(value, mode):
@@ -50,6 +50,10 @@ class ReportTests(unittest.TestCase):
         report = self.report('cutoff', start=None)
         self.assertEqual(report['opening'], 9450)
         self.assertEqual(report['gross'], 6300)
+        self.assertEqual(report['deposited_gross'], 11550)
+        self.assertEqual(report['balance_gross'], 5250)
+        self.assertEqual(report['balance_net'], 5000)
+        self.assertEqual(report['frame']['期初/期間儲值金額'].dropna().tolist(), [11550])
         self.assertEqual(len(report['frame']), 3)
         self.assertEqual(report['frame']['教練'].unique().tolist(), ['測試教練'])
 
@@ -63,10 +67,10 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(self.report()['frame']['時數'].tolist(), [1, 1])
 
     def test_exact_columns_range(self):
-        self.assertEqual(self.report()['frame'].columns.tolist(), ['前期餘額', '執行日期', '使用者', '執行項目', '時數', '金額（含稅）', '金額（未稅）'])
+        self.assertEqual(self.report()['frame'].columns.tolist(), ['前期餘額', '執行日期', '教練', '使用者', '執行項目', '時數', '金額（含稅）', '金額（未稅）'])
 
     def test_exact_columns_cutoff(self):
-        self.assertEqual(self.report('cutoff')['frame'].columns.tolist(), ['專案名稱', '前期餘額', '日期', '教練', '使用者', '項目', '時數', '金額（含稅）', '金額（未稅）'])
+        self.assertEqual(self.report('cutoff')['frame'].columns.tolist(), ['專案名稱', '期初/期間儲值金額', '日期', '教練', '使用者', '項目', '時數', '金額（含稅）', '金額（未稅）'])
 
     def test_latest_dates_first_and_typed(self):
         self.assertEqual(self.report()['frame']['執行日期'].tolist(), [date(2026, 8, 31), date(2026, 8, 1)])
@@ -114,6 +118,48 @@ class ReportTests(unittest.TestCase):
     def test_reversal_positive_is_error(self):
         p, e, d = fixtures(); d[2]['amount'] = 1050
         with self.assertRaises(ValueError): deposit_report(p, d, tax, '2026-08-31')
+        with self.assertRaises(ValueError):
+            execution_report(p, e, d, {}, tax, mode='cutoff', end='2026-08-31')
+
+    def test_october_opening_includes_september_last_day_only(self):
+        p, e, d = fixtures()
+        d.extend([dict(d[1], id='last', deposit_date='2026-09-30', amount=2100),
+                  dict(d[1], id='first', deposit_date='2026-10-01', amount=10500)])
+        e.extend([dict(e[0], id='last', entry_date='2026-09-30', line_amount=1050),
+                  dict(e[0], id='first', entry_date='2026-10-01', line_amount=2100)])
+        report = execution_report(p, e, d, {'c': '測試教練'}, tax, mode='range', start='2026-10-01', end='2026-10-31')
+        self.assertEqual(report['opening'], 3150)
+        self.assertEqual(report['gross'], 2100)
+        self.assertEqual(report['frame']['教練'].tolist(), ['測試教練'])
+
+    def test_cutoff_with_deposits_without_execution(self):
+        p, e, d = fixtures()
+        report = execution_report(p, [], d, {}, tax, mode='cutoff', end='2026-08-31')
+        self.assertTrue(report['frame'].empty)
+        self.assertEqual(report['balance_gross'], 11550)
+        self.assertEqual(report['balance_net'], 11000)
+
+    def test_fully_used_balance_does_not_create_rounding_residual(self):
+        p, e, d = fixtures()
+        d = [dict(d[0], amount=3380)]
+        e = [dict(e[1], line_amount=1690), dict(e[2], line_amount=1690)]
+        report = execution_report(p, e, d, {}, tax, mode='cutoff', end='2026-08-31')
+        self.assertNotEqual(tax(3380, '未稅'), report['net'])
+        self.assertEqual(report['balance_gross'], 0)
+        self.assertEqual(report['balance_net'], 0)
+
+    def test_negative_balance_is_not_silently_clamped(self):
+        p, e, d = fixtures()
+        report = execution_report(p, e, d, {}, tax, mode='cutoff', end='2026-09-30')
+        self.assertEqual(report['balance_gross'], 2100)
+        report = execution_report(p, e, [dict(d[0], amount=1050)], {}, tax, mode='cutoff', end='2026-08-31')
+        self.assertEqual(report['balance_gross'], -5250)
+        self.assertEqual(report['balance_net'], -5000)
+
+    def test_coach_unknown_and_unassigned_are_explicit(self):
+        p, e, d = fixtures(); e[1]['coach_id'] = None
+        report = execution_report(p, e, d, {}, tax, mode='range', start='2026-08-01', end='2026-08-31')
+        self.assertEqual(report['frame']['教練'].tolist(), ['未知教練', '未指定'])
 
     def test_raw_inputs_not_modified(self):
         p, e, d = fixtures(); before = deepcopy((p, e, d))
@@ -133,19 +179,32 @@ class ReportTests(unittest.TestCase):
         ns = {'BytesIO': BytesIO, 'pd': pd}
         exec(compile(ast.Module(body=[excel], type_ignores=[]), '<excel>', 'exec'), ns)
         report = self.report()
-        payload = ns['_excel_bytes']({'查詢結果': report['frame'], '查詢摘要': pd.DataFrame([{'專案執行總計（未稅）': report['net'], '專案執行總計（含稅）': report['gross']}])}, number_formats={'金額（含稅）': '"$"#,##0.00', '金額（未稅）': '"$"#,##0', '時數': '0.##'})
+        payload = ns['_excel_bytes']({'查詢結果': report['frame'], '查詢摘要': pd.DataFrame([{'專案執行總計（未稅）': report['net'], '專案執行總計（含稅）': report['gross']}])}, number_formats=project_excel_number_formats())
         wb = load_workbook(BytesIO(payload), data_only=True)
         ws = wb['查詢結果']
         self.assertIsInstance(ws['B2'].value, datetime)
         self.assertEqual(ws['B2'].number_format, 'yyyy-mm-dd')
         self.assertEqual(ws.freeze_panes, 'A2')
-        self.assertEqual(ws['F2'].number_format, '"$"#,##0.00')
-        self.assertEqual(ws['G2'].number_format, '"$"#,##0')
-        self.assertEqual(ws['E2'].number_format, '0.##')
+        self.assertEqual(ws['G2'].number_format, project_excel_number_formats()['金額（含稅）'])
+        self.assertEqual(ws['H2'].number_format, project_excel_number_formats()['金額（未稅）'])
+        self.assertEqual(ws['F2'].number_format, '0.##')
+        self.assertNotIn('.00', wb['查詢摘要']['B2'].number_format)
         self.assertEqual(wb['查詢摘要']['A1'].value, '專案執行總計（未稅）')
         self.assertEqual(wb['查詢摘要']['B1'].value, '專案執行總計（含稅）')
-        self.assertEqual(sum(ws.cell(i, 7).value for i in (2, 3)), wb['查詢摘要']['A2'].value)
+        self.assertEqual(sum(ws.cell(i, 8).value for i in (2, 3)), wb['查詢摘要']['A2'].value)
         self.assertIsNone(ws['A3'].value)
+
+    def test_excel_whole_display_preserves_fractional_source(self):
+        from openpyxl import load_workbook
+        tree = ast.parse((ROOT / 'app.py').read_text(encoding='utf-8'))
+        excel = next(x for x in tree.body if isinstance(x, ast.FunctionDef) and x.name == '_excel_bytes')
+        ns = {'BytesIO': BytesIO, 'pd': pd}
+        exec(compile(ast.Module(body=[excel], type_ignores=[]), '<excel>', 'exec'), ns)
+        frame = pd.DataFrame([{'專案餘額總計（含稅）': 3380.5, '期初/期間儲值金額（含稅）': 3380.5}])
+        wb = load_workbook(BytesIO(ns['_excel_bytes']({'查詢摘要': frame}, number_formats=project_excel_number_formats())), data_only=True)
+        for cell in wb['查詢摘要'][2]:
+            self.assertEqual(cell.value, 3380.5)
+            self.assertNotIn('.00', cell.number_format)
 
     def test_parent_admin_gate_and_dynamic_project_tab(self):
         source = (ROOT / 'app.py').read_text(encoding='utf-8')

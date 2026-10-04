@@ -1872,7 +1872,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.1"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.2"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -3351,12 +3351,9 @@ def general_queries_page(me):
         ["銷課查詢","成交總表","實際預收收入","預收餘額查詢","專案查詢"], key="general_query_main_tab", on_change="rerun")
     if project_tab.open:
         with project_tab:
-            from project_queries import render_project_queries
+            from project_queries import render_project_queries, project_excel_number_formats
             def project_query_excel(frames):
-                gross_fields=["前期餘額","金額（含稅）","金額合計（含稅）","專案執行總計（含稅）","前期餘額（含稅）"]
-                net_fields=["金額（未稅）","金額合計（未稅）","專案執行總計（未稅）"]
-                return _excel_bytes(frames,number_formats={**{x:'"$"#,##0.00;("$"#,##0.00)' for x in gross_fields},
-                    **{x:'"$"#,##0;("$"#,##0)' for x in net_fields},"時數":"0.##"})
+                return _excel_bytes(frames,number_formats=project_excel_number_formats())
             render_project_queries(me,client,paged_rows,_tax_display_amount,project_query_excel)
         return
 

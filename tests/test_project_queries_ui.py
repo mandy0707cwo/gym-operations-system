@@ -24,6 +24,8 @@ TABLES = {
                      {'id':'f','project_id':'u','entry_date':today,'line_amount':2100,'coach_id':'c','person_name':'虛構姓名','item_name':'測試請款','item_hours':1,'quantity':3,'note':'請款備註'}],
  'profiles': [{'id':'c','display_name':'測試教練'}],
 }
+if st.session_state.get('test_no_entries'):
+ TABLES['project_entries'] = []
 class Query:
  def __init__(self, table):
   st.session_state.setdefault('reads', []).append(table)
@@ -76,6 +78,8 @@ class UITests(unittest.TestCase):
         app = self.app(); self.submit(app)
         self.assertEqual([m.label for m in app.metric], ['專案執行總計（未稅）', '專案執行總計（含稅）'])
         self.assertEqual(app.metric[0].value, '$ 1,000')
+        self.assertEqual(app.metric[1].value, '$ 1,050')
+        self.assertEqual(app.dataframe[0].value['教練'].tolist(), ['測試教練'])
         self.assertEqual(app.dataframe[0].value['時數'].tolist(), [1])
         self.assertEqual(len(app.get('download_button')), 1)
         self.assertEqual(app.session_state['exported']['查詢摘要'][0]['專案執行總計（未稅）'], 1000)
@@ -94,6 +98,34 @@ class UITests(unittest.TestCase):
         self.submit(app)
         self.assertIn('教練', app.dataframe[0].value.columns)
         self.assertEqual(app.dataframe[0].value['教練'].tolist(), ['測試教練'])
+        self.assertEqual([m.label for m in app.metric], ['專案餘額（未稅）', '專案餘額（含稅）'])
+        self.assertEqual([m.value for m in app.metric], ['$ 9,000', '$ 9,450'])
+        self.assertEqual(app.dataframe[0].value['期初/期間儲值金額'].tolist(), [10500])
+        self.assertNotIn('前期餘額', app.dataframe[0].value.columns)
+        self.assertTrue(any('專案餘額總計' in x.value for x in app.markdown))
+        summary = app.session_state['exported']['查詢摘要'][0]
+        self.assertEqual(summary['專案餘額總計（含稅）'], 9450)
+        self.assertEqual(summary['專案餘額總計（未稅）'], 9000)
+        self.assertEqual(summary['期初/期間儲值金額（含稅）'], 10500)
+
+    def test_cutoff_empty_execution_still_shows_balance_and_download(self):
+        app = self.app(); app.session_state['test_mode'] = '截止日期'
+        app.session_state['test_no_entries'] = True; app.run(); self.submit(app)
+        self.assertEqual(len(app.dataframe), 0)
+        self.assertEqual([m.value for m in app.metric], ['$ 10,000', '$ 10,500'])
+        self.assertTrue(any('專案餘額總計' in x.value for x in app.markdown))
+        self.assertEqual(len(app.get('download_button')), 1)
+
+    def test_old_version_snapshot_requires_requery(self):
+        app = self.app(); self.submit(app)
+        before = app.session_state['reads'].count('project_entries')
+        result = app.session_state['project_query_range_result']
+        result['_report_version'] = 'v1.13.1'
+        app.session_state['project_query_range_result'] = result
+        app.run()
+        self.assertEqual(app.session_state['reads'].count('project_entries'), before)
+        self.assertEqual(len(app.get('download_button')), 0)
+        self.assertEqual(len(app.dataframe), 0)
 
     def test_deposit_does_not_read_entries_or_coaches(self):
         app = self.app(); app.session_state['test_mode'] = '累計儲值金額'; app.run(); self.submit(app)

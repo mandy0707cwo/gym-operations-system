@@ -1,6 +1,6 @@
 # 秀傳運醫營運系統
 
-> 發布版本：v1.13.1（專案查詢，2026-10-04已同意提交）；部署結果以線上驗收為準。本次無資料庫結構異動，不需執行 Supabase SQL。詳見 [`UPGRADE_v1.13.1.md`](UPGRADE_v1.13.1.md)。活動方案測試暫不使用，本次發布排除其入口與模組，本機檔案保留。新版功能與版本紀錄見 [`SYSTEM_DOCUMENTATION_v1.13.1.md`](SYSTEM_DOCUMENTATION_v1.13.1.md)、[`CHANGELOG_v1.13.1.md`](CHANGELOG_v1.13.1.md)。新版資料來源見 [`資料字典_v1.13.1.md`](資料字典_v1.13.1.md)。
+> 發布版本：v1.13.2（2026-10-04已同意提交及部署，線上完成狀態以部署驗收為準）。專案日期區間增加教練及整元總計顯示；截止日期改為累計儲值扣除執行後的餘額。無資料庫異動，不需 SQL。詳見 [`UPGRADE_v1.13.2.md`](UPGRADE_v1.13.2.md)、[`CHANGELOG_v1.13.2.md`](CHANGELOG_v1.13.2.md)、[`SYSTEM_DOCUMENTATION_v1.13.2.md`](SYSTEM_DOCUMENTATION_v1.13.2.md)、[`資料字典_v1.13.2.md`](資料字典_v1.13.2.md)、[`VERIFICATION_v1.13.2.md`](VERIFICATION_v1.13.2.md)。活動方案測試暫停，不在發布範圍。
 
 
 完整功能、權限、資料邏輯、部署、備份及維護說明請參考 [`SYSTEM_DOCUMENTATION.md`](SYSTEM_DOCUMENTATION.md)；歷次變更請參考 [`CHANGELOG.md`](CHANGELOG.md)。
