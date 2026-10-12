@@ -8,7 +8,7 @@
 
 - purchases 264 筆、purchase_payments 284 筆、session_usages 2842 筆；非本次處理或修改筆數。
 - 購課日期無缺漏、created_at 無缺漏。正式 purchases 無自訂觸發器，歷史回填不會連帶觸發既有購課更新函式。
-- 張淑美運動訓練全域排序為 20261008-002；教練可見子集合重新排序造成舊畫面顯示 001。運動恢復是另一筆合法購課，不刪除。
+- 問題購課因教練可見子集合重新排序造成舊畫面編號不同；同會員的另一筆不同課程為合法購課，不刪除。實際會員與編號映射留在私人檢核。
 - 原 purchase_read / insert / update 政策不修改；固定編號不能透過擴大讀取他人資料達成。
 
 ## 隔離驗證
@@ -36,7 +36,13 @@ Supabase CLI 不在目前環境；依使用者既有版本化 SQL 規範建立 f
 - 升級前專用資料快照於 UTC 02:13:16 保存於使用者本機，涵蓋購課/付款/銷課全欄位、映射、欄位/約束/RLS/關鍵函式定義；不是完整 Supabase/Auth/Storage 備份。私人資料不提交 GitHub。
 - 升級前後購課 264 筆、付款 284 筆、銷課 2842 筆一致；各表完整原欄位 MD5、購課/付款/銷課金額及銷課未稅合計一致。僅新增固定編號，不重建付款或銷課。
 - 264 筆固定編號逐筆符合升級前全域映射，空值與重複各 0；原 RLS 政策、原子購課/付款驗證/銷課函式本文未變。
-- 真實 authenticated / smc009 RLS 唯讀查詢確認運動訓練固定 20261008-002，與全域管理員結果一致；運動恢復為 001。沒有建立正式測試交易。
+- 真實 authenticated 教練 RLS 唯讀查詢確認問題購課固定編號與全域管理員結果一致；沒有建立正式測試交易。實際會員資訊不列於公開文件。
 - 私人 schema 的 API 角色無 USAGE、表修改或函式 EXECUTE，兩表 RLS 保持啟用。
 - 升級後 advisors 的既有 WARN 不增加：anon SECURITY DEFINER 可執行警示 11 個、authenticated 13 個、外洩密碼保護未啟用 1 個。另新增兩筆 INFO（RLS enabled no policy）：私人配號表刻意無用戶政策，預設拒絕所有用戶；加上無 schema/table/function API 授權，並非新開放權限。[INFO 說明](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy)。
 - GitHub 以 main v1.13.7 的完整正式樹為基底，只更新本版本程式/文件/測試/SQL，不上傳私人備份、套件快取或活動原型。線上重部署及登入頁驗證將另保存本機 RELEASE_STATUS_v1.13.8.md。
+
+## 程式發布與線上部署
+
+- 2026-10-12 已以非強制更新將正式修正版提交 main，程式提交 f75a0f42e373c6d9e33de3ea3ca776fdf648af9a；VERSION/app.py/SQL 均與發布檔逐字一致。
+- Streamlit UTC 02:22:38.699（台北 10:22:38.699）完成啟動，登入頁正常；實际帳號登入後表格驗收仍由使用者確認。
+- 部署明細見 [output/RELEASE_STATUS_v1.13.8.md](output/RELEASE_STATUS_v1.13.8.md)。後續文件提交不改變程式版本或固定編號規則。
