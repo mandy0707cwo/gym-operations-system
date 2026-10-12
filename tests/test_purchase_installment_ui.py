@@ -15,7 +15,7 @@ import pandas as pd
 import streamlit as st
 names={"rows","purchase_page","course_purchase_entry","installment_payment_entry",
        "_entry_saved","_entry_success","_confirmed_write","course_termination_report_page",
-       "_build_purchase_code_map"}
+       "_build_purchase_code_map","_course_termination_history_frame","_tax_display_amount"}
 tree=ast.parse(Path(APP_PATH).read_text(encoding="utf-8"))
 nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names]
 exec(compile(ast.Module(body=nodes,type_ignores=[]),"<production-functions>","exec"),globals())
@@ -82,6 +82,12 @@ role=st.session_state.get("role","admin")
 me={"role":role,"id":"c" if role=="coach" else "admin","display_name":"虛構教練"}
 if st.session_state.get("selected_tab"):
  st.session_state["purchase_installment_tab"]=st.session_state["selected_tab"]
+for test_key,widget_key in [
+ ("selected_termination_main","termination_main_tab"),
+ ("selected_termination_kind","termination_entry_kind_tab"),
+ ("selected_termination_tax","termination_history_tax_tab")]:
+ if st.session_state.get(test_key):
+  st.session_state[widget_key]=st.session_state[test_key]
 if st.session_state.get("direct_termination"):
  course_termination_report_page(me)
 else:
@@ -127,8 +133,10 @@ class PurchaseUITests(unittest.TestCase):
         self.widget(app,"date_input","付款日期").set_value(date.today())
 
     def fill_termination(self, app, kind="退費中止"):
+        app.session_state["selected_termination_kind"]=kind
+        app.run();self.clean(app)
         self.widget(app,"selectbox","選擇會員課程").set_value(self.widget(app,"selectbox","選擇會員課程").options[0])
-        app.segmented_control[0].set_value(kind).run();self.clean(app)
+        app.run();self.clean(app)
         self.widget(app,"date_input","中止日期").set_value(date.today())
         self.widget(app,"text_input","中止原因").set_value("虛構原因")
         self.widget(app,"text_area","備註").set_value("虛構中止備註")
@@ -301,7 +309,7 @@ class PurchaseUITests(unittest.TestCase):
         self.widget(app,"checkbox","收取剩餘金額 20% 手續費").set_value(True)
         self.submit(app,"確認中止課程")
         self.assertIsNone(self.widget(app,"selectbox","選擇會員課程").value)
-        self.assertIsNone(app.segmented_control[0].value)
+        self.assertEqual(app.session_state["termination_entry_kind_tab"],"退費中止")
         self.assertIsNone(self.widget(app,"date_input","中止日期").value)
         self.assertEqual(self.widget(app,"text_input","中止原因").value,"")
         self.assertEqual(self.widget(app,"text_area","備註").value,"")
@@ -324,21 +332,29 @@ class PurchaseUITests(unittest.TestCase):
         app=self.app(tab="課程中止");self.fill_termination(app);app.session_state["fail_table"]="terminate_course"
         self.submit(app,"確認中止課程")
         self.assertEqual(self.widget(app,"text_area","備註").value,"虛構中止備註")
-        self.assertEqual(app.segmented_control[0].value,"退費中止")
+        self.assertEqual(app.session_state["termination_entry_kind_tab"],"退費中止")
         self.assertEqual(len(app.error),1)
         self.assertEqual(app.session_state["writes"],[])
 
     def test_expiry_termination_with_bonus_clears_and_keeps_history_dates(self):
-        app=self.app(tab="課程中止");self.fill_termination(app,"逾期中止")
+        app=self.app(tab="課程中止")
+        app.session_state["selected_termination_main"]="中止記錄"
+        app.run();self.clean(app)
+        self.widget(app,"date_input","開始日期").set_value(date(2026,1,1)).run()
+        history_start=self.widget(app,"date_input","開始日期").value
+        app.session_state["selected_termination_main"]="新增中止"
+        app.run();self.clean(app)
+        self.fill_termination(app,"逾期中止")
         self.widget(app,"checkbox","計算結單獎金").set_value(True).run()
         self.widget(app,"selectbox","結單獎金歸屬教練").set_value("虛構教練")
-        history_start=self.widget(app,"date_input","開始日期").value
         self.submit(app,"確認中止課程")
         payload=app.session_state["writes"][0]["payload"]
         self.assertEqual(payload["p_termination_type"],"expired")
         self.assertTrue(payload["p_completion_bonus_eligible"])
         self.assertEqual(payload["p_completion_bonus_coach_id"],"c")
-        self.assertIsNone(app.segmented_control[0].value)
+        self.assertEqual(app.session_state["termination_entry_kind_tab"],"逾期中止")
+        app.session_state["selected_termination_main"]="中止記錄"
+        app.run();self.clean(app)
         self.assertEqual(self.widget(app,"date_input","開始日期").value,history_start)
         app.run();self.clean(app)
         self.assertEqual(len(app.session_state["writes"]),1)
@@ -357,6 +373,47 @@ class PurchaseUITests(unittest.TestCase):
         self.assertIn('"購買及分期":purchase_page',sidebar)
         self.assertIn('"購買及分期"',sidebar)
         self.assertNotIn('"課程購買":purchase_page',sidebar)
+
+    def test_expiry_metrics_hide_fee_and_refund(self):
+        app=self.app(tab="課程中止");self.fill_termination(app,"逾期中止")
+        self.assertEqual([x.label for x in app.metric],["退費前剩餘金額(含稅)"])
+        self.assertNotIn("course_terminations",app.session_state["reads"])
+        self.assertEqual(app.session_state["writes"],[])
+
+    def test_refund_metrics_have_tax_labels(self):
+        app=self.app(tab="課程中止");self.fill_termination(app)
+        self.widget(app,"checkbox","收取剩餘金額 20% 手續費").set_value(True).run()
+        self.assertEqual([x.label for x in app.metric],["退費前剩餘金額(含稅)","手續費(含稅)","實際退費金額(含稅)"])
+        self.assertEqual([x.value for x in app.metric],["$ 8,400","$ 1,680","$ 6,720"])
+
+    def test_history_tax_tabs_columns_values_and_no_form_reads(self):
+        app=self.app(tab="課程中止")
+        app.session_state["db"]["course_terminations"]=[{
+            "id":"t","purchase_id":"p","termination_date":date.today().isoformat(),"termination_type":"refund",
+            "remaining_sessions":8,"remaining_amount":8400,"fee_amount":1680,"refund_amount":6720,
+            "recognized_amount":0,"completion_bonus_eligible":False,"reason":"虛構原因"}]
+        app.session_state["reads"]=[]
+        app.session_state["selected_termination_main"]="中止記錄"
+        app.run();self.clean(app)
+        self.assertEqual([x.label for x in app.tabs],["課程購買","登錄後續期款","課程中止","新增中止","中止記錄","含稅","未稅"])
+        expected=["中止日期","購買_id","會員","課程","中止類型","剩餘堂數","餘額","逾期入帳","退費手續費","實際退費","結單計算","中止原因"]
+        self.assertEqual(list(app.dataframe[0].value.columns),expected)
+        self.assertEqual(list(app.dataframe[0].value.iloc[0][["餘額","逾期入帳","退費手續費","實際退費"]]),[8400,0,1680,6720])
+        self.assertNotIn("purchase_balances",app.session_state["reads"])
+        app.session_state["selected_termination_tax"]="未稅"
+        app.run();self.clean(app)
+        self.assertEqual(list(app.dataframe[0].value.iloc[0][["餘額","逾期入帳","退費手續費","實際退費"]]),[8000,0,1600,6400])
+        self.assertEqual(app.session_state["writes"],[])
+
+    def test_history_invalid_dates_do_not_query_records(self):
+        app=self.app(tab="課程中止")
+        app.session_state["selected_termination_main"]="中止記錄"
+        app.run();self.clean(app)
+        app.session_state["reads"]=[]
+        self.widget(app,"date_input","開始日期").set_value(date.today()+timedelta(days=1)).run()
+        self.clean(app)
+        self.assertNotIn("course_terminations",app.session_state["reads"])
+        self.assertEqual(len(app.error),1)
 
 
 if __name__=="__main__":

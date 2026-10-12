@@ -1935,7 +1935,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.8"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.9"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -3322,6 +3322,28 @@ def _build_purchase_code_map(purchases):
         code_map[purchase_id]=code
     return code_map
 
+def _course_termination_history_frame(terminations, purchase_map, member_name_map, purchase_code_map, tax_mode):
+    """中止記錄畫面與 Excel 共用；沿用既有報表稅額換算，不更改資料庫金額。"""
+    history_rows=[]
+    for item in terminations:
+        purchase=purchase_map.get(item["purchase_id"],{})
+        history_rows.append({
+            "中止日期":item["termination_date"],
+            "購買_id":purchase_code_map.get(item["purchase_id"],item["purchase_id"]),
+            "會員":member_name_map.get(purchase.get("member_id"),"未知"),
+            "課程":purchase.get("course_name",""),
+            "中止類型":"逾期中止" if item["termination_type"]=="expired" else "退費中止",
+            "剩餘堂數":item["remaining_sessions"],
+            "餘額":float(item["remaining_amount"]) if tax_mode=="含稅" else _tax_display_amount(item["remaining_amount"],tax_mode),
+            "逾期入帳":(float(item["recognized_amount"]) if tax_mode=="含稅" else _tax_display_amount(item["recognized_amount"],tax_mode)) if item["termination_type"]=="expired" else 0,
+            "退費手續費":float(item["fee_amount"]) if tax_mode=="含稅" else _tax_display_amount(item["fee_amount"],tax_mode),
+            "實際退費":float(item["refund_amount"]) if tax_mode=="含稅" else _tax_display_amount(item["refund_amount"],tax_mode),
+            "結單計算":"計算" if item["completion_bonus_eligible"] else "不計算",
+            "中止原因":item.get("reason") or "",
+        })
+    return pd.DataFrame(history_rows,columns=["中止日期","購買_id","會員","課程","中止類型","剩餘堂數","餘額","逾期入帳","退費手續費","實際退費","結單計算","中止原因"])
+
+
 def course_termination_report_page(me):
     if me.get("role")!="admin":
         st.warning("課程中止僅限系統管理員使用。")
@@ -3330,16 +3352,49 @@ def course_termination_report_page(me):
     revision=st.session_state.get("termination_form_revision",0)
     st.subheader("課程中止")
     st.caption("逾期餘額轉列入帳；退費金額為剩餘金額扣除選擇性 20% 手續費。兩者均不計入銷課及執行時數。")
-    coaches=coach_options(); coach_name_map={v:k for k,v in coaches.items()}
-    members=rows(client().table("members").select("id,member_name"))
+    members=paged_rows(lambda: client().table("members").select("id,member_name").order("id"))
     member_name_map={x["id"]:x["member_name"] for x in members}
     all_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_code,purchase_date,created_at").order("purchase_date").order("created_at").order("id"))
     purchase_code_map=_build_purchase_code_map(all_purchase_keys)
 
+    entry_tab,history_tab=st.tabs(["新增中止","中止記錄"],key="termination_main_tab",on_change="rerun")
+    if history_tab.open:
+        with history_tab:
+            gross_tab,net_tab=st.tabs(["含稅","未稅"],key="termination_history_tax_tab",on_change="rerun")
+            tax_mode="含稅" if gross_tab.open else "未稅"
+            with gross_tab if gross_tab.open else net_tab:
+                c1,c2,c3=st.columns(3)
+                start=c1.date_input("開始日期",date.today().replace(day=1),key="termination_history_start",persist_state="session")
+                end=c2.date_input("結束日期",date.today(),key="termination_history_end",persist_state="session")
+                kind=c3.selectbox("中止類型",["全部","逾期中止","退費中止"],key="termination_history_kind")
+                if start>end:
+                    st.error("開始日期不可晚於結束日期。")
+                    return
+                terminations=paged_rows(lambda: client().table("course_terminations").select("*")
+                    .gte("termination_date",str(start)).lte("termination_date",str(end))
+                    .order("termination_date",desc=True).order("id"))
+                if kind!="全部":
+                    terminations=[x for x in terminations if x["termination_type"]==("expired" if kind=="逾期中止" else "refund")]
+                history_purchase_ids=list({x["purchase_id"] for x in terminations})
+                history_purchases=paged_rows(lambda: client().table("purchases").select("id,member_id,course_name")
+                    .in_("id",history_purchase_ids).order("id")) if history_purchase_ids else []
+                history_purchase_map={x["id"]:x for x in history_purchases}
+                history_df=_course_termination_history_frame(terminations,history_purchase_map,member_name_map,purchase_code_map,tax_mode)
+                st.caption(f"金額皆為{tax_mode}；餘額為中止前剩餘金額。未稅沿用既有報表換算方式。")
+                money_config={x:st.column_config.NumberColumn(format="$ %.0f")
+                    for x in ["餘額","逾期入帳","退費手續費","實際退費"]}
+                st.dataframe(history_df,hide_index=True,width="stretch",column_config=money_config)
+                export=_excel_bytes({f"中止記錄({tax_mode})":history_df},
+                    number_formats={x:'#,##0;(#,##0)' for x in ["餘額","逾期入帳","退費手續費","實際退費"]})
+                st.download_button(f"匯出中止記錄({tax_mode})",export,file_name=f"中止記錄_{tax_mode}_{start}_{end}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
+        return
+
+    coaches=coach_options()
     try:
-        balances=rows(client().table("purchase_balances").select("*").eq("status","active").gt("remaining_sessions",0).order("expiry_date"))
+        balances=paged_rows(lambda: client().table("purchase_balances").select("*").eq("status","active").gt("remaining_sessions",0).order("expiry_date").order("purchase_id"))
         active_ids=[x["purchase_id"] for x in balances]
-        active_purchases=rows(client().table("purchases").select("id,purchase_date,member_id,course_name,total_amount,total_sessions").in_("id",active_ids)) if active_ids else []
+        active_purchases=paged_rows(lambda: client().table("purchases").select("id,purchase_date,member_id,course_name,total_amount,total_sessions").in_("id",active_ids).order("id")) if active_ids else []
         active_purchase_map={x["id"]:x for x in active_purchases}
         option_map={}
         for balance in balances:
@@ -3351,14 +3406,15 @@ def course_termination_report_page(me):
         st.error("尚未建立課程中止資料表，請先執行 migration_course_termination_v1_11_0.sql。")
         return
 
-    entry_tab,history_tab=st.tabs(["新增中止","中止紀錄"])
     with entry_tab:
-        if not option_map:
-            st.info("目前沒有可中止的有效課程。")
-        else:
+        expired_tab,refund_tab=st.tabs(["逾期中止","退費中止"],key="termination_entry_kind_tab",on_change="rerun")
+        termination_label="逾期中止" if expired_tab.open else "退費中止"
+        with expired_tab if expired_tab.open else refund_tab:
+            if not option_map:
+                st.info("目前沒有可中止的有效課程。")
+                return
             selected_label=st.selectbox("選擇會員課程",list(option_map),index=None,placeholder="請選擇尚有餘額的課程",key=f"termination_purchase_{revision}")
             selected=option_map.get(selected_label) if selected_label else None
-            termination_label=st.segmented_control("中止類型",["逾期中止","退費中止"],default=None,key=f"termination_kind_{revision}")
             charge_fee=False; bonus_eligible=False; bonus_coach=None
             if termination_label=="退費中止":
                 charge_fee=st.checkbox("收取剩餘金額 20% 手續費",value=False,key=f"termination_fee_{revision}")
@@ -3370,10 +3426,13 @@ def course_termination_report_page(me):
                 remaining=Decimal(str(selected.get("remaining_amount") or 0))
                 fee=(remaining*Decimal("0.20")).quantize(Decimal("0.01"),rounding=ROUND_HALF_UP) if charge_fee else Decimal("0")
                 refund=remaining-fee if termination_label=="退費中止" else Decimal("0")
-                c1,c2,c3=st.columns(3)
-                c1.metric("退費前剩餘金額",f"$ {remaining:,.0f}")
-                c2.metric("手續費",f"$ {fee:,.0f}")
-                c3.metric("實際退費金額",f"$ {refund:,.0f}")
+                if termination_label=="退費中止":
+                    c1,c2,c3=st.columns(3)
+                    c1.metric("退費前剩餘金額(含稅)",f"$ {remaining:,.0f}")
+                    c2.metric("手續費(含稅)",f"$ {fee:,.0f}")
+                    c3.metric("實際退費金額(含稅)",f"$ {refund:,.0f}")
+                else:
+                    st.metric("退費前剩餘金額(含稅)",f"$ {remaining:,.0f}")
             with st.form(f"course_termination_form_{revision}",clear_on_submit=False,enter_to_submit=False):
                 termination_date=st.date_input("中止日期",value=None,key=f"termination_date_{revision}")
                 reason=st.text_input("中止原因",key=f"termination_reason_{revision}")
@@ -3399,35 +3458,6 @@ def course_termination_report_page(me):
                         _entry_saved("termination","課程已中止，帳務金額已記錄，欄位已清空；本筆不會增加執行時數。")
                     except Exception as exc:
                         st.error(f"課程中止失敗：{exc}")
-
-    with history_tab:
-        c1,c2,c3=st.columns(3)
-        start=c1.date_input("開始日期",date.today().replace(day=1),key="termination_history_start")
-        end=c2.date_input("結束日期",date.today(),key="termination_history_end")
-        kind=c3.selectbox("中止類型",["全部","逾期中止","退費中止"],key="termination_history_kind")
-        query=(client().table("course_terminations").select("*")
-               .gte("termination_date",str(start)).lte("termination_date",str(end)).order("termination_date",desc=True))
-        terminations=rows(query)
-        if kind!="全部": terminations=[x for x in terminations if x["termination_type"]==("expired" if kind=="逾期中止" else "refund")]
-        history_purchase_ids=list({x["purchase_id"] for x in terminations})
-        history_purchases=rows(client().table("purchases").select("id,member_id,course_name").in_("id",history_purchase_ids)) if history_purchase_ids else []
-        history_purchase_map={x["id"]:x for x in history_purchases}
-        history_rows=[]
-        for item in terminations:
-            purchase=history_purchase_map.get(item["purchase_id"],{})
-            history_rows.append({"中止日期":item["termination_date"],"購買_ID":purchase_code_map.get(item["purchase_id"],""),
-                "會員名稱":member_name_map.get(purchase.get("member_id"),"未知"),"課程名稱":purchase.get("course_name","") ,
-                "中止類型":"逾期中止" if item["termination_type"]=="expired" else "退費中止",
-                "剩餘堂數":item["remaining_sessions"],"退費前剩餘金額":float(item["remaining_amount"]),
-                "手續費":float(item["fee_amount"]),"實際退費金額":float(item["refund_amount"]),
-                "轉列入帳金額":float(item["recognized_amount"]),"結單獎金":"計算" if item["completion_bonus_eligible"] else "不計算",
-                "獎金歸屬教練":coach_name_map.get(item.get("completion_bonus_coach_id"),""),"中止原因":item.get("reason") or "","備註":item.get("note") or ""})
-        history_df=pd.DataFrame(history_rows,columns=["中止日期","購買_ID","會員名稱","課程名稱","中止類型","剩餘堂數","退費前剩餘金額","手續費","實際退費金額","轉列入帳金額","結單獎金","獎金歸屬教練","中止原因","備註"])
-        money_config={x:st.column_config.NumberColumn(format="$ %.0f") for x in ["退費前剩餘金額","手續費","實際退費金額","轉列入帳金額"]}
-        st.dataframe(history_df,hide_index=True,width="stretch",column_config=money_config)
-        export=_excel_bytes({"課程中止紀錄":history_df})
-        st.download_button("匯出課程中止紀錄",export,file_name=f"課程中止紀錄_{start}_{end}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
 
 def general_queries_page(me):
     """系統管理員專用的跨模組財務與營運查詢。"""
@@ -3746,7 +3776,9 @@ def financial_report_page(me):
         styler=frame.style.set_properties(subset=centered,**{"text-align":"center"})
         header_styles=[{"selector":f"th.col_heading.level0.col{frame.columns.get_loc(name)}","props":[("text-align","center")]} for name in centered]
         return styler.set_table_styles(header_styles,overwrite=False)
-    report_view=st.segmented_control("報表分類",["會員報表","其他報表","每月報表","教練查詢","課程中止"],
+    if st.session_state.get("financial_report_view")=="課程中止":
+        st.session_state["financial_report_view"]="會員報表"
+    report_view=st.segmented_control("報表分類",["會員報表","其他報表","每月報表","教練查詢"],
         default="會員報表",key="financial_report_view",width="stretch")
     if report_view=="會員報表":
         st.subheader("會員報表")
@@ -4644,9 +4676,6 @@ def financial_report_page(me):
     if report_view=="教練查詢":
         usage_query_tabs(me,enable_export=True)
 
-    if report_view=="課程中止":
-        course_termination_report_page(me)
-
 user=login(); me=profile(user.id)
 with st.sidebar:
     st.title("🏋️ 營運管理")
@@ -4665,4 +4694,3 @@ try:
     {"每日營運":daily_page,"客戶管理":customer_admin_page,"購買及分期":purchase_page,"銷課表":usage_page,"教練查詢":coach_query_page,"各項查詢":general_queries_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")
-
