@@ -549,7 +549,7 @@ def installment_payment_entry(me):
     purchases=[x for x in purchases if x.get("coach_id")==me["id"]] if me["role"]=="coach" else [x for x in purchases if x.get("coach_id") in operational_ids]
     installment_rows=rows(client().table("purchases").select("id,total_amount,installment_count").eq("payment_plan","installment"))
     installment_map={x["id"]:x for x in installment_rows}
-    all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at"))
+    all_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_code,purchase_date,created_at").order("purchase_date").order("created_at").order("id"))
     installment_code_map=_build_purchase_code_map(all_purchase_keys)
     installment_ids=set(installment_map)
     payment_rows=rows(client().table("purchase_payments").select("purchase_id,installment_no,amount").in_("purchase_id",list(installment_ids))) if installment_ids else []
@@ -614,7 +614,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
         payments=rows(client().table("purchase_payments").select("purchase_id,installment_no,amount").in_("purchase_id",purchase_ids))
     purchase_map={x["id"]:x for x in purchases}
     if purchase_code_map is None:
-        all_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_date,created_at")
+        all_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_code,purchase_date,created_at")
             .order("purchase_date").order("created_at").order("id"))
         purchase_code_map=_build_purchase_code_map(all_purchase_keys)
     for balance in balances:
@@ -908,7 +908,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
 def usage_page(me):
     st.header("銷課表")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
-    all_usage_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_date,created_at")
+    all_usage_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_code,purchase_date,created_at")
         .order("purchase_date").order("created_at").order("id"))
     usage_purchase_code_map=_build_purchase_code_map(all_usage_purchase_keys)
     coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
@@ -1935,7 +1935,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.7"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.8"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -2083,9 +2083,9 @@ def member_course_io_page(me):
     member_names={x["id"]:x["member_name"] for x in members}
 
     st.subheader("匯出資料報表")
-    purchases=rows(admin.table("purchases").select("*").order("purchase_date"))
+    purchases=paged_rows(lambda: admin.table("purchases").select("*").order("purchase_date").order("created_at").order("id"))
     purchase_code_map=_build_purchase_code_map(purchases)
-    # 銷課匯入可使用對外顯示的「成交日期＋序號」，也保留資料庫 UUID 相容舊檔。
+    # 匯出附固定編號與 UUID；舊教練編號不可單獨用於銷課匯入。
     purchase_reference_to_id={}
     for purchase in purchases:
         purchase_uuid=str(purchase["id"]).strip()
@@ -2101,7 +2101,7 @@ def member_course_io_page(me):
         paid_date_map[x["purchase_id"]]=max(str(x["paid_date"]),paid_date_map.get(x["purchase_id"],""))
     course_rows=[]
     for x in purchases:
-        course_rows.append({"purchase_id":purchase_code_map[x["id"]],"member_name":member_names.get(x["member_id"],""),
+        course_rows.append({"purchase_uuid":x["id"],"purchase_id":purchase_code_map[x["id"]],"member_name":member_names.get(x["member_id"],""),
             "purchase_kind":x["purchase_kind"],"coach_username":id_to_display_name.get(x["coach_id"],""),
             "course_name":x["course_name"],"report_category":x.get("report_category") or "未分類","total_sessions":x["total_sessions"],"session_hours":x.get("session_hours",1),
             "total_amount":x["total_amount"],"purchase_date":x["purchase_date"],"expiry_date":x["expiry_date"],
@@ -2113,12 +2113,12 @@ def member_course_io_page(me):
     usage_rows=[]
     for x in usages:
         p=purchase_map.get(x["purchase_id"],{})
-        usage_rows.append({"purchase_id":purchase_code_map.get(x["purchase_id"],""),"usage_id":x["id"],
+        usage_rows.append({"purchase_uuid":x["purchase_id"],"purchase_id":purchase_code_map.get(x["purchase_id"],""),"usage_id":x["id"],
             "member_name":member_names.get(p.get("member_id"),""),"course_name":p.get("course_name",""),
             "usage_date":x["usage_date"],"actual_usage_date":x.get("actual_usage_date") or x["usage_date"],
             "is_makeup":bool(x.get("is_makeup")),"coach_username":id_to_display_name.get(x["coach_id"],""),
             "session_seq":x["session_seq"],"deducted_amount":x["deducted_amount"],"deducted_net_amount":usage_net_amount(x),"note":x.get("note") or ""})
-    usage_export_columns=["purchase_id","usage_id","member_name","course_name","usage_date","actual_usage_date","is_makeup","coach_username","session_seq","deducted_amount","deducted_net_amount","note"]
+    usage_export_columns=["purchase_uuid","purchase_id","usage_id","member_name","course_name","usage_date","actual_usage_date","is_makeup","coach_username","session_seq","deducted_amount","deducted_net_amount","note"]
     trial_rows=rows(admin.table("trial_items").select("entry_date,member_name,content,detail_content,hours,amount,note,coach_id,created_at").order("entry_date"))
     single_sale_rows=rows(admin.table("single_sales").select("entry_date,member_name,content,hours,amount,note,coach_id,created_at").order("entry_date"))
     event_rows=rows(admin.table("event_supports").select("entry_date,content,hours,deducted_hours,deduction_reason,coach_id,created_at").order("entry_date"))
@@ -2131,9 +2131,9 @@ def member_course_io_page(me):
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
     st.divider(); st.subheader("匯入會員課程與銷課表")
-    st.caption("請先下載範本。匯入會員課程時 purchase_id 可留空；匯入銷課表時 purchase_id 請填購買課程編號（成交日期＋序號，例如 20260817-001），亦相容舊版 UUID。")
+    st.caption("請先下載範本。匯入會員課程時 purchase_id 可留空；匯入銷課表時請填 UUID；若填固定購課編號，須附 purchase_uuid 供核對。請勿沿用舊版教練畫面的日期序號。")
     course_template=pd.DataFrame(columns=["purchase_id","member_name","purchase_kind","coach_username","course_name","report_category","total_sessions","session_hours","total_amount","purchase_date","expiry_date","payment_plan","installment_count","paid_amount","paid_date","referral","note"])
-    usage_template=pd.DataFrame(columns=["purchase_id","usage_date","actual_usage_date","is_makeup","coach_username","note"])
+    usage_template=pd.DataFrame(columns=["purchase_uuid","purchase_id","usage_date","actual_usage_date","is_makeup","coach_username","note"])
     st.download_button("下載匯入範本",_excel_bytes({"會員課程":course_template,"銷課表":usage_template}),
         file_name="會員課程與銷課表_匯入範本.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     uploaded=st.file_uploader("選擇 Excel 檔案",type=["xlsx"],key="course_usage_import")
@@ -2158,6 +2158,13 @@ def member_course_io_page(me):
                         try:
                             source_id=str(row.get("purchase_id","")).strip()
                             source_key=source_id.casefold()
+                            source_uuid=str(row.get("purchase_uuid","")).strip().casefold()
+                            if source_key in purchase_reference_to_id:
+                                canonical_uuid=str(purchase_reference_to_id[source_key]).casefold()
+                                if source_uuid and source_uuid!=canonical_uuid:
+                                    raise ValueError("購課編號與 purchase_uuid 不一致，停止匯入，請核對舊版編號")
+                                if source_key!=canonical_uuid and not source_uuid:
+                                    raise ValueError("固定購課編號須附 purchase_uuid，請重新下載資料匯出報表")
                             if source_key and source_key in seen_purchase_ids:
                                 duplicate_purchase_rows+=1
                                 duplicate_purchase_details.append({
@@ -2200,6 +2207,16 @@ def member_course_io_page(me):
                         try:
                             purchase_reference=str(row["purchase_id"]).strip()
                             purchase_key=purchase_reference.casefold()
+                            purchase_uuid=str(row.get("purchase_uuid","")).strip().casefold()
+                            if purchase_uuid:
+                                if purchase_uuid not in purchase_reference_to_id or purchase_reference_to_id[purchase_uuid]!=purchase_uuid:
+                                    raise ValueError("purchase_uuid 不存在，請重新匯出確認")
+                                canonical_code=purchase_code_map[purchase_uuid]
+                                if purchase_key not in (purchase_uuid,canonical_code.casefold()):
+                                    raise ValueError("購課編號與 UUID 不一致，可能使用舊版教練編號；請核對後再匯入")
+                                purchase_key=purchase_uuid
+                            elif purchase_key in purchase_reference_to_id and purchase_key!=str(purchase_reference_to_id[purchase_key]).casefold():
+                                raise ValueError("固定購課編號須附 purchase_uuid，避免舊版編號誤配；請重新下載資料匯出報表")
                             if not purchase_key:
                                 raise ValueError("purchase_id 不可空白")
                             if purchase_key not in purchase_reference_to_id and purchase_key not in workbook_purchase_references:
@@ -2357,7 +2374,7 @@ def _load_record_admin_data(admin,data_type,id_name):
         record_purchase_ids=[x["purchase_id"] for x in records]
         purchase_details=rows(admin.table("purchases").select("id,purchase_date,purchase_kind,coach_id").in_("id",record_purchase_ids)) if record_purchase_ids else []
         purchase_detail_map={x["id"]:x for x in purchase_details}
-        all_purchase_keys=rows(admin.table("purchases").select("id,purchase_date,created_at"))
+        all_purchase_keys=paged_rows(lambda: admin.table("purchases").select("id,purchase_code,purchase_date,created_at").order("purchase_date").order("created_at").order("id"))
         record_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
         for item in records:
             detail=purchase_detail_map.get(item["purchase_id"],{})
@@ -2374,7 +2391,7 @@ def _load_record_admin_data(admin,data_type,id_name):
         usage_purchases=rows(admin.table("purchase_balances").select("purchase_id,member_name,course_name").in_("purchase_id",usage_purchase_ids)) if usage_purchase_ids else []
         usage_member_map={x["purchase_id"]:x.get("member_name") or "會員不明" for x in usage_purchases}
         usage_course_map={x["purchase_id"]:x.get("course_name") or "課程不明" for x in usage_purchases}
-        all_usage_purchase_keys=rows(admin.table("purchases").select("id,purchase_date,created_at"))
+        all_usage_purchase_keys=paged_rows(lambda: admin.table("purchases").select("id,purchase_code,purchase_date,created_at").order("purchase_date").order("created_at").order("id"))
         usage_purchase_code_map=_build_purchase_code_map(all_usage_purchase_keys)
         labels={f'purchase_id：{usage_purchase_code_map.get(x["purchase_id"],x["purchase_id"])}｜{usage_member_map.get(x["purchase_id"],"會員不明")}｜{id_name.get(x["coach_id"],"未知教練")}｜{usage_course_map.get(x["purchase_id"],"課程不明")}｜第{x["session_seq"]}堂｜銷課日期：{x["usage_date"]}｜實際：{x.get("actual_usage_date") or x["usage_date"]}':x for x in records}
     return {"labels":labels,"usage_member_map":usage_member_map,"usage_course_map":usage_course_map,
@@ -2911,7 +2928,7 @@ def customer_admin_page(me):
                 summary["amount"]+=float(payment.get("amount") or 0)
                 if payment.get("installment_no") is not None: summary["installments"].add(int(payment["installment_no"]))
             if customer_purchases:
-                all_purchase_keys=paged_rows(lambda: data_api.table("purchases").select("id,purchase_date,created_at")
+                all_purchase_keys=paged_rows(lambda: data_api.table("purchases").select("id,purchase_code,purchase_date,created_at")
                     .order("purchase_date").order("created_at").order("id"))
                 customer_purchase_codes=_build_purchase_code_map(all_purchase_keys)
                 first_count=sum(1 for x in customer_purchases if x.get("purchase_kind")=="first")
@@ -3056,7 +3073,7 @@ def installment_payment_admin_page(me):
             .select("id,member_id,course_name,total_amount,purchase_date,installment_count,created_at")
             .eq("payment_plan","installment").order("purchase_date",desc=True).order("created_at",desc=True))
         members=rows(admin.table("members").select("id,member_name"))
-        all_purchase_keys=paged_rows(lambda: admin.table("purchases").select("id,purchase_date,created_at")
+        all_purchase_keys=paged_rows(lambda: admin.table("purchases").select("id,purchase_code,purchase_date,created_at")
             .order("purchase_date").order("created_at").order("id"))
         purchase_ids=[x["id"] for x in purchases]
         payments=(paged_rows(lambda: admin.table("purchase_payments")
@@ -3293,13 +3310,16 @@ def _bonus_eligibility(rule,purchase,bonus_kind):
     return False,"醫生轉介首購不計獎金" if purchase_kind=="first" else "醫生轉介續約不計獎金"
 
 def _build_purchase_code_map(purchases):
-    ordered=sorted(purchases,key=lambda x:(str(x.get("purchase_date") or ""),str(x.get("created_at") or ""),str(x["id"])))
-    daily_sequences={}
+    # 只讀資料庫固定編號；缺碼僅保留 UUID，不猜測日期序號。
     code_map={}
-    for purchase in ordered:
-        purchase_date_key=str(purchase.get("purchase_date") or "")
-        daily_sequences[purchase_date_key]=daily_sequences.get(purchase_date_key,0)+1
-        code_map[purchase["id"]]=f'{purchase_date_key.replace("-","")}-{daily_sequences[purchase_date_key]:03d}'
+    owners={}
+    for purchase in purchases:
+        purchase_id=purchase["id"]
+        code=str(purchase.get("purchase_code") or purchase_id).strip()
+        if code in owners and owners[code]!=purchase_id:
+            raise ValueError("購課固定編號重複，請系統管理員查核資料")
+        owners[code]=purchase_id
+        code_map[purchase_id]=code
     return code_map
 
 def course_termination_report_page(me):
@@ -3313,7 +3333,7 @@ def course_termination_report_page(me):
     coaches=coach_options(); coach_name_map={v:k for k,v in coaches.items()}
     members=rows(client().table("members").select("id,member_name"))
     member_name_map={x["id"]:x["member_name"] for x in members}
-    all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at").order("purchase_date"))
+    all_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_code,purchase_date,created_at").order("purchase_date").order("created_at").order("id"))
     purchase_code_map=_build_purchase_code_map(all_purchase_keys)
 
     try:
@@ -3436,7 +3456,7 @@ def general_queries_page(me):
         return {item["id"]:item.get("member_name") or "" for item in records}
 
     def purchase_codes():
-        keys=paged_rows(lambda: client().table("purchases").select("id,purchase_date,created_at")
+        keys=paged_rows(lambda: client().table("purchases").select("id,purchase_code,purchase_date,created_at")
             .order("purchase_date").order("created_at").order("id"))
         return _build_purchase_code_map(keys)
 
@@ -3752,7 +3772,7 @@ def financial_report_page(me):
         with detail_tabs[1]:
             detail_tax_mode=st.radio("預收明細金額顯示方式",["未稅","含稅"],horizontal=True,key="finance_member_detail_tax_mode")
 
-        all_purchase_keys=rows(client().table("purchases").select("id,purchase_date,created_at").order("purchase_date"))
+        all_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_code,purchase_date,created_at").order("purchase_date").order("created_at").order("id"))
         financial_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
 
         # 預收明細以付款日期判斷是否列入，包含查詢期間收到的分期款。
@@ -4144,7 +4164,7 @@ def financial_report_page(me):
 
             if other_report_view=="歷史預收餘額":
                 historical_tax_mode=st.segmented_control("金額顯示方式",["未稅","含稅"],default="未稅",key="finance_historical_prepaid_tax_mode")
-                historical_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_date,created_at")
+                historical_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_code,purchase_date,created_at")
                     .order("purchase_date").order("created_at").order("id"))
                 historical_code_map=_build_purchase_code_map(historical_purchase_keys)
                 historical_purchases=paged_rows(lambda: client().table("purchases")
@@ -4424,7 +4444,7 @@ def financial_report_page(me):
         monthly_project_catalog=rows(client().table("project_catalog").select("id,course_type").in_("id",monthly_project_catalog_ids)) if monthly_project_catalog_ids else []
         monthly_project_report_category={x["id"]:str(x.get("course_type") or "未分類").strip() or "未分類" for x in monthly_project_catalog}
 
-        all_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_date,created_at").order("purchase_date").order("created_at").order("id"))
+        all_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_code,purchase_date,created_at").order("purchase_date").order("created_at").order("id"))
         bonus_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
         monthly_sales_df=pd.DataFrame([{"日期":x["usage_date"],
             "購買_ID":bonus_purchase_code_map.get(x["purchase_id"],x["purchase_id"]),

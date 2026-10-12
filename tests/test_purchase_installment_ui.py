@@ -75,6 +75,7 @@ class Client:
  def table(self,name): return Query(name)
  def rpc(self,name,payload): return Query(name,action="rpc",payload=payload)
 def client(): return Client()
+def paged_rows(factory): return rows(factory())
 def coach_options(): return {"虛構教練":"c"}
 def _excel_bytes(*_,**__): return b"mock"
 role=st.session_state.get("role","admin")
