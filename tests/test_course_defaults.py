@@ -63,7 +63,8 @@ class CourseDefaultsTests(unittest.TestCase):
         self.assertEqual(state["purchase_note_1_none"],"")
 
     def test_formal_functions_preserve_daily_and_atomic_rpc(self):
-        formal=ROOT/"output/release_v1.13.10/app.py"
+        version=(ROOT/"VERSION").read_text().strip()
+        formal=ROOT/f"output/release_{version}/app.py"
         if not formal.exists(): formal=ROOT/"app.py"
         official=ast.parse(formal.read_text(encoding="utf-8"))
         actual=ast.parse((ROOT/"app.py").read_text(encoding="utf-8"))
@@ -74,7 +75,7 @@ class CourseDefaultsTests(unittest.TestCase):
         purchase=next(n for n in official.body if isinstance(n,ast.FunctionDef) and n.name=="course_purchase_entry")
         calls=[n for n in ast.walk(purchase) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr=="rpc"]
         self.assertEqual([n.args[0].value for n in calls],["create_purchase_with_first_payment"])
-        self.assertEqual((ROOT/"VERSION").read_text().strip(),"v1.13.10")
+        self.assertIn(f'secret("APP_VERSION") or "{version}"',formal.read_text(encoding="utf-8"))
 
 class CourseDefaultsUITests(unittest.TestCase):
     def app(self,catalog=False,role="admin"):

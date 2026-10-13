@@ -104,7 +104,8 @@ class TerminationRecordsTests(unittest.TestCase):
         for name in staged:
             if name!="daily_page":
                 self.assertEqual(actual[name],staged[name],name)
-        self.assertEqual(hashlib.sha256(staged["daily_page"].encode()).hexdigest(),"d93997d9b7318aa06c430818d60202289b4f7e3dbbafd9fce2fa6bc63f19ff0c")
+        self.assertEqual(actual["daily_page"],staged["daily_page"])
+        self.assertNotIn("_paused_daily_pilot_page",staged)
         self.assertIn(f'secret("APP_VERSION") or "{version}"',formal.read_text(encoding="utf-8"))
 
 if __name__=="__main__":

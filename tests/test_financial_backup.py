@@ -147,7 +147,10 @@ def test_monthly_sales_columns_include_purchase_id_and_coach():
 def test_coach_query_is_a_sidebar_page_not_a_usage_tab():
     source = APP_PATH.read_text(encoding="utf-8")
     assert 'register_tab,cancel_tab=st.tabs(["銷課登錄","上課預約取消"])' in source
-    assert 'pages=["每日營運","客戶管理","購買及分期","銷課表","教練查詢"]' in source
+    from navigation_platforms import sidebar_pages
+    assert "教練查詢" in sidebar_pages("coach")
+    assert "銷課表" not in sidebar_pages("coach")
+    assert 'pages=sidebar_pages(me["role"])' in source
     assert '"教練查詢":coach_query_page' in source
 
 
@@ -185,7 +188,9 @@ def test_customer_management_preserves_existing_member_ids():
     source = APP_PATH.read_text(encoding="utf-8")
     migration = CUSTOMER_MIGRATION_PATH.read_text(encoding="utf-8")
     assert 'def customer_admin_page(me):' in source
-    assert 'pages=["每日營運","客戶管理","購買及分期","銷課表","教練查詢"]' in source
+    from navigation_platforms import sidebar_pages
+    assert "客戶管理" in sidebar_pages("coach")
+    assert "客戶管理" in sidebar_pages("admin")
     assert 'admin.table("members").update' in source
     assert "alter table public.members add column if not exists phone text;" in migration
     assert "update public.members m" in migration
@@ -360,7 +365,10 @@ def test_general_queries_are_admin_only_and_submit_gated():
     source = APP_PATH.read_text(encoding="utf-8")
     assert 'def general_queries_page(me):' in source
     assert 'if me["role"]!="admin":' in source
-    assert 'pages.extend(["各項查詢", "財務報表", "帳號與權限管理", "資料管理"])' in source
+    from navigation_platforms import sidebar_pages
+    assert "財務平台" in sidebar_pages("admin")
+    assert "財務平台" not in sidebar_pages("coach")
+    assert 'render_finance_platform(me, general_queries_page, financial_report_page)' in source
     assert 'general_usage_date_form' in source
     assert 'general_usage_member_form' in source
     assert 'general_purchase_date_form' in source

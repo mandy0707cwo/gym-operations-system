@@ -5,6 +5,8 @@ from io import BytesIO
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from course_defaults import apply_purchase_catalog_defaults, catalog_default_payload
+from navigation_platforms import (sidebar_pages, render_daily_execution,
+    render_finance_platform, render_system_admin_platform)
 
 import pandas as pd
 import plotly.express as px
@@ -239,12 +241,24 @@ def show_table(data, columns=None):
     st.dataframe(display_df, use_container_width=True, hide_index=True, column_config=money_config)
 
 def daily_page(me):
-    st.header("每日營運")
+    render_daily_execution(me, usage_page, daily_operation_page)
+
+
+def finance_platform_page(me):
+    render_finance_platform(me, general_queries_page, financial_report_page)
+
+
+def system_admin_platform_page(me):
+    render_system_admin_platform(me, data_management_page, account_admin_page)
+
+
+def daily_operation_page(me, active_tab):
+    if active_tab not in ("體驗登錄","單堂銷售","專案登錄","活動支援"):
+        raise ValueError("無效的每日執行分頁")
     coaches = coach_options()
     allowed = coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
     coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
     names={v:k for k,v in coaches.items()}
-    tab1,tab2,tab3,tab4=st.tabs(["體驗項目","單堂銷售","活動支援","專案"])
 
     def standard_entry(tab, table_name, form_key, content_label, catalog_type, member_label=None):
         with tab:
@@ -276,7 +290,7 @@ def daily_page(me):
                 amount=c2.number_input("金額",0.0,1000000000.0,value=default_amount,step=100.0,format="%.0f",placeholder="選擇內容後自動帶入")
                 note=st.text_input("備註")
                 record_name="體驗項目" if catalog_type=="trial" else "單堂銷售"
-                save=st.form_submit_button(f"確認並建立{record_name}紀錄",type="primary",use_container_width=True)
+                save=st.form_submit_button(f"確認並建立{record_name}紀錄",type="primary",width="stretch")
             if save:
                 errors=[]
                 if member_label and not member_name.strip(): errors.append(f"{member_label}不可空白")
@@ -310,14 +324,16 @@ def daily_page(me):
             columns=["entry_date"] + member_column + content_columns + ["hours","amount","coach_name","note"]
             show_table(data,columns)
 
-    standard_entry(tab1,"trial_items","trial_item_form","體驗項目","trial",member_label="體驗會員姓名")
-    standard_entry(tab2,"single_sales","single_sale_form","銷售內容","single_sale",member_label="單堂銷售會員姓名")
-    with tab3:
+    if active_tab=="體驗登錄":
+        standard_entry(st.container(),"trial_items","trial_item_form","體驗項目","trial",member_label="體驗會員姓名")
+    if active_tab=="單堂銷售":
+        standard_entry(st.container(),"single_sales","single_sale_form","銷售內容","single_sale",member_label="單堂銷售會員姓名")
+    if active_tab=="活動支援":
         with st.form("event_support_form",clear_on_submit=True,enter_to_submit=False):
             c1,c2=st.columns(2); entry_date=c1.date_input("日期",date.today(),key="event_date"); coach_name=c2.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練",key="event_coach")
             content=st.text_input("活動內容")
             c1,c2=st.columns(2); hours=c1.number_input("時數",0.25,24.0,value=None,step=0.25,placeholder="請輸入時數",key="event_hours"); deducted_hours=c2.number_input("應扣除時間",0.0,24.0,0.0,step=0.25)
-            reason=st.text_input("扣除原因"); save=st.form_submit_button("確認並建立活動支援紀錄",type="primary",use_container_width=True)
+            reason=st.text_input("扣除原因"); save=st.form_submit_button("確認並建立活動支援紀錄",type="primary",width="stretch")
         if save:
             if coach_name is None: st.error("請選擇教練。")
             elif not content.strip(): st.error("活動內容不可空白。")
@@ -334,7 +350,7 @@ def daily_page(me):
         for x in data: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
         show_table(data,["entry_date","content","coach_name","hours","deducted_hours","deduction_reason"])
 
-    with tab4:
+    if active_tab=="專案登錄":
         try:
             projects=rows(client().table("projects").select("id,project_name,funding_type,stored_amount").eq("active",True).order("project_name"))
             catalog=rows(client().table("project_catalog").select("id,project_id,project_name,item_name,course_type,hours,price").order("project_name").order("item_name"))
@@ -375,7 +391,7 @@ def daily_page(me):
                 person_name=c2.text_input("使用者")
                 coach_name=st.selectbox("教練",list(allowed),index=None,placeholder="請選擇教練",key=f'{form_key}_coach')
                 project_note=st.text_input("備註")
-                add_project=st.form_submit_button("確認並建立專案紀錄",type="primary",use_container_width=True)
+                add_project=st.form_submit_button("確認並建立專案紀錄",type="primary",width="stretch")
             if add_project:
                 if selected_item is None: st.error("請選擇專案及操作項目。")
                 elif not person_name.strip(): st.error("使用者不可空白。")
@@ -908,7 +924,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
 def usage_page(me):
-    st.header("銷課表")
+    st.subheader("銷課登錄")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
     all_usage_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_code,purchase_date,created_at")
         .order("purchase_date").order("created_at").order("id"))
@@ -1054,7 +1070,7 @@ def completed_purchase_ids(usages,purchase_map):
         and int(usage.get("session_seq") or 0)==int(purchase_map[usage["purchase_id"]].get("total_sessions") or 0)}
 
 def dashboard_page(me):
-    st.header("主管 Dashboard")
+    st.header("營運總覽")
     if me["role"] not in ("manager","admin"): st.warning("此頁僅限主管與系統管理員使用。") ; return
     coaches=coach_options(); c1,c2,c3=st.columns(3)
     start=c1.date_input("開始日期",date.today().replace(day=1)); end=c2.date_input("結束日期",date.today())
@@ -1964,7 +1980,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.10"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.11"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -3796,7 +3812,7 @@ def general_queries_page(me):
             if submitted: render_balance_results(cutoff,keyword,"含稅",f"{cutoff}_{keyword or '全部'}")
 
 def financial_report_page(me):
-    st.header("財務報表")
+    st.header("每月查詢")
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
         return
@@ -4709,17 +4725,21 @@ user=login(); me=profile(user.id)
 with st.sidebar:
     st.title("🏋️ 營運管理")
     st.write(f'{me["display_name"]}｜{ROLE_LABELS.get(me["role"],me["role"])}')
-    pages=["每日營運","客戶管理","購買及分期","銷課表","教練查詢"]
-    if me["role"] in ("manager","admin"): pages.append("主管 Dashboard")
-    if me["role"] == "admin":
-        pages.extend(["各項查詢", "財務報表", "帳號與權限管理", "資料管理"])
-    page=st.radio("功能",pages)
+    pages=sidebar_pages(me["role"])
+    if not pages:
+        st.warning("您沒有可使用的功能。"); st.stop()
+    page=st.radio("功能",pages,key="main_navigation")
     if st.button("登出"):
         client().auth.sign_out(); st.session_state.clear(); st.rerun()
 
 collapse_sidebar_on_mobile()
 
 try:
-    {"每日營運":daily_page,"客戶管理":customer_admin_page,"購買及分期":purchase_page,"銷課表":usage_page,"教練查詢":coach_query_page,"各項查詢":general_queries_page,"主管 Dashboard":dashboard_page,"財務報表":financial_report_page,"帳號與權限管理":account_admin_page,"資料管理":data_management_page}[page](me)
+    if page not in sidebar_pages(me["role"]):
+        st.warning("您沒有此功能的使用權限。")
+    else:
+        {"每日執行登錄":daily_page,"客戶管理":customer_admin_page,"購買及分期":purchase_page,
+         "教練查詢":coach_query_page,"營運總覽":dashboard_page,
+         "財務平台":finance_platform_page,"系統管理平台":system_admin_platform_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")
