@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pandas as pd
 import streamlit as st
 from course_defaults import apply_purchase_catalog_defaults, catalog_default_payload
+from ui_text import section_heading
 names={"rows","purchase_page","course_purchase_entry","installment_payment_entry",
        "_entry_saved","_entry_success","_confirmed_write","course_termination_report_page",
        "_build_purchase_code_map","_course_termination_history_frame","_tax_display_amount","course_admin_page"}

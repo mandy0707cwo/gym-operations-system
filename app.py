@@ -5,6 +5,7 @@ from io import BytesIO
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from course_defaults import apply_purchase_catalog_defaults, catalog_default_payload
+from ui_text import section_heading
 from navigation_platforms import (sidebar_pages, render_daily_execution,
     render_finance_platform, render_system_admin_platform)
 
@@ -449,7 +450,7 @@ def _confirmed_write(response,field,expected=None):
     return records[0]
 
 def course_purchase_entry(me):
-    st.subheader("課程購買")
+    section_heading("課程購買")
     _entry_success("purchase")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
     coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
@@ -557,7 +558,7 @@ def course_purchase_entry(me):
                     st.warning("資料庫拒絕時兩筆都不會建立；若為連線中斷或未收到成功回覆，請先查核兩筆是否已入帳，勿直接重送。輸入欄位已保留。")
 
 def installment_payment_entry(me):
-    st.subheader("登錄後續期款")
+    section_heading("登錄後續期款")
     _entry_success("payment")
     coaches=coach_options()
     coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
@@ -924,7 +925,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
 def usage_page(me):
-    st.subheader("銷課登錄")
+    section_heading("銷課登錄")
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
     all_usage_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_code,purchase_date,created_at")
         .order("purchase_date").order("created_at").order("id"))
@@ -932,7 +933,7 @@ def usage_page(me):
     coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
     register_tab,cancel_tab=st.tabs(["銷課登錄","上課預約取消"])
     with cancel_tab:
-        st.markdown('<div style="font-size:1.5rem;font-weight:600;line-height:1.3;margin:0.25rem 0 1rem 0;">上課預約取消 <span style="font-size:0.75rem;font-weight:400;">（前一日及當日臨時請假者）</span></div>',unsafe_allow_html=True)
+        section_heading("上課預約取消",note="（前一日及當日臨時請假者）")
         with st.form("session_cancellation",clear_on_submit=True):
             c1,c2,c3=st.columns(3); cancel_date=c1.date_input("取消日期",date.today()); cancel_coach=c2.selectbox("教練",list(allowed)); cancel_count=c3.number_input("上課取消堂數",0,100,0)
             cancel_reason=st.text_input("取消原因"); add_cancel=st.form_submit_button("新增取消紀錄")
@@ -1014,10 +1015,10 @@ def usage_page(me):
                     names={v:k for k,v in coaches.items()}; history=[x for x in history if x.get("coach_id") in names]
                     for x in history: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
                     for x in history: x["is_makeup_label"]="是" if x.get("is_makeup") else "否"
-                    st.subheader("扣課紀錄"); show_table(history,["usage_date","actual_usage_date","is_makeup_label","coach_name","session_seq","deducted_amount","note"])
+                    section_heading("扣課紀錄"); show_table(history,["usage_date","actual_usage_date","is_makeup_label","coach_name","session_seq","deducted_amount","note"])
 
         st.divider()
-        st.subheader("近期銷課紀錄")
+        section_heading("近期銷課紀錄")
         recent_start=date.today()-timedelta(days=6)
         recent_end=date.today()
         recent_coach_id=me["id"] if me["role"]=="coach" else None
@@ -1200,7 +1201,7 @@ def dashboard_page(me):
     st.plotly_chart(px.bar(df,x="教練",y="總執行時數",title=f"總執行時數比較（{start} 至 {end}）",labels={"總執行時數":"小時"}),use_container_width=True)
 
 def account_admin_page(me):
-    st.header("帳號與權限管理")
+    section_heading("帳號與權限管理")
     if me["role"] != "admin":
         st.warning("此頁僅限系統管理員使用。")
         return
@@ -1227,7 +1228,7 @@ def account_admin_page(me):
                 except Exception as exc:
                     st.error(f"轉換失敗：{exc}")
 
-    st.subheader("建立新帳號")
+    section_heading("建立新帳號")
     with st.form("create_account", clear_on_submit=True):
         c1, c2 = st.columns(2)
         new_account = c1.text_input("登入帳號").strip().lower()
@@ -1255,7 +1256,7 @@ def account_admin_page(me):
             except Exception as exc:
                 st.error(f"建立失敗：{exc}")
 
-    st.subheader("現有帳號")
+    section_heading("現有帳號")
     profiles = rows(admin.table("profiles").select("id,username,display_name,role,active,created_at").order("display_name"))
     if profiles:
         table_rows=[{**x,"role":ROLE_LABELS.get(x["role"],x["role"])} for x in profiles]
@@ -1283,7 +1284,7 @@ def account_admin_page(me):
                 except Exception as exc:
                     st.error(f"更新失敗：{exc}")
 
-        st.subheader("刪除帳號")
+        section_heading("刪除帳號")
         deletable = {label: item for label, item in labels.items() if item["id"] != me["id"]}
         if deletable:
             with st.form("delete_account"):
@@ -1311,7 +1312,7 @@ def account_admin_page(me):
                             st.error(f"刪除失敗：{exc}")
 
 def course_admin_page(me):
-    st.header("課程名稱管理")
+    section_heading("課程名稱管理")
     if me["role"] != "admin":
         st.warning("此頁僅限系統管理員使用。")
         return
@@ -1404,7 +1405,7 @@ def course_admin_page(me):
                     except Exception as exc: st.error(f"修改失敗，請確認課程名稱是否重複：{exc}")
 
 def operation_item_admin_page(me, item_type, title):
-    st.subheader(title)
+    section_heading(title)
     if me["role"] != "admin":
         st.warning("此功能僅限系統管理員使用。")
         return
@@ -1476,7 +1477,7 @@ def operation_item_admin_page(me, item_type, title):
                     except Exception as exc: st.error(f"修改失敗，請確認體驗項目與內容的組合是否重複：{exc}" if item_type=="trial" else f"修改失敗，請確認名稱是否重複：{exc}")
 
 def project_admin_page(me):
-    st.subheader("專案管理")
+    section_heading("專案管理")
     if me["role"]!="admin": st.warning("此功能僅限系統管理員使用。"); return
     admin=admin_client()
     try:
@@ -1980,7 +1981,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.11"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.12"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -1988,7 +1989,7 @@ def _full_system_backup_bytes(admin):
     return _excel_bytes(backup_frames)
 
 def data_io_page(me):
-    st.header("資料匯入／匯出")
+    section_heading("資料匯入／匯出")
     if me["role"] != "admin":
         st.warning("此頁僅限系統管理員使用。")
         return
@@ -1997,7 +1998,7 @@ def data_io_page(me):
         st.error("尚未設定 SUPABASE_SECRET_KEY。")
         return
 
-    st.subheader("匯出 Excel 報表")
+    section_heading("匯出 Excel 報表")
     c1, c2 = st.columns(2)
     start = c1.date_input("開始日期", date.today().replace(day=1), key="export_start")
     end = c2.date_input("結束日期", date.today(), key="export_end")
@@ -2042,7 +2043,7 @@ def data_io_page(me):
             use_container_width=True)
 
     st.divider()
-    st.subheader("匯入 Excel")
+    section_heading("匯入 Excel")
     st.caption("目前支援會員名單與每日營運。系統會先檢查整份檔案；有錯誤時不會寫入資料庫。")
     member_template = pd.DataFrame(columns=["member_name", "active"])
     operation_template = pd.DataFrame(columns=["operation_date", "coach_username", "classes_held", "classes_cancelled", "trial_visits", "trial_conversions", "note"])
@@ -2127,7 +2128,7 @@ def member_course_io_page(me):
     members=rows(admin.table("members").select("id,member_name"))
     member_names={x["id"]:x["member_name"] for x in members}
 
-    st.subheader("匯出資料報表")
+    section_heading("匯出資料報表")
     purchases=paged_rows(lambda: admin.table("purchases").select("*").order("purchase_date").order("created_at").order("id"))
     purchase_code_map=_build_purchase_code_map(purchases)
     # 匯出附固定編號與 UUID；舊教練編號不可單獨用於銷課匯入。
@@ -2175,7 +2176,7 @@ def member_course_io_page(me):
     st.download_button("下載資料匯出報表",report,file_name=f"健身房資料匯出報表_{date.today()}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
-    st.divider(); st.subheader("匯入會員課程與銷課表")
+    st.divider(); section_heading("匯入會員課程與銷課表")
     st.caption("請先下載範本。匯入會員課程時 purchase_id 可留空；匯入銷課表時請填 UUID；若填固定購課編號，須附 purchase_uuid 供核對。請勿沿用舊版教練畫面的日期序號。")
     course_template=pd.DataFrame(columns=["purchase_id","member_name","purchase_kind","coach_username","course_name","report_category","total_sessions","session_hours","total_amount","purchase_date","expiry_date","payment_plan","installment_count","paid_amount","paid_date","referral","note"])
     usage_template=pd.DataFrame(columns=["purchase_uuid","purchase_id","usage_date","actual_usage_date","is_makeup","coach_username","note"])
@@ -2447,7 +2448,7 @@ def record_admin_page(me):
     coach_map={x["display_name"]:x["id"] for x in coaches if x["role"]=="coach"}
     id_name={x["id"]:x["display_name"] for x in coaches}
     data_types=["體驗項目","單堂銷售","活動支援","專案","上課預約取消","課程購買","銷課表"]
-    st.markdown("#### 資料類型")
+    section_heading("資料類型")
     data_type=st.segmented_control(
         "資料類型分頁",data_types,default="體驗項目",
         key="manage_data_type",label_visibility="collapsed"
@@ -2482,7 +2483,7 @@ def record_admin_page(me):
     usage_course_map=cache_entry["usage_course_map"]
     usage_purchase_code_map=cache_entry["usage_purchase_code_map"]
 
-    st.markdown("#### 搜尋紀錄")
+    section_heading("搜尋紀錄")
     with st.form(f"record_search_form_{data_type}",border=False):
         search_col1,search_col2=st.columns(2)
         coach_search=search_col1.selectbox(
@@ -2641,7 +2642,7 @@ def record_admin_page(me):
                 st.rerun()
         confirm_record_update()
     st.divider()
-    st.subheader("刪除資料")
+    section_heading("刪除資料")
     delete_mode=st.radio(
         "刪除方式",["刪除目前選擇的單筆","選擇多筆刪除"],horizontal=True,
         key=f"delete_mode_{data_type}"
@@ -2732,7 +2733,7 @@ def record_admin_page(me):
         confirm_record_delete()
 
 def bonus_rule_admin_page(me):
-    st.subheader("獎金規則管理")
+    section_heading("獎金規則管理")
     if me["role"]!="admin": st.warning("此功能僅限系統管理員使用。"); return
     admin=admin_client()
     if admin is None: st.error("尚未設定 SUPABASE_SECRET_KEY。"); return
@@ -2765,7 +2766,7 @@ def bonus_rule_admin_page(me):
             c1,c2=st.columns(2)
             talk_rate_percent=c1.number_input("談單獎金率（%）",0.0,100.0,3.0,step=0.1,format="%.2f")
             completion_rate_percent=c2.number_input("結單獎金率（%）",0.0,100.0,4.0,step=0.1,format="%.2f")
-            st.markdown("**醫生轉介適用條件**")
+            section_heading("醫生轉介適用條件")
             c1,c2=st.columns(2)
             referral_first_talk=c1.checkbox("轉介首購計算談單獎金",value=False)
             referral_first_completion=c2.checkbox("轉介首購計算結單獎金",value=False)
@@ -2808,7 +2809,7 @@ def bonus_rule_admin_page(me):
                     except Exception as exc: st.error(f"更新失敗：{exc}")
 
 def session_usage_export_query(me):
-    st.subheader("銷課查詢")
+    section_heading("銷課查詢")
     admin=admin_client()
     profiles=rows(admin.table("profiles").select("id,display_name,role").order("display_name"))
     operational_profiles=[x for x in profiles if x.get("role") in ("coach","manager")]
@@ -2959,7 +2960,7 @@ def customer_admin_page(me):
             customer_map={f'{x["member_name"]}｜{x.get("phone") or "無電話"}｜{status_labels.get(x.get("customer_status"),"")}':x for x in filtered_customers}
             selected_customer_label=st.selectbox("選擇要修改的客戶",list(customer_map),key="customer_edit_select")
             current=customer_map[selected_customer_label]
-            st.markdown("#### 購課摘要與歷史")
+            section_heading("購課摘要與歷史")
             customer_purchases=paged_rows(lambda: data_api.table("purchases")
                 .select("id,purchase_date,purchase_kind,course_name,total_sessions,total_amount,payment_plan,installment_count,status,created_at")
                 .eq("member_id",current["id"]).order("purchase_date",desc=True).order("created_at",desc=True))
@@ -3052,7 +3053,7 @@ def customer_admin_page(me):
                     except Exception as exc: st.error(f"修改失敗：{exc}")
 
             if is_admin:
-                st.markdown("#### 刪除客戶")
+                section_heading("刪除客戶")
                 st.caption("只有完全沒有購課及銷課紀錄的客戶可以刪除；刪除後無法復原。")
                 delete_confirm=st.checkbox(
                     f'我確認要永久刪除客戶「{current["member_name"]}」',
@@ -3110,7 +3111,7 @@ def customer_admin_page(me):
             st.warning(f"尚無法讀取修改紀錄，請確認客戶資料 SQL 已執行：{exc}")
 
 def installment_payment_admin_page(me):
-    st.subheader("分期付款管理")
+    section_heading("分期付款管理")
     st.caption("僅限系統管理員操作。輸入錯誤請更正原付款；實際短繳請登錄補繳款，補繳不增加分期期數。所有異動均保留稽核紀錄。")
     admin=admin_client()
     try:
@@ -3278,7 +3279,7 @@ def installment_payment_admin_page(me):
 
 
 def data_management_page(me):
-    st.header("資料管理")
+    section_heading("資料管理")
     if me["role"]!="admin": st.warning("此頁僅限系統管理員使用。"); return
     if admin_client() is None: st.error("尚未設定 SUPABASE_SECRET_KEY。"); return
     management_view=st.segmented_control("資料管理功能",["課程名稱管理","體驗項目管理","單堂銷售管理","專案管理","獎金規則管理","分期付款管理","資料匯入／匯出","修改／刪除"],
@@ -3294,7 +3295,7 @@ def data_management_page(me):
         with io_tab: member_course_io_page(me)
         with usage_query_tab: session_usage_export_query(me)
         with backup_tab:
-            st.subheader("一鍵下載完整資料及財務報表備份")
+            section_heading("一鍵下載完整資料及財務報表備份")
             st.caption("同一份 Excel 包含系統主要原始資料表，以及截至下載當日、不套用畫面篩選的全部財務報表工作表；不包含登入密碼、API金鑰及Streamlit Secrets。")
             backup_admin=admin_client()
             backup_stamp=datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -3395,7 +3396,7 @@ def course_termination_report_page(me):
         return
     _entry_success("termination")
     revision=st.session_state.get("termination_form_revision",0)
-    st.subheader("課程中止")
+    section_heading("課程中止")
     st.caption("逾期餘額轉列入帳；退費金額為剩餘金額扣除選擇性 20% 手續費。兩者均不計入銷課及執行時數。")
     members=paged_rows(lambda: client().table("members").select("id,member_name").order("id"))
     member_name_map={x["id"]:x["member_name"] for x in members}
@@ -3506,7 +3507,7 @@ def course_termination_report_page(me):
 
 def general_queries_page(me):
     """系統管理員專用的跨模組財務與營運查詢。"""
-    st.header("各項查詢")
+    section_heading("各項查詢")
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
         return
@@ -3812,7 +3813,7 @@ def general_queries_page(me):
             if submitted: render_balance_results(cutoff,keyword,"含稅",f"{cutoff}_{keyword or '全部'}")
 
 def financial_report_page(me):
-    st.header("每月查詢")
+    section_heading("每月查詢")
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
         return
@@ -3826,7 +3827,7 @@ def financial_report_page(me):
     report_view=st.segmented_control("報表分類",["會員報表","其他報表","每月報表","教練查詢"],
         default="會員報表",key="financial_report_view",width="stretch")
     if report_view=="會員報表":
-        st.subheader("會員報表")
+        section_heading("會員報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
         member_name_map={x["id"]:x["member_name"] for x in members}
         member_id_map={x["member_name"]:x["id"] for x in members}
@@ -4004,7 +4005,7 @@ def financial_report_page(me):
             for col,name in zip(total_cols,["實際預收總金額","成交總金額"]):
                 col.metric(name,f'$ {float(total_values[name]):,.0f}')
             st.caption(f"以上總金額顯示為{total_tax_mode}；成交總金額只計算本期間成交資料，實際預收總金額為本期間實際收款。")
-            st.markdown("**購買課程明細**")
+            section_heading("購買課程明細")
             st.caption("每列為查詢期間內有實際收款的購買課程，包含分期款；非本期間成交者，成交金額留白。")
             st.dataframe(center_member_report_columns(prepaid_total_df,["成交金額"]),hide_index=True,width="stretch",column_config=money_config)
         with detail_tabs[1]:
@@ -4031,7 +4032,7 @@ def financial_report_page(me):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
 
     if False:  # v1.7.6 起移除教練報表畫面，保留舊程式供歷史版本比對。
-        st.subheader("教練報表")
+        section_heading("教練報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
         member_name_map={x["id"]:x["member_name"] for x in members}
         member_id_map={x["member_name"]:x["id"] for x in members}
@@ -4121,7 +4122,7 @@ def financial_report_page(me):
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)
 
     if report_view=="其他報表":
-        st.subheader("其他報表")
+        section_heading("其他報表")
         members=rows(client().table("members").select("id,member_name").order("member_name"))
         member_name_map={x["id"]:x["member_name"] for x in members}
         member_id_map={x["member_name"]:x["id"] for x in members}
@@ -4313,7 +4314,7 @@ def financial_report_page(me):
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",icon=":material/download:",width="stretch")
 
     if report_view=="其他報表" and other_report_view=="專案報表":
-        st.subheader("專案報表")
+        section_heading("專案報表")
         try:
             report_projects=rows(client().table("projects").select("id,project_name,funding_type,stored_amount").order("project_name"))
         except Exception:
@@ -4372,9 +4373,9 @@ def financial_report_page(me):
                 project_main_tabs=st.tabs(["專案報表"])
                 if False:  # 儲值明細已移至會員報表／專案預收儲值餘額。
                     st.caption(f"儲值狀況與儲值交易明細固定統計至 {date.today()}，不受上方開始／結束日期影響；專案名稱篩選仍然有效。")
-                    st.markdown("#### 儲值狀況")
+                    section_heading("儲值狀況")
                     st.dataframe(funding_df,hide_index=True,width="stretch",column_config=project_money_config)
-                    st.markdown("#### 儲值明細")
+                    section_heading("儲值明細")
                     st.dataframe(deposit_df,hide_index=True,width="stretch",column_config=project_money_config)
                     deposit_export=_excel_bytes({"儲值狀況":funding_df,"儲值明細":deposit_df})
                     st.download_button("下載儲值明細",deposit_export,file_name=f"專案儲值明細_截至_{date.today()}.xlsx",
@@ -4382,13 +4383,13 @@ def financial_report_page(me):
                 with project_main_tabs[0]:
                     project_usage_tabs=st.tabs(["已儲值","未儲值"])
                     with project_usage_tabs[0]:
-                        st.markdown("#### 已儲值專案使用明細")
+                        section_heading("已儲值專案使用明細")
                         st.dataframe(stored_detail_df,hide_index=True,width="stretch",column_config=project_money_config)
                         stored_export=_excel_bytes({"已儲值使用明細":stored_detail_df})
                         st.download_button("下載已儲值使用明細",stored_export,file_name=f"已儲值專案使用明細_{project_start}_{project_end}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
                     with project_usage_tabs[1]:
-                        st.markdown("#### 未儲值專案使用明細")
+                        section_heading("未儲值專案使用明細")
                         st.dataframe(unfunded_detail_df,hide_index=True,width="stretch",column_config=project_money_config)
                         unfunded_export=_excel_bytes({"未儲值使用明細":unfunded_detail_df})
                         st.download_button("下載未儲值使用明細",unfunded_export,file_name=f"未儲值專案使用明細_{project_start}_{project_end}.xlsx",
@@ -4398,7 +4399,7 @@ def financial_report_page(me):
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
 
     if report_view=="其他報表" and other_report_view=="每日營運報表":
-        st.subheader("每日營運報表")
+        section_heading("每日營運報表")
         daily_coaches=coach_options()
         with st.form("finance_daily_filter_form",border=False):
             c1,c2,c3,c4=st.columns(4)
@@ -4478,7 +4479,7 @@ def financial_report_page(me):
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
 
     if report_view=="每月報表":
-        st.subheader("每月報表")
+        section_heading("每月報表")
         default_month_start=date.today().replace(day=1)
         default_month_end=(pd.Timestamp(default_month_start)+pd.offsets.MonthEnd(1)).date()
         with st.form("monthly_report_filter_form",border=False):
@@ -4704,12 +4705,12 @@ def financial_report_page(me):
         with monthly_tabs[3]:
             if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
             st.dataframe(monthly_talk_bonus_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
-            st.markdown("**各教練談單獎金總計**")
+            section_heading("各教練談單獎金總計")
             st.dataframe(monthly_talk_bonus_summary_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
         with monthly_tabs[4]:
             if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
             st.dataframe(monthly_completion_bonus_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
-            st.markdown("**各教練結單獎金總計**")
+            section_heading("各教練結單獎金總計")
             st.dataframe(monthly_completion_bonus_summary_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
         monthly_export=_excel_bytes({"合併計":monthly_combined_df,"每月銷課":monthly_sales_df,"每月專案銷課":monthly_stored_project_df,
             "每月課程中止":monthly_termination_df,"每月教練時數":monthly_hours_df,"每月教練營收":monthly_revenue_df,

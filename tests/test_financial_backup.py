@@ -428,7 +428,7 @@ def test_prepaid_income_query_columns_status_and_totals():
 def test_customer_full_access_and_safe_admin_delete():
     source = APP_PATH.read_text(encoding="utf-8")
     migration = (APP_PATH.parent / "migration_customer_full_access_delete_v1_12_56.sql").read_text(encoding="utf-8")
-    assert 'st.markdown("#### 刪除客戶")' in source
+    assert 'section_heading("刪除客戶")' in source
     assert 'if related_purchases or related_usages:' in source
     assert 'data_api.table("members").delete().eq("id",current["id"]).execute()' in source
     assert "role in ('coach','shared_coach','manager','admin')" in migration
