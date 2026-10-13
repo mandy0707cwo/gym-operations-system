@@ -4,6 +4,7 @@ import re
 from io import BytesIO
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+from course_defaults import apply_purchase_catalog_defaults, catalog_default_payload
 
 import pandas as pd
 import plotly.express as px
@@ -444,9 +445,10 @@ def course_purchase_entry(me):
     if not member_options:
         st.warning("尚無可使用的客戶資料。請先由系統管理員至左側「客戶管理」新增客戶，再建立課程購買。")
         return
-    courses=rows(client().table("course_catalog").select("course_name,course_type,report_category,session_hours").eq("active",True).order("course_name"))
+    courses=paged_rows(lambda: client().table("course_catalog").select("*").eq("active",True).order("course_name").order("id"))
     course_options={f'{x.get("course_type") or "未分類"}｜{x["course_name"]}':x["course_name"] for x in courses}
     course_names=list(course_options)
+    course_record_map={x["course_name"]:x for x in courses}
     course_hours={x["course_name"]:float(x.get("session_hours") or 1) for x in courses}
     course_report_categories={x["course_name"]:str(x.get("report_category") or "未分類").strip() or "未分類" for x in courses}
     if not course_names:
@@ -467,7 +469,7 @@ def course_purchase_entry(me):
     coach_names=list(allowed)
     default_coach_index=coach_names.index(default_coach_name) if default_coach_name in coach_names else None
     default_referral=str(selected_member.get("referral") or "")
-    default_purchase_note=str(selected_member.get("note") or "")
+    apply_purchase_catalog_defaults(st.session_state,purchase_revision,course_record_map.get(course),selected_member)
     with st.form(f"purchase_{purchase_revision}",clear_on_submit=False,enter_to_submit=False):
         c1,c2=st.columns(2)
         kind=c1.selectbox("購買類型",["首次購買","續課"],index=None,placeholder="請選擇購買類型",key=f"purchase_kind_{purchase_revision}")
@@ -481,7 +483,7 @@ def course_purchase_entry(me):
         purchased=c1.date_input("購買日期",value=None,key=f"purchase_date_{purchase_revision}",**coach_date_limit)
         expiry=c2.date_input("有效日期",value=None,key=f"purchase_expiry_{purchase_revision}")
         referral=st.text_input("醫生轉介",value=default_referral,key=f"purchase_referral_{purchase_revision}_{selected_member_id}")
-        purchase_note=st.text_area("備註",value=default_purchase_note,key=f"purchase_note_{purchase_revision}_{selected_member_id}")
+        purchase_note=st.text_area("備註",key=f"purchase_note_{purchase_revision}_{selected_member_id}")
         if plan=="分期":
             count=st.selectbox("總期數",[2,3],index=None,placeholder="請選擇總期數",key=f"purchase_count_{purchase_revision}")
             c1,c2,c3=st.columns(3)
@@ -1301,7 +1303,14 @@ def course_admin_page(me):
     if admin is None:
         st.error("尚未設定 SUPABASE_SECRET_KEY。")
         return
-    courses=rows(admin.table("course_catalog").select("id,course_name,course_type,report_category,session_hours,active,created_at").order("course_name"))
+    try:
+        courses=paged_rows(lambda: admin.table("course_catalog").select("id,course_name,course_type,report_category,session_hours,default_sessions,default_total_amount,note,active,created_at").order("course_name").order("id"))
+    except Exception as exc:
+        if getattr(exc,"code",None) in ("42703","PGRST204"):
+            st.error("課程預設欄位尚未建立，請先執行 migration_course_purchase_defaults_v1_13_10.sql。")
+        else:
+            st.error(f"課程名稱資料讀取失敗：{exc}")
+        return
     course_map={f'{x.get("course_type") or "未分類"}｜{x["course_name"]}':x for x in courses}
     add_tab,delete_tab,edit_tab=st.tabs(["新增","刪除","修改"])
     with add_tab:
@@ -1311,12 +1320,18 @@ def course_admin_page(me):
             course_type=c2.text_input("課程屬性").strip()
             report_category=c3.text_input("報表分類",placeholder="例如：訓練、英特－恢復").strip()
             course_hours=c4.number_input("每堂課時數",0.25,24.0,1.0,step=0.25,format="%.2f")
+            c1,c2=st.columns(2)
+            default_sessions=c1.number_input("課程堂數",min_value=1,max_value=999,value=None,placeholder="未設定請留白",key="catalog_add_sessions")
+            default_amount=c2.number_input("成交總金額",min_value=0.0,max_value=10000000.0,value=None,step=100.0,format="%.2f",placeholder="未設定請留白",key="catalog_add_amount")
+            default_note=st.text_area("備註",key="catalog_add_note")
+            st.caption("以上三欄選填；購課選擇此課程時自動帶入，沒有設定則留白。成交總金額為含稅，帶入後仍可修改。")
             add_course=st.form_submit_button("新增課程",type="primary")
         if add_course:
             if not course_name or not course_type or not report_category: st.error("課程名稱、課程屬性與報表分類不可空白。")
             else:
                 try:
-                    admin.table("course_catalog").insert({"course_name":course_name,"course_type":course_type,"report_category":report_category,"session_hours":course_hours,"active":True}).execute()
+                    defaults=catalog_default_payload(default_sessions,default_amount,default_note)
+                    admin.table("course_catalog").insert({"course_name":course_name,"course_type":course_type,"report_category":report_category,"session_hours":course_hours,"active":True,**defaults}).execute()
                     st.success(f"已新增課程：{course_name}"); st.rerun()
                 except Exception as exc: st.error(f"新增失敗，請確認課程名稱是否重複：{exc}")
     with delete_tab:
@@ -1336,8 +1351,13 @@ def course_admin_page(me):
     with edit_tab:
         if not courses: st.info("目前尚未建立課程名稱。")
         else:
-            course_display=[{**x,"課程屬性":x.get("course_type") or "","報表分類":x.get("report_category") or "未分類","active":"啟用" if x.get("active",True) else "停用"} for x in courses]
-            show_table(course_display,["課程屬性","報表分類","course_name","session_hours","active","created_at"])
+            course_display=[{"課程屬性":x.get("course_type") or "","報表分類":x.get("report_category") or "未分類",
+                "課程名稱":x["course_name"],"每堂課時數":x.get("session_hours"),"課程堂數":x.get("default_sessions"),
+                "成交總金額":x.get("default_total_amount"),"備註":x.get("note"),
+                "啟用狀態":"啟用" if x.get("active",True) else "停用","建立時間":x.get("created_at")} for x in courses]
+            st.dataframe(pd.DataFrame(course_display),hide_index=True,width="stretch",
+                column_config={"成交總金額":st.column_config.NumberColumn(format="$ %.2f"),
+                    "課程堂數":st.column_config.NumberColumn(format="%d")})
             selected_course=st.selectbox("選擇要修改的課程",list(course_map),key="course_edit_select")
             current=course_map[selected_course]
             with st.form("edit_course"):
@@ -1346,15 +1366,24 @@ def course_admin_page(me):
                 edited_type=c2.text_input("課程屬性",current.get("course_type") or "").strip()
                 edited_report_category=c3.text_input("報表分類",current.get("report_category") or "未分類").strip()
                 edited_hours=c4.number_input("每堂課時數",0.25,24.0,float(current.get("session_hours") or 1),step=0.25,format="%.2f")
+                c1,c2=st.columns(2)
+                edited_sessions=c1.number_input("課程堂數",min_value=1,max_value=999,value=current.get("default_sessions"),
+                    placeholder="未設定請留白",key=f"catalog_edit_sessions_{current['id']}")
+                edited_amount=c2.number_input("成交總金額",min_value=0.0,max_value=10000000.0,
+                    value=float(current["default_total_amount"]) if current.get("default_total_amount") is not None else None,
+                    step=100.0,format="%.2f",placeholder="未設定請留白",key=f"catalog_edit_amount_{current['id']}")
+                edited_note=st.text_area("備註",value=current.get("note") or "",key=f"catalog_edit_note_{current['id']}")
                 edited_active=st.checkbox("啟用課程",value=bool(current.get("active",True)))
                 save_course=st.form_submit_button("儲存修改",type="primary")
             if save_course:
                 if not edited_name or not edited_type or not edited_report_category: st.error("課程名稱、課程屬性與報表分類不可空白。")
                 else:
                     try:
-                        admin.table("course_catalog").update({"course_name":edited_name,"course_type":edited_type,"report_category":edited_report_category,"session_hours":edited_hours,"active":edited_active}).eq("id",current["id"]).execute()
+                        defaults=catalog_default_payload(edited_sessions,edited_amount,edited_note)
+                        admin.table("course_catalog").update({"course_name":edited_name,"course_type":edited_type,"report_category":edited_report_category,"session_hours":edited_hours,"active":edited_active,**defaults}).eq("id",current["id"]).execute()
                         # 首次設定分類時，替既有尚未分類的購買紀錄補上分類；已分類的歷史資料不回溯改寫。
-                        admin.table("purchases").update({"report_category":edited_report_category}).eq("course_name",current["course_name"]).eq("report_category","未分類").execute()
+                        if edited_report_category!=(current.get("report_category") or "未分類"):
+                            admin.table("purchases").update({"report_category":edited_report_category}).eq("course_name",current["course_name"]).eq("report_category","未分類").execute()
                         st.success("課程資料已修改；既有購買紀錄仍保留原成交內容。"); st.rerun()
                     except Exception as exc: st.error(f"修改失敗，請確認課程名稱是否重複：{exc}")
 
@@ -1935,7 +1964,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.9"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.10"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},

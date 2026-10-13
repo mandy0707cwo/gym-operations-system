@@ -92,7 +92,8 @@ class TerminationRecordsTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(ast.dump(new_backup).encode()).hexdigest(),"03e6850180c90a28a3b75f43efacad03875dc3d2f5a8bd7a918fc01234b4b5ed")
 
     def test_formal_snapshot_preserves_paused_pilot_and_versions(self):
-        formal=ROOT/"output/release_v1.13.9/app.py"
+        version=(ROOT/"VERSION").read_text().strip()
+        formal=ROOT/f"output/release_{version}/app.py"
         # 正式 GitHub 根目錄本身就是已排除原型的程式，不要求下載本機工作快照。
         if not formal.exists():
             formal=ROOT/"app.py"
@@ -104,8 +105,7 @@ class TerminationRecordsTests(unittest.TestCase):
             if name!="daily_page":
                 self.assertEqual(actual[name],staged[name],name)
         self.assertEqual(hashlib.sha256(staged["daily_page"].encode()).hexdigest(),"d93997d9b7318aa06c430818d60202289b4f7e3dbbafd9fce2fa6bc63f19ff0c")
-        self.assertEqual((ROOT/"VERSION").read_text().strip(),"v1.13.9")
-        self.assertIn('secret("APP_VERSION") or "v1.13.9"',formal.read_text(encoding="utf-8"))
+        self.assertIn(f'secret("APP_VERSION") or "{version}"',formal.read_text(encoding="utf-8"))
 
 if __name__=="__main__":
     unittest.main()

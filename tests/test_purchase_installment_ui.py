@@ -13,9 +13,10 @@ from pathlib import Path
 from types import SimpleNamespace
 import pandas as pd
 import streamlit as st
+from course_defaults import apply_purchase_catalog_defaults, catalog_default_payload
 names={"rows","purchase_page","course_purchase_entry","installment_payment_entry",
        "_entry_saved","_entry_success","_confirmed_write","course_termination_report_page",
-       "_build_purchase_code_map","_course_termination_history_frame","_tax_display_amount"}
+       "_build_purchase_code_map","_course_termination_history_frame","_tax_display_amount","course_admin_page"}
 tree=ast.parse(Path(APP_PATH).read_text(encoding="utf-8"))
 nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names]
 exec(compile(ast.Module(body=nodes,type_ignores=[]),"<production-functions>","exec"),globals())
@@ -23,7 +24,7 @@ if "db" not in st.session_state:
  st.session_state.db={
   "members":[{"id":"m","member_name":"虛構客戶","phone":"000","active":True,
               "responsible_coach_id":"c","referral":"測試轉介","note":"測試備註"}],
-  "course_catalog":[{"course_name":"測試課程","course_type":"訓練","report_category":"測試分類","session_hours":1,"active":True}],
+  "course_catalog":[{"id":"catalog-1","course_name":"測試課程","course_type":"訓練","report_category":"測試分類","session_hours":1,"active":True,"created_at":"2026-07-01"}],
   "purchases":[{"id":"p","member_id":"m","course_name":"測試課程","purchase_date":"2026-07-01","created_at":"2026-07-01",
                 "total_amount":10500,"total_sessions":10,"installment_count":3,"payment_plan":"installment"}],
   "purchase_payments":[{"id":"first","purchase_id":"p","installment_no":1,"amount":1050,"paid_date":"2026-07-01"}],
@@ -37,9 +38,13 @@ class Query:
  def __init__(self,table,action="select",payload=None):
   self.table=table;self.action=action;self.payload=payload
   self.records=list(st.session_state.db.get(table,[]))
- def select(self,*_): return self
+ def select(self,*fields):
+  if self.table=="course_catalog" and st.session_state.get("missing_catalog_columns") and fields and "default_sessions" in fields[0]:
+   exc=RuntimeError("missing catalog columns");exc.code="42703";raise exc
+  return self
  def order(self,*_,**__): return self
  def insert(self,payload): self.action="insert";self.payload=payload;return self
+ def update(self,payload): self.action="update";self.payload=payload;return self
  def eq(self,field,value): self.records=[x for x in self.records if x.get(field)==value];return self
  def gt(self,field,value): self.records=[x for x in self.records if x.get(field,0)>value];return self
  def in_(self,field,values): self.records=[x for x in self.records if x.get(field) in values];return self
@@ -64,6 +69,9 @@ class Query:
    return SimpleNamespace(data=record)
   if st.session_state.get("fail_table")==self.table: raise RuntimeError("模擬資料庫錯誤")
   st.session_state.writes.append({"table":self.table,"payload":self.payload})
+  if self.action=="update":
+   for record in self.records: record.update(self.payload)
+   return SimpleNamespace(data=self.records)
   if self.action=="rpc":
    record={"id":"termination","purchase_id":self.payload["p_purchase_id"]}
   else:
@@ -75,6 +83,7 @@ class Client:
  def table(self,name): return Query(name)
  def rpc(self,name,payload): return Query(name,action="rpc",payload=payload)
 def client(): return Client()
+def admin_client(): return Client()
 def paged_rows(factory): return rows(factory())
 def coach_options(): return {"虛構教練":"c"}
 def _excel_bytes(*_,**__): return b"mock"
@@ -88,7 +97,9 @@ for test_key,widget_key in [
  ("selected_termination_tax","termination_history_tax_tab")]:
  if st.session_state.get(test_key):
   st.session_state[widget_key]=st.session_state[test_key]
-if st.session_state.get("direct_termination"):
+if st.session_state.get("direct_catalog"):
+ course_admin_page(me)
+elif st.session_state.get("direct_termination"):
  course_termination_report_page(me)
 else:
  purchase_page(me)
