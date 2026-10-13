@@ -1,7 +1,7 @@
 # v1.13.10 驗證紀錄
 
 日期：2026-10-13（Asia/Taipei）。
-狀態：本機測試與正式 SQL 升級完成。程式提交、Streamlit 重啟與真實操作驗收狀態另列發布紀錄。
+狀態：正式 SQL、GitHub 提交及 Streamlit 重啟均完成；登入頁正常。真實管理員／教練的業務操作仍待登入驗收。
 
 ## 結果
 
@@ -52,3 +52,13 @@
 - course_catalog 原 RLS、四項政策及 grants 完全不變；新 nullable 欄位型別與 CHECK 已核對。
 - 安全 Advisor 與 SQL 前基準一致，未新增任何 SECURITY DEFINER 或擴大權限。
 - 私人備份位於專案 Git 倉庫之外的工作區 output/private_course_catalog_backup_20261013_v1.13.10.json，含課程原資料、schema／RLS／grants 及交易資料指紋；不是全庫 dump，不發布。
+
+## 線上發布結果
+
+- 程式提交：82a522a4375a3166abf0600a366686b820de3073，main；16 個預期發布檔案，沒有暫停活動原型或私人備份。
+- 遠端 app.py 與 course_defaults.py 與本機已驗證的正式快照逐字一致。
+- Streamlit Reboot 完成；啟動 UTC 2026-10-13 15:13:47.180，即 Asia/Taipei 2026-10-13 23:13:47.180。
+- Python 3.12.15、Streamlit 1.62.0 安裝成功；平台自動將 pyarrow 25.0.1 替換為 24.0.0，requirements.txt 未改動。
+- 登入頁正常，未見程式執行錯誤；啟動後有既有 components.v1／use_container_width 棄用提醒，並非本次啟動失敗，本次未進行全系統介面重構。
+- 未取得營運系統登入憑證，未建立正式購課或首期付款測試；登入頁正常不等同於真人業務驗收。
+- 本機截圖：output/DEPLOY_v1.13.10_20261013_server.jpg、output/DEPLOY_v1.13.10_20261013_login.jpg。

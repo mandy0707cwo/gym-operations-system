@@ -8,7 +8,7 @@
 - 切換課程重新帶入或清空堂數、金額；一般重跑及寫入失敗保留人工修改，不重複覆蓋。
 - 不更改既有購課堂數、金額、備註、付款及銷課；分類未改動時不觸發既有購課未分類回填。
 - 保留 admin 目錄維護、原 RLS／教練讀取與原子購課＋首期付款；成功後清空流程不變。
-- 新增 course_defaults.py、migration_course_purchase_defaults_v1_13_10.sql、測試與升級文件；正式 SQL course_purchase_defaults_v1_13_10（20261013150637）已完成，原資料及權限核對一致；程式提交及部署結果另列發布紀錄。不發布暫停活動原型。
+- 新增 course_defaults.py、migration_course_purchase_defaults_v1_13_10.sql、測試與升級文件；正式 SQL course_purchase_defaults_v1_13_10（20261013150637）已完成，原資料及權限核對一致；程式已提交，2026-10-13 台北 23:13:47.180 完成線上重啟；登入頁正常，實際業務操作待登入驗收。詳見 output/RELEASE_STATUS_v1.13.10.md。不發布暫停活動原型。
 
 # v1.13.9（2026-10-12）
 
