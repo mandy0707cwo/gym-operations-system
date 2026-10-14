@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
+from confirmed_queries import query_read
 import pandas as pd
 from openpyxl import load_workbook
 
@@ -135,6 +136,7 @@ class ReportTests(unittest.TestCase):
         self.ns.update({"client": lambda: SimpleNamespace(table=lambda table: Query(self.tables[table])),
             "paged_rows": lambda builder: builder().records, "member_maps": lambda: {"m1": "測試會員"},
             "purchase_codes": lambda: {"p1": "20260414-003"}, "coach_name_map": {"c1": "測試教練"},
+            "query_read": query_read, "query_data": None,
             "coaches": {"測試教練": "c1"}, "st": st,
             "download_frame": lambda label, frame, filename: setattr(self, "download", frame.copy())})
         tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
@@ -226,7 +228,7 @@ class ReportTests(unittest.TestCase):
         expected = "id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,payment_plan,installment_count,purchase_kind,referral,note,created_at"
         selects = [x for x in ast.walk(page) if isinstance(x, ast.Call) and isinstance(x.func, ast.Attribute)
                    and x.func.attr == "select" and x.args and isinstance(x.args[0], ast.Constant) and x.args[0].value == expected]
-        self.assertEqual(len(selects), 2)
+        self.assertEqual(len(selects), 3)
 
 
 if __name__ == "__main__": unittest.main()

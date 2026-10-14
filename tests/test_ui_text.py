@@ -130,7 +130,7 @@ class TypographyTests(unittest.TestCase):
         self.assertEqual(old_nav,(ROOT/"navigation_platforms.py").read_text(encoding="utf-8"))
 
     def test_formal_has_only_sidebar_main_headers_and_no_big_subheads(self):
-        latest=ROOT/"output/release_v1.13.12/app.py"
+        latest=ROOT/"output/release_v1.13.13/app.py"
         if not latest.exists(): latest=ROOT/"app.py"
         source=latest.read_text(encoding="utf-8")
         tree=ast.parse(source)
@@ -142,7 +142,7 @@ class TypographyTests(unittest.TestCase):
                     self.assertNotEqual(node.func.attr,"subheader")
         self.assertNotIn("font-size:1.5rem",source)
         self.assertGreaterEqual(source.count("section_heading("),45)
-        self.assertEqual((ROOT/"VERSION").read_text().strip(),"v1.13.12")
+        self.assertEqual((ROOT/"VERSION").read_text().strip(),"v1.13.13")
 
 if __name__=="__main__":
     unittest.main()

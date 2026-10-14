@@ -331,11 +331,13 @@ def test_member_prepaid_summary_resolves_course_end_date():
 
 def test_monthly_sales_uses_complete_paginated_sources():
     source = APP_PATH.read_text(encoding="utf-8")
-    assert 'monthly_usages=paged_rows(lambda: client().table("session_usages")' in source
+    tree=ast.parse(source)
+    for name in ("monthly_usages","monthly_purchases","monthly_members","all_purchase_keys"):
+        assignments=[node for node in ast.walk(tree) if isinstance(node,ast.Assign)
+                     and any(isinstance(target,ast.Name) and target.id==name for target in node.targets)]
+        assert any(isinstance(call,ast.Call) and isinstance(call.func,ast.Name) and call.func.id=="paged_rows"
+                   for node in assignments for call in ast.walk(node.value)),name
     assert '.order("usage_date").order("id"))' in source
-    assert 'monthly_purchases=paged_rows(lambda: client().table("purchases")' in source
-    assert 'monthly_members=paged_rows(lambda: client().table("members")' in source
-    assert 'all_purchase_keys=paged_rows(lambda: client().table("purchases")' in source
 
 
 def test_admin_can_choose_usage_coach_while_other_roles_keep_purchase_coach():
@@ -404,7 +406,7 @@ def test_general_query_totals_match_displayed_rows():
 def test_prepaid_income_query_is_submit_gated_and_uses_payment_date():
     source = APP_PATH.read_text(encoding="utf-8")
     assert 'usage_tab,purchase_tab,prepaid_tab,balance_tab,project_tab=st.tabs(' in source
-    assert '["銷課查詢","成交總表","實際預收收入","預收餘額查詢","專案查詢"]' in source
+    assert '["銷課查詢","成交總表","預收款項","預收餘額查詢","專案查詢"]' in source
     assert 'with st.form("general_prepaid_date_form",border=False):' in source
     assert 'with st.form("general_prepaid_member_form",border=False):' in source
     assert 'if start is not None: query=query.gte("paid_date",str(start))' in source
@@ -441,7 +443,7 @@ def test_general_query_downloads_and_prepaid_balance_formula():
     assert 'st.download_button("下載 Excel"' in source
     assert 'download_frame("銷課查詢"' in source
     assert 'download_frame("成交總表"' in source
-    assert 'download_frame("實際預收收入"' in source
+    assert 'download_frame("預收款項"' in source
     assert 'download_frame(f"預收餘額（{suffix}）"' in source
     assert 'received-used_amount-expired-fee-refund' in source
     assert 'recognized_amount,fee_amount,refund_amount' in source

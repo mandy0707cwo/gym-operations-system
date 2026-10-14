@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
+from confirmed_queries import query_read
 import pandas as pd
 
 
@@ -63,6 +64,7 @@ class QueryTests(unittest.TestCase):
             column_config=SimpleNamespace(DateColumn=lambda **_: None, NumberColumn=lambda **_: None),
         )
         namespace = {
+            "query_read": query_read, "query_data": None,
             "pd": pd, "Decimal": Decimal, "ROUND_HALF_UP": ROUND_HALF_UP, "st": st,
             "coaches": {"教練甲": "c1", "教練乙": "c2"}, "coach_name_map": {"c1": "教練甲", "c2": "教練乙"},
             "client": lambda: SimpleNamespace(table=lambda table: Query(tables[table])),
