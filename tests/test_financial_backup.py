@@ -252,11 +252,11 @@ def test_magnetic_wave_purchase_accepts_course_name_or_catalog_type():
     assert not is_magnetic({"course_name": "運動訓練"}, {"運動訓練": "一般課程"})
 
 
-def test_member_course_query_uses_actual_prepaid_balance():
+def test_member_course_query_uses_new_received_and_outstanding_columns():
     source = APP_PATH.read_text(encoding="utf-8")
-    assert '"實際預收金額":payment["amount"]' in source
-    assert '"實際預收餘額":payment["amount"]-(total_amount-float(item["remaining_amount"]))' in source
-    assert 'detail_columns=["購買_ID","教練","會員名稱","課程名稱","時數","成交金額","實際預收金額","實際預收餘額"' in source
+    assert 'course_overview_frame(filtered_balances,purchase_map,payment_map,purchase_code_map,course_status_label)' in source
+    from course_query_views import COURSE_COLUMNS
+    assert COURSE_COLUMNS == ["購買_ID","教練","會員","課程名稱","成交金額","已收金額","未收金額","堂數","效期","付款","課程狀況"]
 
 
 def test_usage_detail_query_displays_deducted_amount_after_actual_date():

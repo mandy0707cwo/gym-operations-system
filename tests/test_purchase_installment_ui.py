@@ -17,7 +17,7 @@ from course_defaults import apply_purchase_catalog_defaults, catalog_default_pay
 from ui_text import section_heading
 names={"rows","purchase_page","course_purchase_entry","installment_payment_entry",
        "_entry_saved","_entry_success","_confirmed_write","course_termination_report_page",
-       "_build_purchase_code_map","_course_termination_history_frame","_tax_display_amount","course_admin_page"}
+       "_build_purchase_code_map","_course_termination_history_frame","_tax_display_amount","course_admin_page","course_status_label"}
 tree=ast.parse(Path(APP_PATH).read_text(encoding="utf-8"))
 nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names]
 exec(compile(ast.Module(body=nodes,type_ignores=[]),"<production-functions>","exec"),globals())

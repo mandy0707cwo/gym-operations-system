@@ -130,7 +130,7 @@ class TypographyTests(unittest.TestCase):
         self.assertEqual(old_nav,(ROOT/"navigation_platforms.py").read_text(encoding="utf-8"))
 
     def test_formal_has_only_sidebar_main_headers_and_no_big_subheads(self):
-        latest=ROOT/"output/release_v1.13.13/app.py"
+        latest=ROOT/"output/release_v1.13.14/app.py"
         if not latest.exists(): latest=ROOT/"app.py"
         source=latest.read_text(encoding="utf-8")
         tree=ast.parse(source)
@@ -141,8 +141,10 @@ class TypographyTests(unittest.TestCase):
                 if node.func.value.id=="st":
                     self.assertNotEqual(node.func.attr,"subheader")
         self.assertNotIn("font-size:1.5rem",source)
-        self.assertGreaterEqual(source.count("section_heading("),45)
-        self.assertEqual((ROOT/"VERSION").read_text().strip(),"v1.13.13")
+        self.assertGreaterEqual(source.count("section_heading("),20)
+        for duplicate in ["各項查詢","每月查詢","資料管理","帳號與權限管理","課程購買","登錄後續期款"]:
+            self.assertNotIn('section_heading("'+duplicate+'")',source)
+        self.assertEqual((ROOT/"VERSION").read_text().strip(),"v1.13.14")
 
 if __name__=="__main__":
     unittest.main()
