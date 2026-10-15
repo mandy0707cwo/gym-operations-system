@@ -1,6 +1,6 @@
 # v1.13.14 升級說明
 
-日期：2026-10-15（台灣）。狀態：本機完成，214項完整回歸及語法／發布範圍檢核通過；已獲使用者同意，提交部署中。詳見VERIFICATION_v1.13.14.md。
+日期：2026-10-15（台灣）。狀態：本機完成，214項完整回歸及語法／發布範圍檢核通過；已提交並部署，台灣16:49完成自動更新，登入頁正常。詳見VERIFICATION_v1.13.14.md。
 
 ## 變更
 
@@ -19,7 +19,7 @@
 - 正式發布應使用 output/release_v1.13.14/app.py，不使用含暫停活動原型的根目錄 app.py。
 - app.py、course_query_views.py、monthly_operation_queries.py、VERSION 及版本文件須同次更新，避免缺少匯入模組。
 - 保留既有 confirmed_queries.py、course_defaults.py、navigation_platforms.py、ui_text.py 及其他相依模組。
-- 本機測試已完成，使用者已同意提交及部署；部署結果另行記錄。
+- 本機測試、GitHub提交與線上自動部署已完成；發布紀錄見output/RELEASE_STATUS_v1.13.14.md。
 - 如需復原，還原本版程式到v1.13.13即可；本次沒有資料異動，不需回復DB。
 
 ## 驗收
