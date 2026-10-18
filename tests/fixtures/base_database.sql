@@ -1,0 +1,403 @@
+-- 健身房營運系統：請在全新的 Supabase 專案之 SQL Editor 一次執行。
+create extension if not exists pgcrypto;
+
+create type public.app_role as enum ('coach', 'shared_coach', 'manager', 'admin');
+create type public.purchase_kind as enum ('first', 'renewal');
+create type public.payment_plan as enum ('full', 'installment');
+
+create table public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  username text unique check (username is null or username ~ '^[a-z0-9_]{3,30}$'),
+  display_name text not null check (length(trim(display_name)) > 0),
+  role public.app_role not null default 'coach',
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+create table public.members (
+  id uuid primary key default gen_random_uuid(),
+  member_name text not null check (length(trim(member_name)) > 0),
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  created_by uuid not null references public.profiles(id),
+  unique (member_name)
+);
+
+create table public.course_catalog (
+  id uuid primary key default gen_random_uuid(),
+  course_name text not null unique check (length(trim(course_name)) > 0),
+  course_type text not null default '未分類' check (length(trim(course_type)) > 0),
+  report_category text not null default '未分類' check (length(trim(report_category)) > 0),
+  session_hours numeric(4,2) not null default 1 check (session_hours > 0),
+  created_at timestamptz not null default now()
+);
+
+create table public.operation_item_catalog (
+  id uuid primary key default gen_random_uuid(),
+  item_type text not null check (item_type in ('trial','single_sale')),
+  item_name text not null check (length(trim(item_name)) > 0),
+  course_type text,
+  session_hours numeric(5,2) not null default 1 check (session_hours > 0),
+  created_at timestamptz not null default now(),
+  unique (item_type, item_name)
+);
+
+create table public.daily_operations (
+  id uuid primary key default gen_random_uuid(),
+  operation_date date not null,
+  coach_id uuid not null references public.profiles(id),
+  classes_held integer not null default 0 check (classes_held >= 0),
+  classes_cancelled integer not null default 0 check (classes_cancelled >= 0),
+  trial_visits integer not null default 0 check (trial_visits >= 0),
+  trial_conversions integer not null default 0 check (trial_conversions >= 0),
+  note text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (operation_date, coach_id),
+  check (trial_conversions <= trial_visits)
+);
+
+create table public.trial_items (
+  id uuid primary key default gen_random_uuid(), entry_date date not null,
+  member_name text not null check (length(trim(member_name)) > 0),
+  content text not null check (length(trim(content)) > 0),
+  course_type text,
+  hours numeric(5,2) not null check (hours > 0),
+  note text,
+  coach_id uuid not null references public.profiles(id),
+  created_at timestamptz not null default now(), created_by uuid not null references public.profiles(id)
+);
+
+create table public.single_sales (
+  id uuid primary key default gen_random_uuid(), entry_date date not null,
+  member_name text not null check (length(trim(member_name)) > 0),
+  content text not null check (length(trim(content)) > 0),
+  course_type text,
+  hours numeric(5,2) not null check (hours > 0),
+  note text,
+  coach_id uuid not null references public.profiles(id),
+  created_at timestamptz not null default now(), created_by uuid not null references public.profiles(id)
+);
+
+create table public.event_supports (
+  id uuid primary key default gen_random_uuid(), entry_date date not null,
+  content text not null check (length(trim(content)) > 0),
+  hours numeric(5,2) not null check (hours > 0),
+  deducted_hours numeric(5,2) not null default 0 check (deducted_hours >= 0 and deducted_hours <= hours),
+  deduction_reason text, coach_id uuid not null references public.profiles(id),
+  created_at timestamptz not null default now(), created_by uuid not null references public.profiles(id),
+  check (deducted_hours = 0 or length(trim(deduction_reason)) > 0)
+);
+
+create table public.session_cancellations (
+  id uuid primary key default gen_random_uuid(), cancel_date date not null,
+  coach_id uuid not null references public.profiles(id),
+  cancelled_sessions integer not null check (cancelled_sessions >= 0), reason text,
+  created_at timestamptz not null default now(), created_by uuid not null references public.profiles(id)
+);
+
+create table public.purchases (
+  id uuid primary key default gen_random_uuid(),
+  member_id uuid not null references public.members(id),
+  purchase_kind public.purchase_kind not null,
+  coach_id uuid not null references public.profiles(id),
+  course_name text not null check (length(trim(course_name)) > 0),
+  report_category text not null default '未分類' check (length(trim(report_category)) > 0),
+  total_sessions integer not null check (total_sessions > 0),
+  session_hours numeric(4,2) not null default 1 check (session_hours > 0),
+  total_amount numeric(12,2) not null check (total_amount >= 0),
+  purchase_date date not null,
+  expiry_date date not null,
+  payment_plan public.payment_plan not null,
+  installment_count smallint not null check (installment_count between 1 and 3),
+  referral text,
+  note text,
+  status text not null default 'active' check (status in ('active','completed','expired','cancelled')),
+  created_at timestamptz not null default now(),
+  created_by uuid not null references public.profiles(id),
+  check (expiry_date >= purchase_date),
+  check ((payment_plan = 'full' and installment_count = 1) or payment_plan = 'installment')
+);
+
+create table public.purchase_payments (
+  id uuid primary key default gen_random_uuid(),
+  purchase_id uuid not null references public.purchases(id) on delete cascade,
+  installment_no smallint not null check (installment_no between 1 and 3),
+  amount numeric(12,2) not null check (amount > 0),
+  paid_date date not null,
+  payment_kind text not null default 'installment' check (payment_kind in ('installment','supplement')),
+  created_at timestamptz not null default now(),
+  created_by uuid not null references public.profiles(id)
+);
+
+create unique index purchase_payments_regular_installment_key
+  on public.purchase_payments(purchase_id,installment_no)
+  where payment_kind='installment';
+
+create table public.purchase_payment_change_logs (
+  id uuid primary key default gen_random_uuid(),
+  payment_id uuid references public.purchase_payments(id) on delete restrict,
+  purchase_id uuid not null references public.purchases(id) on delete restrict,
+  action_type text not null check (action_type in ('correction','supplement')),
+  installment_no smallint not null check (installment_no between 1 and 3),
+  old_amount numeric(12,2),
+  new_amount numeric(12,2) not null check (new_amount > 0),
+  old_paid_date date,
+  new_paid_date date not null,
+  reason text not null check (length(trim(reason)) > 0),
+  changed_by uuid not null references public.profiles(id),
+  changed_at timestamptz not null default now()
+);
+
+create index idx_payment_change_logs_purchase_changed
+  on public.purchase_payment_change_logs(purchase_id,changed_at desc);
+
+create or replace function public.validate_purchase_payment()
+returns trigger language plpgsql set search_path=public as $$
+declare v_purchase public.purchases%rowtype; v_paid numeric(12,2);
+begin
+  select * into v_purchase from public.purchases where id=new.purchase_id for update;
+  select coalesce(sum(amount),0) into v_paid from public.purchase_payments
+    where purchase_id=new.purchase_id and id<>new.id;
+  if v_paid + new.amount > v_purchase.total_amount then
+    raise exception '累計付款金額不可超過成交總金額';
+  end if;
+  return new;
+end; $$;
+create trigger check_purchase_payment before insert or update on public.purchase_payments
+for each row execute function public.validate_purchase_payment();
+
+create table public.session_usages (
+  id uuid primary key default gen_random_uuid(),
+  purchase_id uuid not null references public.purchases(id),
+  usage_date date not null,
+  actual_usage_date date not null,
+  is_makeup boolean not null default false,
+  coach_id uuid not null references public.profiles(id),
+  session_seq integer not null check (session_seq > 0),
+  deducted_amount numeric(12,2) not null check (deducted_amount >= 0),
+  deducted_net_amount numeric(12,2) not null check (deducted_net_amount >= 0),
+  note text,
+  created_at timestamptz not null default now(),
+  created_by uuid not null references public.profiles(id),
+  check ((not is_makeup and actual_usage_date = usage_date) or (is_makeup and actual_usage_date <= usage_date)),
+  unique (purchase_id, session_seq)
+);
+
+create index idx_daily_date_coach on public.daily_operations(operation_date, coach_id);
+create index idx_purchase_member on public.purchases(member_id);
+create index idx_purchase_date_coach on public.purchases(purchase_date, coach_id);
+create index idx_usage_date_coach on public.session_usages(usage_date, coach_id);
+create index idx_usage_actual_date_coach on public.session_usages(actual_usage_date, coach_id);
+create index idx_trial_date_coach on public.trial_items(entry_date, coach_id);
+create index idx_single_sale_date_coach on public.single_sales(entry_date, coach_id);
+create index idx_event_date_coach on public.event_supports(entry_date, coach_id);
+create index idx_cancel_date_coach on public.session_cancellations(cancel_date, coach_id);
+
+create or replace function public.is_manager()
+returns boolean language sql stable security definer set search_path = public
+as $$ select exists(select 1 from public.profiles where id = auth.uid() and role in ('shared_coach','manager','admin') and active); $$;
+
+create or replace function public.is_admin()
+returns boolean language sql stable security definer set search_path = public
+as $$ select exists(select 1 from public.profiles where id = auth.uid() and role = 'admin' and active); $$;
+
+create or replace function public.admin_correct_purchase_payment(
+  p_payment_id uuid, p_amount numeric, p_paid_date date, p_reason text
+)
+returns void language plpgsql security definer set search_path=public as $$
+declare v_payment public.purchase_payments%rowtype;
+begin
+  if not public.is_admin() then raise exception '僅系統管理員可以更正付款紀錄'; end if;
+  if p_amount is null or p_amount<=0 then raise exception '正確支付金額必須大於零'; end if;
+  if p_paid_date is null then raise exception '正確付款日期不可空白'; end if;
+  if nullif(trim(p_reason),'') is null then raise exception '更正原因不可空白'; end if;
+  select * into v_payment from public.purchase_payments where id=p_payment_id for update;
+  if not found then raise exception '找不到付款紀錄'; end if;
+  if v_payment.payment_kind<>'installment' then raise exception '補繳款不可由原付款更正功能修改'; end if;
+  update public.purchase_payments set amount=p_amount,paid_date=p_paid_date where id=p_payment_id;
+  insert into public.purchase_payment_change_logs(payment_id,purchase_id,action_type,installment_no,old_amount,new_amount,old_paid_date,new_paid_date,reason,changed_by)
+  values(v_payment.id,v_payment.purchase_id,'correction',v_payment.installment_no,v_payment.amount,p_amount,v_payment.paid_date,p_paid_date,trim(p_reason),auth.uid());
+end; $$;
+
+create or replace function public.admin_add_purchase_payment_supplement(
+  p_purchase_id uuid, p_amount numeric, p_paid_date date, p_reason text
+)
+returns uuid language plpgsql security definer set search_path=public as $$
+declare v_purchase public.purchases%rowtype; v_paid numeric(12,2); v_regular_count integer; v_payment_id uuid;
+begin
+  if not public.is_admin() then raise exception '僅系統管理員可以登錄補繳款'; end if;
+  if p_amount is null or p_amount<=0 then raise exception '補繳金額必須大於零'; end if;
+  if p_paid_date is null then raise exception '補繳日期不可空白'; end if;
+  if nullif(trim(p_reason),'') is null then raise exception '補繳原因不可空白'; end if;
+  select * into v_purchase from public.purchases where id=p_purchase_id for update;
+  if not found then raise exception '找不到購買紀錄'; end if;
+  if v_purchase.payment_plan<>'installment' then raise exception '只有分期購買可以登錄補繳款'; end if;
+  select coalesce(sum(amount),0) into v_paid from public.purchase_payments where purchase_id=p_purchase_id;
+  select count(distinct installment_no) into v_regular_count from public.purchase_payments
+  where purchase_id=p_purchase_id and payment_kind='installment';
+  if v_regular_count<v_purchase.installment_count then raise exception '尚有原分期期次未登錄，請先完成原期款登錄'; end if;
+  if v_paid>=v_purchase.total_amount then raise exception '此購買紀錄已付清'; end if;
+  if v_paid+p_amount>v_purchase.total_amount then raise exception '補繳金額不可超過未付餘額'; end if;
+  insert into public.purchase_payments(purchase_id,installment_no,amount,paid_date,created_by,payment_kind)
+  values(p_purchase_id,v_purchase.installment_count,p_amount,p_paid_date,auth.uid(),'supplement') returning id into v_payment_id;
+  insert into public.purchase_payment_change_logs(payment_id,purchase_id,action_type,installment_no,old_amount,new_amount,old_paid_date,new_paid_date,reason,changed_by)
+  values(v_payment_id,p_purchase_id,'supplement',v_purchase.installment_count,null,p_amount,null,p_paid_date,trim(p_reason),auth.uid());
+  return v_payment_id;
+end; $$;
+
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public
+as $$
+begin
+  insert into public.profiles(id, username, display_name, role)
+  values(new.id, nullif(lower(trim(new.raw_user_meta_data->>'username')),''),
+    coalesce(nullif(trim(new.raw_user_meta_data->>'display_name'),''), split_part(new.email,'@',1)), 'coach');
+  return new;
+end; $$;
+create trigger on_auth_user_created after insert on auth.users
+for each row execute procedure public.handle_new_user();
+
+create or replace view public.purchase_balances with (security_invoker=true) as
+select p.id purchase_id, p.member_id, m.member_name, p.course_name, p.coach_id,
+       pr.display_name coach_name, p.total_sessions, p.total_amount,
+       count(u.id)::integer used_sessions,
+       p.total_sessions-count(u.id)::integer remaining_sessions,
+       round(p.total_amount-coalesce(sum(u.deducted_amount),0),2) remaining_amount,
+       p.expiry_date, p.status, p.note, p.referral
+from public.purchases p
+join public.members m on m.id=p.member_id
+join public.profiles pr on pr.id=p.coach_id
+left join public.session_usages u on u.purchase_id=p.id
+group by p.id,m.member_name,pr.display_name;
+
+-- 原子扣課：鎖定購買資料，最後一堂扣完剩餘金額，避免四捨五入與多人競爭問題。
+create or replace function public.consume_session(
+  p_purchase_id uuid, p_usage_date date, p_coach_id uuid, p_note text default null,
+  p_is_makeup boolean default false, p_actual_usage_date date default null
+) returns public.session_usages
+language plpgsql security invoker set search_path=public as $$
+declare
+  v_purchase public.purchases%rowtype;
+  v_used integer;
+  v_next_seq integer;
+  v_deducted numeric(12,2);
+  v_deducted_net numeric(12,2);
+  v_prior_net numeric(12,2);
+  v_actual_usage_date date;
+  v_row public.session_usages%rowtype;
+begin
+  if (coalesce(p_is_makeup,false) or coalesce(p_actual_usage_date,p_usage_date) <> p_usage_date)
+     and not public.is_admin() then
+    raise exception '僅系統管理員可以建立補單或指定實際銷課日期';
+  end if;
+  v_actual_usage_date := coalesce(p_actual_usage_date,p_usage_date);
+  if not coalesce(p_is_makeup,false) then v_actual_usage_date := p_usage_date; end if;
+  if coalesce(p_is_makeup,false) and v_actual_usage_date > p_usage_date then
+    raise exception '補單的實際銷課日期不可晚於銷課日期';
+  end if;
+  select * into v_purchase from public.purchases where id=p_purchase_id for update;
+  if not found then raise exception '找不到購買紀錄'; end if;
+  if v_purchase.status <> 'active' then raise exception '此課程不是有效狀態'; end if;
+  select count(*) into v_used from public.session_usages where purchase_id=p_purchase_id;
+  if v_used >= v_purchase.total_sessions then raise exception '剩餘堂數不足'; end if;
+  select candidate.seq into v_next_seq
+  from generate_series(1,v_purchase.total_sessions) as candidate(seq)
+  where not exists (
+    select 1 from public.session_usages usage
+    where usage.purchase_id=p_purchase_id and usage.session_seq=candidate.seq
+  )
+  order by candidate.seq
+  limit 1;
+  if v_next_seq is null then raise exception '找不到可用的銷課堂次'; end if;
+  if v_used + 1 = v_purchase.total_sessions then
+    select round(v_purchase.total_amount-coalesce(sum(deducted_amount),0),2)
+      into v_deducted from public.session_usages where purchase_id=p_purchase_id;
+  else
+    v_deducted := round(v_purchase.total_amount/v_purchase.total_sessions,2);
+  end if;
+  select coalesce(sum(deducted_net_amount),0)
+    into v_prior_net from public.session_usages where purchase_id=p_purchase_id;
+  -- 會計未稅金額以整筆課程為準：一般堂次採固定未稅金額，最後一堂吸收全部尾差。
+  -- 已存在的銷課未稅金額不回寫；即使中途曾刪除再補登，最後一堂仍會補足整筆未稅總額。
+  if v_used + 1 = v_purchase.total_sessions then
+    v_deducted_net := round(v_purchase.total_amount/1.05,0)-v_prior_net;
+  else
+    v_deducted_net := round((v_purchase.total_amount/v_purchase.total_sessions)/1.05,0);
+  end if;
+  if v_deducted_net < 0 then
+    raise exception '未稅尾差計算異常，請檢查既有銷課入帳金額';
+  end if;
+  insert into public.session_usages(purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount,deducted_net_amount,note,created_by)
+  values(p_purchase_id,p_usage_date,v_actual_usage_date,coalesce(p_is_makeup,false),p_coach_id,v_next_seq,v_deducted,v_deducted_net,nullif(trim(p_note),''),auth.uid()) returning * into v_row;
+  insert into public.daily_operations(operation_date,coach_id,classes_held,classes_cancelled,trial_visits,trial_conversions)
+  values(p_usage_date,p_coach_id,1,0,0,0)
+  on conflict(operation_date,coach_id) do update
+  set classes_held=(select count(*) from public.session_usages
+                    where usage_date=p_usage_date and coach_id=p_coach_id);
+  if v_used+1=v_purchase.total_sessions then update public.purchases set status='completed' where id=p_purchase_id; end if;
+  return v_row;
+end; $$;
+
+alter table public.profiles enable row level security;
+alter table public.members enable row level security;
+alter table public.course_catalog enable row level security;
+alter table public.daily_operations enable row level security;
+alter table public.purchases enable row level security;
+alter table public.purchase_payments enable row level security;
+alter table public.session_usages enable row level security;
+alter table public.trial_items enable row level security;
+alter table public.operation_item_catalog enable row level security;
+alter table public.single_sales enable row level security;
+alter table public.event_supports enable row level security;
+alter table public.session_cancellations enable row level security;
+alter table public.purchase_payment_change_logs enable row level security;
+
+create policy profiles_read on public.profiles for select to authenticated using (active);
+create policy profiles_admin_update on public.profiles for update to authenticated using (public.is_admin()) with check (public.is_admin());
+create policy members_read on public.members for select to authenticated using (
+  exists(select 1 from public.profiles where id=auth.uid() and role in ('coach','shared_coach','manager','admin') and active)
+);
+create policy members_insert on public.members for insert to authenticated with check (created_by=auth.uid());
+create policy members_update on public.members for update to authenticated
+using (exists(select 1 from public.profiles where id=auth.uid() and role in ('coach','shared_coach','manager','admin') and active))
+with check (exists(select 1 from public.profiles where id=auth.uid() and role in ('coach','shared_coach','manager','admin') and active));
+create policy members_delete on public.members for delete to authenticated using (public.is_admin());
+create policy course_catalog_read on public.course_catalog for select to authenticated using (true);
+create policy course_catalog_admin_insert on public.course_catalog for insert to authenticated with check (public.is_admin());
+create policy course_catalog_admin_update on public.course_catalog for update to authenticated using (public.is_admin()) with check (public.is_admin());
+create policy course_catalog_admin_delete on public.course_catalog for delete to authenticated using (public.is_admin());
+create policy daily_read on public.daily_operations for select to authenticated using (coach_id=auth.uid() or public.is_manager());
+create policy daily_insert on public.daily_operations for insert to authenticated with check (coach_id=auth.uid() or public.is_manager());
+create policy daily_update on public.daily_operations for update to authenticated using (coach_id=auth.uid() or public.is_manager()) with check (coach_id=auth.uid() or public.is_manager());
+create policy purchase_read on public.purchases for select to authenticated using (coach_id=auth.uid() or public.is_manager());
+create policy purchase_insert on public.purchases for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
+create policy purchase_update on public.purchases for update to authenticated
+using (coach_id=auth.uid() or public.is_manager())
+with check (coach_id=auth.uid() or public.is_manager());
+create policy payment_read on public.purchase_payments for select to authenticated using (exists(select 1 from public.purchases p where p.id=purchase_id and (p.coach_id=auth.uid() or public.is_manager())));
+create policy payment_insert on public.purchase_payments for insert to authenticated with check (created_by=auth.uid() and exists(select 1 from public.purchases p where p.id=purchase_id and (p.coach_id=auth.uid() or public.is_manager())));
+create policy payment_change_logs_admin_read on public.purchase_payment_change_logs for select to authenticated using (public.is_admin());
+create policy usage_read on public.session_usages for select to authenticated using (
+  coach_id=auth.uid() or public.is_manager() or
+  exists(select 1 from public.purchases p where p.id=purchase_id and p.coach_id=auth.uid())
+);
+create policy usage_insert on public.session_usages for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
+
+create policy trial_read on public.trial_items for select to authenticated using (coach_id=auth.uid() or public.is_manager());
+create policy operation_item_catalog_read on public.operation_item_catalog for select to authenticated using (true);
+create policy trial_insert on public.trial_items for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
+create policy single_sale_read on public.single_sales for select to authenticated using (coach_id=auth.uid() or public.is_manager());
+create policy single_sale_insert on public.single_sales for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
+create policy event_read on public.event_supports for select to authenticated using (coach_id=auth.uid() or public.is_manager());
+create policy event_insert on public.event_supports for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
+create policy cancellation_read on public.session_cancellations for select to authenticated using (coach_id=auth.uid() or public.is_manager());
+create policy cancellation_insert on public.session_cancellations for insert to authenticated with check (created_by=auth.uid() and (coach_id=auth.uid() or public.is_manager()));
+
+grant select on public.purchase_balances to authenticated;
+grant execute on function public.consume_session(uuid,date,uuid,text,boolean,date) to authenticated;
+grant select on public.purchase_payment_change_logs to authenticated;
+revoke all on function public.admin_correct_purchase_payment(uuid,numeric,date,text) from public,anon;
+revoke all on function public.admin_add_purchase_payment_supplement(uuid,numeric,date,text) from public,anon;
+grant execute on function public.admin_correct_purchase_payment(uuid,numeric,date,text) to authenticated;
+grant execute on function public.admin_add_purchase_payment_supplement(uuid,numeric,date,text) to authenticated;

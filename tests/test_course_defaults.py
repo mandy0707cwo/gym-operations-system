@@ -73,9 +73,10 @@ class CourseDefaultsTests(unittest.TestCase):
         for name in of:
             if name!="daily_page": self.assertEqual(of[name],af[name],name)
         purchase=next(n for n in official.body if isinstance(n,ast.FunctionDef) and n.name=="course_purchase_entry")
-        calls=[n for n in ast.walk(purchase) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr=="rpc"]
-        self.assertEqual([n.args[0].value for n in calls],["create_purchase_with_first_payment"])
-        self.assertIn(f'secret("APP_VERSION") or "{version}"',formal.read_text(encoding="utf-8"))
+        calls=[n for n in ast.walk(purchase) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr=="submit"]
+        self.assertEqual(len(calls),1)
+        self.assertIn('operation=Operation(st,client,me,"purchase")',formal.read_text(encoding="utf-8"))
+        self.assertIn('"v1.13.19"',formal.read_text(encoding="utf-8"))
 
 class CourseDefaultsUITests(unittest.TestCase):
     def app(self,catalog=False,role="admin"):
@@ -138,6 +139,7 @@ class CourseDefaultsUITests(unittest.TestCase):
         self.assertEqual(payload["p_purchase"]["total_amount"],8888)
         self.assertEqual(payload["p_first_payment"]["amount"],8888)
         self.assertEqual(payload["p_purchase"]["note"],"測試備註\n課程備註")
+        self.widget(app,"button","開始下一筆購課").click().run();self.clean(app)
         self.assertIsNone(self.widget(app,"number_input","課程堂數").value)
         self.assertIsNone(self.widget(app,"number_input","成交總金額").value)
         self.assertEqual(self.widget(app,"text_area","備註").value,"")

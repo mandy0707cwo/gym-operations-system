@@ -8,6 +8,7 @@ from finance_reporting import display_money, payment_allocations, usage_net, ter
 from course_defaults import apply_purchase_catalog_defaults, catalog_default_payload
 from ui_text import section_heading
 from confirmed_queries import confirm_query, query_read
+from operation_requests import Operation
 from navigation_platforms import (sidebar_pages, render_daily_execution,
     render_finance_platform, render_system_admin_platform)
 
@@ -455,7 +456,13 @@ def _confirmed_write(response,field,expected=None):
     return records[0]
 
 def course_purchase_entry(me):
-    _entry_success("purchase")
+    st.session_state.pop("purchase_success",None)
+    operation=Operation(st,client,me,"purchase")
+    if operation.render():
+        if st.session_state.get("_purchase_month_context"):
+            from course_query_views import render_current_month_purchases
+            render_current_month_purchases(me,client,paged_rows,coach_options(),_build_purchase_code_map,course_status_label)
+        return
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
     coach_date_limit={"min_value":date.today()} if me["role"]=="coach" else {}
     members=rows(client().table("members").select("id,member_name,phone,referral,responsible_coach_id,note").eq("active",True).order("member_name"))
@@ -545,12 +552,12 @@ def course_purchase_entry(me):
             try:
                 member_id=member_options[member_label]["id"]
                 # 一次呼叫資料庫交易；禁止退回購課、付款各寫一次的舊流程。
-                result=_confirmed_write(client().rpc("create_purchase_with_first_payment",{"p_purchase":{"member_id":member_id,"purchase_kind":"first" if kind=="首次購買" else "renewal",
+                result=_confirmed_write(operation.submit({"p_purchase":{"member_id":member_id,"purchase_kind":"first" if kind=="首次購買" else "renewal",
                     "coach_id":allowed[coach_name],"course_name":course.strip(),"report_category":course_report_categories.get(course,"未分類"),
                     "total_sessions":sessions,"session_hours":session_hours,"total_amount":amount,
                     "purchase_date":str(purchased),"expiry_date":str(expiry),"payment_plan":"full" if plan=="未分期" else "installment",
                     "installment_count":count,"referral":referral.strip() or None,"note":purchase_note.strip() or None},
-                    "p_first_payment":{"amount":paid,"paid_date":str(paid_date)}}).execute(),"id")
+                    "p_first_payment":{"amount":paid,"paid_date":str(paid_date)}}),"id")
                 if not result.get("payment_id") or result.get("purchase_id")!=result["id"]:
                     raise ValueError("未收到完整購課及首期付款確認，請先查核是否已入帳；勿直接重送。")
                 from course_query_views import business_today
@@ -560,10 +567,11 @@ def course_purchase_entry(me):
                 _entry_saved("purchase","購買與首期付款紀錄已建立，欄位已清空。")
             except Exception as exc:
                 if getattr(exc,"code",None)=="PGRST202":
-                    st.error("購課交易功能尚未建立，請系統管理員先執行 v1.13.6 升級 SQL；本次未改用舊的分開寫入流程。")
+                    st.error("操作識別碼功能尚未建立，請系統管理員先完成 v1.13.19 升級；本次不退回無防重送的舊流程。")
                 else:
                     st.error(f"購課與首期付款未完成或結果未確認：{exc}")
-                    st.warning("資料庫拒絕時兩筆都不會建立；若為連線中斷或未收到成功回覆，請先查核兩筆是否已入帳，勿直接重送。輸入欄位已保留。")
+                    st.warning("原操作識別碼與輸入內容已保留。請查核原結果或使用原識別碼重試，不會另建一筆。")
+                    st.rerun()
     if st.session_state.get("_purchase_month_context"):
         from course_query_views import render_current_month_purchases
         render_current_month_purchases(me,client,paged_rows,coaches,_build_purchase_code_map,course_status_label)
@@ -938,6 +946,9 @@ def usage_page(me):
         for x in cancellations: x["coach_name"]=coach_names.get(x.pop("coach_id"),"未知")
         show_table(cancellations,["cancel_date","coach_name","cancelled_sessions","reason"])
     with register_tab:
+        operation=Operation(st,client,me,"usage")
+        if operation.render():
+            return
         localize_usage_search_no_results()
         if me["role"]=="coach":
             owned_balances=rows(client().table("purchase_balances").select("member_id").eq("coach_id",me["id"]))
@@ -967,7 +978,7 @@ def usage_page(me):
                     lookup={f'{usage_purchase_code_map.get(x["purchase_id"],x["purchase_id"])}｜{member_name}｜{x["course_name"]}｜{int(x["total_sessions"])} 堂｜{x["coach_name"]}｜剩餘 {int(x["remaining_sessions"])} 堂｜餘額 $ {float(x["remaining_amount"]):,.0f}':x for x in active}
                     label=st.selectbox("選擇課程",list(lookup),key=f"usage_course_{member_map[member_name]}")
                     selected=lookup[label]
-                    with st.form(f'consume_{selected["purchase_id"]}'):
+                    with st.form(f'consume_{selected["purchase_id"]}_{st.session_state.get("usage_form_revision",0)}'):
                         c1,c2=st.columns(2)
                         usage_date=c1.date_input("銷課日期",date.today(),**coach_date_limit)
                         if me["role"]=="admin":
@@ -996,11 +1007,14 @@ def usage_page(me):
                             effective_actual_date=actual_usage_date if makeup_order else usage_date
                             if makeup_order and effective_actual_date>usage_date:
                                 raise ValueError("補單的實際銷課日期不可晚於銷課日期")
-                            client().rpc("consume_session",{"p_purchase_id":selected["purchase_id"],"p_usage_date":str(usage_date),
+                            _confirmed_write(operation.submit({"p_purchase_id":selected["purchase_id"],"p_usage_date":str(usage_date),
                                 "p_coach_id":usage_coach_id,"p_note":note,"p_is_makeup":makeup_order,
-                                "p_actual_usage_date":str(effective_actual_date)}).execute()
+                                "p_actual_usage_date":str(effective_actual_date)}),"purchase_id",selected["purchase_id"])
                             st.success("扣課完成。"); st.rerun()
-                        except Exception as exc: st.error(f"扣課失敗：{exc}")
+                        except Exception as exc:
+                            st.error(f"扣課未確認：{exc}")
+                            if operation.data["state"]=="uncertain":
+                                st.rerun()
                     history=paged_rows(lambda: client().table("session_usages").select("usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount,note").eq("purchase_id",selected["purchase_id"]).order("session_seq",desc=True).order("id"))
                     names={v:k for k,v in coaches.items()}; history=[x for x in history if x.get("coach_id") in names]
                     for x in history: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
@@ -1968,7 +1982,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.18"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.19"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},

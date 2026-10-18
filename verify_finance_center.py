@@ -20,7 +20,7 @@ logging.getLogger('streamlit.runtime.scriptrunner_utils.script_run_context').set
 logging.disable(logging.WARNING)
 
 if __name__=='__main__':
-    names=['test_financial_calculations','test_financial_reconciliation','test_historical_alignment','test_finance_center_integration','test_query_views_v1_13_14','test_confirmed_queries','test_online_finance','test_project_queries','test_project_queries_ui','test_course_defaults','test_navigation_platforms','test_ui_text','test_purchase_codes']
+    names=['test_financial_calculations','test_financial_reconciliation','test_historical_alignment','test_finance_center_integration','test_query_views_v1_13_14','test_confirmed_queries','test_online_finance','test_project_queries','test_project_queries_ui','test_course_defaults','test_navigation_platforms','test_ui_text','test_purchase_codes','test_operation_requests','test_operation_ui','test_usage_idempotency_ui','test_purchase_installment_ui']
     suite=unittest.TestSuite()
     for name in names:
         module=importlib.import_module(name)
@@ -30,7 +30,7 @@ if __name__=='__main__':
     started=time.monotonic()
     result=unittest.TextTestRunner(verbosity=2).run(suite)
     (ROOT/'verification_result.json').write_text(json.dumps({
-        'version':'v1.13.18','tests_run':result.testsRun,'successful':result.wasSuccessful(),
+        'version':'v1.13.19','tests_run':result.testsRun,'successful':result.wasSuccessful(),
         'errors':len(result.errors),'failures':len(result.failures),'skipped':len(result.skipped),
         'failed_names':[str(case) for case,_ in result.errors+result.failures],
         'seconds':round(time.monotonic()-started,3),

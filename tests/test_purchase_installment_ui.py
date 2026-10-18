@@ -15,6 +15,8 @@ import pandas as pd
 import streamlit as st
 from course_defaults import apply_purchase_catalog_defaults, catalog_default_payload
 from ui_text import section_heading
+from operation_requests import Operation
+from finance_reporting import termination_money, ledger_balance, display_money
 names={"rows","purchase_page","course_purchase_entry","installment_payment_entry",
        "_entry_saved","_entry_success","_confirmed_write","course_termination_report_page",
        "_build_purchase_code_map","_course_termination_history_frame","_tax_display_amount","course_admin_page","course_status_label"}
@@ -54,7 +56,14 @@ class Query:
  def execute(self):
   if self.action=="select":
    st.session_state.reads.append(self.table);return SimpleNamespace(data=self.records)
-  if self.table=="create_purchase_with_first_payment":
+  if self.table in ("operation_status","cancel_operation"):
+   receipts=st.session_state.get("test_receipts",{})
+   token=(str(me["id"]),self.payload["p_operation_id"])
+   if self.table=="cancel_operation":
+    receipts.setdefault(token,{"state":"cancelled"})
+    st.session_state["test_receipts"]=receipts
+   return SimpleNamespace(data=receipts.get(token,{"state":"not_found"}))
+  if self.table=="create_purchase_idempotent":
    if st.session_state.get("missing_rpc"):
     exc=RuntimeError("missing function");exc.code="PGRST202";raise exc
    if st.session_state.get("fail_table") in ("purchases","purchase_payments",self.table):
@@ -66,6 +75,9 @@ class Query:
    st.session_state.writes.append({"table":self.table,"payload":self.payload})
    if st.session_state.get("empty_table")==self.table: return SimpleNamespace(data=None)
    record={"id":purchase["id"],"purchase_id":purchase["id"],"payment_id":payment["id"]}
+   receipts=st.session_state.get("test_receipts",{})
+   receipts[(str(me["id"]),self.payload["p_operation_id"]) ]={"state":"completed","result":dict(record)}
+   st.session_state["test_receipts"]=receipts
    if st.session_state.get("incomplete_rpc"): record.pop("payment_id")
    return SimpleNamespace(data=record)
   if st.session_state.get("fail_table")==self.table: raise RuntimeError("模擬資料庫錯誤")
@@ -92,6 +104,9 @@ role=st.session_state.get("role","admin")
 me={"role":role,"id":"c" if role=="coach" else "admin","display_name":"虛構教練"}
 if st.session_state.get("selected_tab"):
  st.session_state["purchase_installment_tab"]=st.session_state["selected_tab"]
+ if st.session_state["selected_tab"]=="課程中止":
+  # 正式 v1.13.18 中止以實收款為基礎；此舊測試的 8,400 餘額必須搭配已全收款。
+  st.session_state.db["purchase_payments"][0]["amount"]=10500
 for test_key,widget_key in [
  ("selected_termination_main","termination_main_tab"),
  ("selected_termination_kind","termination_entry_kind_tab"),
@@ -157,6 +172,9 @@ class PurchaseUITests(unittest.TestCase):
         self.widget(app,"button",label).click().run();self.clean(app)
 
     def assert_purchase_blank(self, app):
+        # 新版先呈現原成功收據；明確開始下一筆才換碼及顯示空白表單。
+        if any(x.label=="開始下一筆購課" for x in app.button):
+            self.widget(app,"button","開始下一筆購課").click().run();self.clean(app)
         for label in ["客戶姓名","付款方式","課程名稱","購買類型","指導教練"]:
             self.assertIsNone(self.widget(app,"selectbox",label).value)
         for label in ["課程堂數","每堂課時數","成交總金額"]:
@@ -192,9 +210,9 @@ class PurchaseUITests(unittest.TestCase):
         self.submit(app,"確認並建立購買紀錄")
         self.assert_purchase_blank(app)
         self.assertEqual(app.session_state["payment_form_revision"],8)
-        self.assertEqual(len(app.success),1)
+        self.assertEqual(len(app.success),0)  # 明確下一筆後不再顯示上一筆成功訊息。
         writes=app.session_state["writes"]
-        self.assertEqual([x["table"] for x in writes],["create_purchase_with_first_payment"])
+        self.assertEqual([x["table"] for x in writes],["create_purchase_idempotent"])
         self.assertEqual(writes[0]["payload"]["p_first_payment"]["amount"],10500)
         self.assertEqual(app.session_state.db["purchase_payments"][-1]["purchase_id"],"new-1")
         self.assertNotIn("created_by",writes[0]["payload"]["p_purchase"])
@@ -223,8 +241,8 @@ class PurchaseUITests(unittest.TestCase):
         app=self.app();self.fill_purchase(app);app.session_state["fail_table"]="purchases"
         self.submit(app,"確認並建立購買紀錄")
         self.assertEqual(app.session_state["writes"],[])
-        self.assertEqual(self.widget(app,"number_input","課程堂數").value,10)
-        self.assertEqual(len(app.error),1)
+        self.assertEqual(app.session_state["_operation_purchase"]["payload"]["p_purchase"]["total_sessions"],10)
+        self.assertEqual(app.session_state["_operation_purchase"]["state"],"uncertain")
 
     def test_first_payment_failure_rolls_back_both_without_clearing(self):
         app=self.app();self.fill_purchase(app);app.session_state["fail_table"]="purchase_payments"
@@ -233,26 +251,26 @@ class PurchaseUITests(unittest.TestCase):
         self.assertEqual(len(app.session_state.db["purchases"]),1)
         self.assertEqual(len(app.session_state.db["purchase_payments"]),1)
         self.assertEqual(len(app.warning),1)
-        self.assertIn("兩筆都不會建立",app.warning[0].value)
-        self.assertEqual(self.widget(app,"number_input","成交總金額").value,10500)
+        self.assertIn("尚未確認",app.warning[0].value)
+        self.assertEqual(app.session_state["_operation_purchase"]["payload"]["p_purchase"]["total_amount"],10500)
 
     def test_missing_atomic_rpc_never_falls_back_to_separate_inserts(self):
         app=self.app();self.fill_purchase(app);app.session_state["missing_rpc"]=True
         self.submit(app,"確認並建立購買紀錄")
         self.assertEqual(app.session_state["writes"],[])
-        self.assertIn("升級 SQL",app.error[0].value)
+        self.assertIn("v1.13.19",app.error[0].value)
         self.assertEqual(self.widget(app,"number_input","成交總金額").value,10500)
 
     def test_unknown_atomic_reply_keeps_input_and_never_auto_retries(self):
         for flag in ["empty_table","incomplete_rpc"]:
             app=self.app();self.fill_purchase(app)
-            app.session_state[flag]="create_purchase_with_first_payment" if flag=="empty_table" else True
+            app.session_state[flag]="create_purchase_idempotent" if flag=="empty_table" else True
             self.submit(app,"確認並建立購買紀錄")
             self.assertEqual(len(app.success),0)
             self.assertEqual(len(app.session_state.db["purchases"]),2)
             self.assertEqual(len(app.session_state.db["purchase_payments"]),2)
-            self.assertEqual(self.widget(app,"number_input","成交總金額").value,10500)
-            self.assertIn("勿直接重送",app.warning[0].value)
+            self.assertEqual(app.session_state["_operation_purchase"]["payload"]["p_purchase"]["total_amount"],10500)
+            self.assertIn("原內容重試",app.warning[0].value)
             app.run();self.clean(app)
             self.assertEqual(len(app.session_state["writes"]),1)
 
@@ -403,6 +421,7 @@ class PurchaseUITests(unittest.TestCase):
         app.session_state["db"]["course_terminations"]=[{
             "id":"t","purchase_id":"p","termination_date":date.today().isoformat(),"termination_type":"refund",
             "remaining_sessions":8,"remaining_amount":8400,"fee_amount":1680,"refund_amount":6720,
+            "remaining_net_amount":8000,"recognized_net_amount":1600,"fee_net_amount":1600,"refund_net_amount":6400,
             "recognized_amount":0,"completion_bonus_eligible":False,"reason":"虛構原因"}]
         app.session_state["reads"]=[]
         app.session_state["selected_termination_main"]="中止記錄"

@@ -1,3 +1,7 @@
+# v1.13.19 購課／銷課防重送
+
+此版先套用新 migration，再部署 app.py 與 operation_requests.py；沒有新 SQL 時畫面不退回舊 API。使用與復原見 UPGRADE_v1.13.19.md。財務計算引擎仍為 v1.13.18，規則不變。
+
 # v1.13.18 正式共同計算中心
 
 2026-10-18 已提交並部署，台灣18:03完成啟動，登入頁正常；資料庫更正及逐筆勾稽完成。實際發布紀錄見 [RELEASE_STATUS_v1.13.18.md](RELEASE_STATUS_v1.13.18.md)。
