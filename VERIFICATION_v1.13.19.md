@@ -9,4 +9,6 @@
 - 原 4 個交易／金額函式 hash 先檢查再升級；未替換原函式。57 個其他 app 函式及 9 個財務／查詢模組的合約指紋不變。
 - 安全檢查：公開 SECURITY DEFINER 的 anon 11／authenticated 13 提示不增加；新私有封閉 requests 表使「RLS 無政策」資訊提示由 5 增至 6，不是開放讀取。
 - 正式資料庫 migration：20261018115709，purchase_usage_idempotency_v1_13_19。檔名 20261018111949 為建立時間，不是重複執行。
-- 程式部署驗證待完成後補登。
+- 功能程式提交 9ed6f679f2c2efedf1f56aa90389f6747f880eba，31 個變更檔案的 Git blob 與本機 LF 正規化來源一致。
+- Streamlit 日誌：2026-10-18 15:22:00 UTC 拉取、15:22:02 UTC Updated app!；重新整理後登入頁正常。沒有使用真實會員做正式畫面新增交易；該部分保留人工驗收。
+- 既存 inotify instance limit reached 警告仍可見，與本次防重送邏輯分開記錄。
