@@ -42,7 +42,7 @@ def test_usage_import_guards_old_ambiguous_codes_and_exports_uuid():
     assert 'usage_template=pd.DataFrame(columns=["purchase_uuid","purchase_id"' in source
 
 def test_formal_snapshot_does_not_publish_paused_activity_pilot():
-    source = (ROOT / 'output/release_v1.13.8/app.py').read_text(encoding='utf-8')
+    source = (ROOT / 'app.py').read_text(encoding='utf-8')
     assert 'activity_pilot' not in source
-    assert '"v1.13.8"' in source
+    assert '"v1.13.18"' in source
     assert 'daily_sequences' not in source

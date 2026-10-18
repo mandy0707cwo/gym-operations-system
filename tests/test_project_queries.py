@@ -155,14 +155,15 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report['balance_gross'], 11550)
         self.assertEqual(report['balance_net'], 11000)
 
-    def test_fully_used_balance_does_not_create_rounding_residual(self):
+    def test_zero_gross_balance_retains_actual_net_event_residual(self):
         p, e, d = fixtures()
         d = [dict(d[0], amount=3380)]
         e = [dict(e[1], line_amount=1690), dict(e[2], line_amount=1690)]
         report = execution_report(p, e, d, {}, tax, mode='cutoff', end='2026-08-31')
         self.assertNotEqual(tax(3380, '未稅'), report['net'])
         self.assertEqual(report['balance_gross'], 0)
-        self.assertEqual(report['balance_net'], 0)
+        self.assertEqual(report['balance_net'], -1)
+        self.assertEqual(report['balance_net'], tax(3380,'未稅')-report['net'])
 
     def test_negative_balance_is_not_silently_clamped(self):
         p, e, d = fixtures()

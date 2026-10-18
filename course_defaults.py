@@ -44,3 +44,4 @@ def apply_purchase_catalog_defaults(state, revision, course, member):
     if state.get(note_marker)!=note_source:
         state[f"purchase_note_{revision}_{member_id}"]=combined_purchase_note(member.get("note"),course.get("note"))
         state[note_marker]=note_source
+

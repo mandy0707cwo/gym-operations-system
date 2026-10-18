@@ -3,8 +3,9 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 import pandas as pd
+from finance_reporting import event_net
 
-PROJECT_QUERY_VERSION = "v1.13.4"
+PROJECT_QUERY_VERSION = "v1.13.18"
 
 
 def deposit_amount(entry):
@@ -80,7 +81,7 @@ def execution_report(project, entries, deposits, coach_names, tax, *, mode, end,
         hours = amount(entry.get("item_hours"), "每次時數") * amount(entry.get("quantity"), "數量")
         if gross < 0 or hours <= 0:
             raise ValueError("專案執行金額不可為負數，時數須大於零。")
-        net = tax(gross, "未稅")
+        net = event_net(entry, 'line_amount')
         gross_total += gross
         net_total += net
         common = {"使用者": entry.get("person_name") or "", "時數": float(hours),
@@ -105,12 +106,13 @@ def execution_report(project, entries, deposits, coach_names, tax, *, mode, end,
         "cutoff": ["專案名稱", "總儲值金額(含稅)", "日期", "教練", "使用者", "項目", "時數", "金額（含稅）", "金額（未稅）"],
         "unfunded": ["日期", "專案名稱", "教練", "使用者", "項目", "時數", "金額（含稅）", "備註"],
     }[mode]
-    # 截止餘額先以原始含稅交易結算，再沿用共用換算取得未稅餘額；不把逐筆未稅尾差當作剩餘款。
+    # 未稅依每筆儲值（含沖銷）減每筆執行，不能對含稅餘額重新除稅。
     balance = deposited - gross_total if mode == "cutoff" else None
+    deposited_net = sum(event_net(x,'amount') for x in deposit_history) if stored else None
     return {"frame": pd.DataFrame(result, columns=columns), "gross": float(gross_total), "net": net_total,
             "deposited_gross": float(deposited) if deposited is not None else None,
             "balance_gross": float(balance) if balance is not None else None,
-            "balance_net": tax(balance, "未稅") if balance is not None else None,
+            "balance_net": deposited_net - net_total if balance is not None else None,
             "opening": float(opening) if opening is not None else None, "opening_boundary": opening_boundary,
             "start": start, "end": end, "project_name": project["project_name"]}
 
@@ -140,7 +142,7 @@ def deposit_report(project, deposits, tax, today):
         kind = entry.get("transaction_type")
         result.append({"日期": report_date(entry["deposit_date"]), "專案": project["project_name"],
                        "類型": {"opening": "期初儲值", "deposit": "後續儲值", "reversal": "沖銷"}[kind],
-                       "金額（含稅）": float(gross), "金額（未稅）": tax(gross, "未稅"), "備註": entry.get("note") or ""})
+                       "金額（含稅）": float(gross), "金額（未稅）": event_net(entry,'amount'), "備註": entry.get("note") or ""})
     frame = pd.DataFrame(result, columns=["日期", "專案", "類型", "金額（含稅）", "金額（未稅）", "備註"])
     return {"frame": frame, "gross": float(sum((amount(x["金額（含稅）"], "儲值金額") for x in result), Decimal(0))),
             "net": sum(x["金額（未稅）"] for x in result), "end": today, "project_name": project["project_name"]}
@@ -200,7 +202,7 @@ def render_project_queries(me, client, paged_rows, tax, excel_bytes):
                         deposits = []
                         if stored:
                             deposits = paged_rows(lambda: client().table("project_deposits")
-                                                  .select("id,project_id,deposit_date,amount,transaction_type,note,created_at")
+                                                  .select("id,project_id,deposit_date,amount,net_amount,calculation_rule_version,transaction_type,note,created_at")
                                                   .eq("project_id", project_id).lte("deposit_date", str(end))
                                                   .order("deposit_date").order("created_at").order("id"))
                             if not deposits and project.get("stored_date") and report_date(project["stored_date"]) <= end:
@@ -210,7 +212,7 @@ def render_project_queries(me, client, paged_rows, tax, excel_bytes):
                         else:
                             def entry_query():
                                 query = (client().table("project_entries")
-                                         .select("id,project_id,entry_date,coach_id,person_name,item_name,item_hours,quantity,line_amount,note,created_at")
+                                         .select("id,project_id,entry_date,coach_id,person_name,item_name,item_hours,quantity,line_amount,net_amount,calculation_rule_version,note,created_at")
                                          .eq("project_id", project_id).lte("entry_date", str(end))
                                          .order("entry_date").order("created_at").order("id"))
                                 return query.gte("entry_date", str(start)) if mode == "unfunded" else query
@@ -232,7 +234,7 @@ def render_project_queries(me, client, paged_rows, tax, excel_bytes):
                             summary["專案執行金額合計（未稅）"] = summary.pop("金額合計（未稅）")
                             summary.update({"總儲值金額(含稅)": result["deposited_gross"],
                                             "專案餘額總計（含稅）": result["balance_gross"], "專案餘額總計（未稅）": result["balance_net"],
-                                            "餘額計算方式": "截至截止日累計含稅儲值（含沖銷）－累計含稅執行；未稅餘額沿用共用換算"})
+                                            "餘額計算方式": "逐筆儲值（含沖銷）減逐筆執行；未稅依共同計算中心先逐筆換算再加總"})
                         result["_report_version"] = PROJECT_QUERY_VERSION
                         result["report_frame"] = project_report_frame(result, mode)
                         result["payload"] = excel_bytes({"查詢結果": result["report_frame"], "查詢摘要": pd.DataFrame([summary])})
@@ -261,7 +263,7 @@ def render_project_queries(me, client, paged_rows, tax, excel_bytes):
                 if mode == "range":
                     st.caption(f"前期餘額（含稅）：$ {result['opening']:,.0f}；截至 {result['opening_boundary'] - pd.Timedelta(days=1)} 的累計儲值（含沖銷）扣除累計執行金額，不包含起始日當天或之後的儲值與執行。")
                 elif mode == "cutoff":
-                    st.caption(f"總儲值金額(含稅)：$ {result['deposited_gross']:,.0f}；為截至截止日的累計儲值（含沖銷）。專案餘額＝累計儲值－累計執行金額；未稅餘額沿用系統共用換算。")
+                    st.caption(f"總儲值金額(含稅)：$ {result['deposited_gross']:,.0f}；專案餘額＝累計儲值－累計執行；未稅先逐筆換算再加總，不對餘額重複除稅。")
                 else:
                     st.caption("截至今日的期初儲值、後續儲值及沖銷明細；沖銷以負數列示。")
             frame = result["report_frame"]

@@ -6,29 +6,36 @@ import pandas as pd
 import streamlit as st
 
 from confirmed_queries import confirm_query
+from financial_calculations import build_operation_result, ENGINE_VERSION, RULE_VERSION
 
 MONEY_COLUMN = "金額（含稅）"
+NET_COLUMN = "金額（未稅）"
+BASIS_COLUMN = "未稅依據"
 REPORTS = {
-    "體驗項目": ("trial_items", ["日期", "教練", "會員", "課程屬性", "項目", "內容", "時數", MONEY_COLUMN, "備註"]),
-    "單次銷售": ("single_sales", ["日期", "教練", "會員", "課程屬性", "內容", "時數", MONEY_COLUMN, "備註"]),
+    "體驗項目": ("trial_items", ["日期", "教練", "會員", "課程屬性", "項目", "內容", "時數", MONEY_COLUMN, NET_COLUMN, BASIS_COLUMN, "備註"]),
+    "單次銷售": ("single_sales", ["日期", "教練", "會員", "課程屬性", "內容", "時數", MONEY_COLUMN, NET_COLUMN, BASIS_COLUMN, "備註"]),
 }
 
 
 def operation_report_frame(records, report_name, coach_names):
-    """依使用者確認，原始 amount 已含稅，直接使用原值，不再加稅。"""
+    return operation_result_frame(build_operation_result(records), report_name, coach_names)
+
+
+def operation_result_frame(calculation, report_name, coach_names):
+    """只呈現共用結果，不在畫面或匯出時再次換算。"""
     if report_name not in REPORTS:
         raise ValueError("無效的營運報表種類。")
     result = []
-    for record in records:
-        amount = Decimal(str(record.get("amount") or 0))
-        if not amount.is_finite():
-            raise ValueError("原始金額不是有效數值，請查核資料。")
-        row = {"日期": date.fromisoformat(str(record["entry_date"])),
+    for line in calculation.lines:
+        record, money = line.source, line.money
+        row = {"日期": line.entry_date,
                "教練": coach_names.get(record.get("coach_id"), "未知教練"),
                "會員": record.get("member_name") or "", "課程屬性": record.get("course_type") or "未分類",
                "內容": record.get("detail_content") or "" if report_name == "體驗項目" else record.get("content") or "",
                "時數": float(record.get("hours") or 0),
-               MONEY_COLUMN: float(amount),
+               MONEY_COLUMN: float(money.gross),
+               NET_COLUMN: None if money.net is None else int(money.net),
+               BASIS_COLUMN: {"stored":"統一規格／資料庫保存", "reconstructed":"統一規格／逐筆重建"}.get(money.origin,"稅別待確認"),
                "備註": record.get("note") or ""}
         if report_name == "體驗項目":
             row["項目"] = record.get("content") or ""
@@ -62,7 +69,7 @@ def render_operation_query(me, report_name, client, paged_rows, coach_options, e
             coach = c1.selectbox("教練", ["全部教練"] + list(coaches), key=prefix + "_coach")
             member = c2.text_input("會員名稱", placeholder="可輸入完整或部分姓名", key=prefix + "_member").strip()
             submitted = st.form_submit_button("查詢", type="primary", width="stretch")
-        snapshot = confirm_query(st, me, prefix, (str(start), str(end), coach, member), submitted)
+        snapshot = confirm_query(st, me, prefix, (str(start), str(end), coach, member, ENGINE_VERSION, RULE_VERSION), submitted)
         if not snapshot.ready:
             return
         if start is not None and start > end:
@@ -71,7 +78,7 @@ def render_operation_query(me, report_name, client, paged_rows, coach_options, e
             return
         selected_coach = coaches.get(coach)
         def build_query():
-            fields = "id,entry_date,coach_id,member_name,course_type,content,hours,amount,note"
+            fields = "id,entry_date,coach_id,member_name,course_type,content,hours,amount,net_amount,calculation_rule_version,note"
             if report_name == "體驗項目":
                 fields += ",detail_content"
             query = client().table(table_name).select(fields).lte("entry_date", str(end))
@@ -91,32 +98,46 @@ def render_operation_query(me, report_name, client, paged_rows, coach_options, e
                 profiles = snapshot.load("profiles", lambda: paged_rows(lambda:
                     client().table("profiles").select("id,display_name").in_("id", chunk).order("id")))
                 coach_names.update({p["id"]: p.get("display_name") or "未知教練" for p in profiles})
-            frame = operation_report_frame(records, report_name, coach_names)
+            calculation = build_operation_result(records)
+            frame = operation_result_frame(calculation, report_name, coach_names)
         except Exception as exc:
             snapshot.invalidate()
             st.error(f"查詢未完成：{exc}。請重新按查詢。")
             return
-        total = sum((Decimal(str(value)) for value in frame[MONEY_COLUMN]), Decimal("0"))
+        total = calculation.gross_total
         total_label = "體驗總計（含稅）" if report_name == "體驗項目" else "單次銷售總計（含稅）"
         has_cents = any(Decimal(str(value)) % 1 for value in frame[MONEY_COLUMN])
         precision = 2 if has_cents else 0
         money_format = "$ %.2f" if has_cents else "$ %.0f"
         excel_money_format = '#,##0.00' if has_cents else '#,##0'
         st.metric(total_label, f"$ {total:,.{precision}f}", border=True)
+        net_label = "體驗總計（未稅）" if report_name == "體驗項目" else "單次銷售總計（未稅）"
+        st.metric(net_label, "待確認" if calculation.net_total is None else f"$ {calculation.net_total:,.0f}", border=True)
+        if calculation.unknown_count:
+            st.warning(f"{calculation.unknown_count}筆歷史稅別未確認，未稅不提供部分合計。含稅欄沿用既有報表原值，勿據此回填歷史。")
+        if calculation.missing_id_count:
+            st.warning(f"{calculation.missing_id_count}筆缺少來源ID，請先核對資料完整性。")
+        if any(line.money.warnings for line in calculation.lines):
+            st.warning("結果含負金額，已保留原值，請人工查核；不自動歸零。")
         period = f"{start} 至 {end}" if start else f"截至 {end} 累計"
         st.caption(f"查詢結果：{period}｜{len(frame)} 筆。沿用原始含稅金額，不另行加稅。")
+        st.caption(f"計算中心 {ENGINE_VERSION}｜規則 {RULE_VERSION}。正式資料讀取保存未稅並與共同規格核對；歷史交付會計檔案保留，不自動覆蓋。")
         if frame.empty:
             st.info("查無符合條件的資料。")
         st.dataframe(frame, hide_index=True, width="stretch", height="auto", row_height=28,
                      column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD"),
                                     MONEY_COLUMN: st.column_config.NumberColumn(format=money_format),
+                                    NET_COLUMN: st.column_config.NumberColumn(format="$ %.0f"),
                                     "時數": st.column_config.NumberColumn(format="%.2f")})
         summary = pd.DataFrame([{"查詢方式": mode, "開始日期": start, "截止日期": end,
                                  "教練": coach, "會員名稱": member or "全部會員", "資料筆數": len(frame),
-                                 total_label: float(total)}])
+                                 total_label: float(total), net_label: None if calculation.net_total is None else int(calculation.net_total),
+                                 "未稅狀態": "稅別待確認，不提供部分合計" if calculation.unknown_count else ("逐筆重建" if calculation.has_reconstruction else "資料庫保存，已核對共同規格"),
+                                 "未稅待確認筆數": calculation.unknown_count,
+                                 "計算中心版本": ENGINE_VERSION, "計算規則版本": RULE_VERSION}])
         # 沿用系統既有匯出器，確保日期／金額型別、凍結列與篩選保持一致。
         data = excel_bytes({report_name: frame, "查詢摘要": summary},
-                           number_formats={MONEY_COLUMN: excel_money_format, total_label: excel_money_format, "時數": '0.00'},
+                           number_formats={MONEY_COLUMN: excel_money_format, total_label: excel_money_format, NET_COLUMN: '#,##0', net_label: '#,##0', "時數": '0.00'},
                            fit_display_width=True)
         st.download_button("下載 Excel", data,
                            file_name=f"{report_name}_{start or '累計'}_{end}.xlsx",

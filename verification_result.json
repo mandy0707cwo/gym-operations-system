@@ -1,0 +1,11 @@
+{
+  "version": "v1.13.18",
+  "tests_run": 197,
+  "successful": true,
+  "errors": 0,
+  "failures": 0,
+  "skipped": 3,
+  "failed_names": [],
+  "seconds": 163.188,
+  "scope": "isolated fictitious AppTest; no production DB calls"
+}

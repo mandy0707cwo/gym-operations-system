@@ -57,6 +57,7 @@ import pandas as pd
 import streamlit as st
 from ui_text import section_heading
 from confirmed_queries import confirm_query,query_read
+from finance_reporting import display_money,payment_allocations,usage_net,termination_money,ledger_balance,event_net_total,event_net
 st.session_state.setdefault("reads",[])
 class Query:
  def __init__(self,name):

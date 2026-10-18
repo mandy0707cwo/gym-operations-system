@@ -1,3 +1,29 @@
+# v1.13.18 正式共同計算中心
+
+Streamlit + Supabase 線上營運系統。主要入口、教練權限、含稅輸入及獎金機制維持；財務未稅保存、查詢與下載統一新規格。發布結果另見本版驗收與發布紀錄。
+
+安裝：`python -m pip install -r requirements.txt`。測試：`python verify_finance_center.py`。啟動：`python -m streamlit run app.py`。憑證沿用本機／Streamlit Secrets，禁止放進Git或交談。
+
+必須先核對備份並依 [v1.13.18 升級步驟](UPGRADE_v1.13.18.md)套用資料庫遷移，再同次部署程式與相依模組。不要只上傳 app.py。沒有任何自動啟動、付費服務或新增雲端專案。
+
+歷史更正原值及交易稽核保存在 `finance_private`，一般帳號不可存取。此版本不代表已核實原憑據、銀行對帳或完成備份還原測試。
+
+## 以下為保留的 v1.13.17 離線候選紀錄（已由 v1.13.18 取代）
+
+建立共同 Decimal 計算、逐堂固定未稅與最後一堂尾差、歷史副本全期間與截止日試算、逐筆及月份差異清單。體驗／單次兩頁共用明細、合計及下載；其餘報表、正式未稅保存與更正資料表尚未全部接入，不代表整套系統已統一。範圍見[共同計算中心](FINANCIAL_CALCULATION_CENTER.md)、[本版操作邊界](UPGRADE_v1.13.17.md)與[驗證紀錄](VERIFICATION_v1.13.17.md)。
+
+安裝原requirements.txt環境後，在本資料夾執行`python verify_finance_center.py`；啟動App仍是`python -m streamlit run app.py`。App啟動會使用既有設定，尚未核准前不要用正式帳號測試寫入。本次只執行隔離AppTest，沒有啟動連正式資料庫的服務。
+
+副本試算指令（路徑必須替換成實際數值快照；本包不含客戶資料）：
+
+```powershell
+python dry_run_history.py 'C:/path/to/private_finance_snapshot.json' --output 'C:/path/to/new_review_folder/simulation.json' --defer-restore-test
+```
+
+可加 `--cutoff 2026-08-31`；完整課程分配先於截止日篩選，不以實際服務日期回放。`--defer-restore-test` 僅記錄使用者同意暫緩，不能把還原驗證改成已通過。每次指定新結果目錄，不覆蓋前版。輸出試算摘要、逐筆差異、月份影響及可追溯 JSON，不包含正式寫入程式。
+
+本次資料庫備份已完成匯出檢核，但完整還原測試依使用者同意暫緩；尚未修改正式歷史資料。以下既有版本說明屬歷史功能紀錄，不代表本候選版已部署。
+
 > v1.13.14 已發布：會員課程欄位調整、成功購課後顯示當月資料；每月查詢新增體驗項目與單次銷售的區間／截止日明細、含稅總計及下載，移除重複標題。依使用者確認直接沿用原始含稅金額，不再加稅。不需 SQL；2026-10-15台灣16:49自動更新完成，登入頁正常。見 [UPGRADE_v1.13.14.md](UPGRADE_v1.13.14.md)。
 
 > v1.13.13 完整回歸與補充檢核通過；已提交並部署，重啟及登入頁正常：成交總表新增會員／ID查詢，實際預收收入更名預收款項，按查詢後才帶入結果。app.py與confirmed_queries.py已同次發布，不需SQL。見[UPGRADE_v1.13.13.md](UPGRADE_v1.13.13.md)。
@@ -111,3 +137,4 @@ SUPABASE_SECRET_KEY = "YOUR_SUPABASE_SECRET_KEY"
 # v1.8.0 獎金規則升級
 
 既有系統升級至 v1.8.0 時，請先在 Supabase SQL Editor 執行 `migration_bonus_rules_v1_8_0.sql`，再等待 Streamlit 重新部署。初始規則為談單 3%、結單 4%，醫生轉介首購不計獎金。
+

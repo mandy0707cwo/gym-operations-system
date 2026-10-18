@@ -4,6 +4,7 @@ import re
 from io import BytesIO
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+from finance_reporting import display_money, payment_allocations, usage_net, termination_money, ledger_balance, event_net_total, event_net
 from course_defaults import apply_purchase_catalog_defaults, catalog_default_payload
 from ui_text import section_heading
 from confirmed_queries import confirm_query, query_read
@@ -70,10 +71,12 @@ def admin_client():
     url, key = secret("SUPABASE_URL"), secret("SUPABASE_SECRET_KEY")
     if not key:
         return None
+    actor=st.session_state.get('user')
+    headers={'x-finance-actor-id':str(actor.id)} if actor is not None else {}
     return create_client(
         url,
         key,
-        options=ClientOptions(auto_refresh_token=False, persist_session=False),
+        options=ClientOptions(auto_refresh_token=False, persist_session=False, headers=headers),
     )
 
 def rows(query):
@@ -110,9 +113,8 @@ def usage_counts_for_execution(usage):
     return bool(usage_date) and usage_date[:7]==actual_date[:7]
 
 def usage_net_amount(usage):
-    """返回銷課時已固定入帳的未稅金額。舊資料庫尚未升級時保留查詢相容性。"""
-    stored=usage.get("deducted_net_amount")
-    return float(stored) if stored is not None else float(_tax_display_amount(usage.get("deducted_amount"),"未稅"))
+    """只讀已由資料庫計算中心保存的銷課未稅；缺值不自動猜算。"""
+    return usage_net(usage)
 
 def usage_sequence_by_date(usage_records):
     """依同一購買課程的銷課日期與建立順序，計算畫面應顯示的累計堂次。"""
@@ -289,7 +291,7 @@ def daily_operation_page(me, active_tab):
                 detail_content=st.text_input("內容",value=default_detail,disabled=True) if catalog_type=="trial" else None
                 c1,c2=st.columns(2)
                 hours=c1.number_input("時數",0.25,24.0,value=default_hours,step=0.25,placeholder="選擇內容後自動帶入",disabled=True)
-                amount=c2.number_input("金額",0.0,1000000000.0,value=default_amount,step=100.0,format="%.0f",placeholder="選擇內容後自動帶入")
+                amount=c2.number_input("金額（含稅）",0.0,1000000000.0,value=default_amount,step=100.0,format="%.0f",placeholder="選擇內容後自動帶入")
                 note=st.text_input("備註")
                 record_name="體驗項目" if catalog_type=="trial" else "單堂銷售"
                 save=st.form_submit_button(f"確認並建立{record_name}紀錄",type="primary",width="stretch")
@@ -405,7 +407,7 @@ def daily_operation_page(me, active_tab):
                             "p_total_amount":total_price,"p_note":project_note.strip() or None}).execute()
                         st.success("專案紀錄已建立。"); st.rerun()
                     except Exception as exc: st.error(f"新增失敗：{exc}")
-            project_rows=rows(client().table("project_entries").select("entry_date,project_name,person_name,coach_id,item_name,item_hours,quantity,unit_price,line_amount,note").order("entry_date",desc=True).limit(100))
+            project_rows=rows(client().table("project_entries").select('entry_date,project_name,person_name,coach_id,item_name,item_hours,quantity,unit_price,line_amount,note,net_amount,calculation_rule_version').order("entry_date",desc=True).limit(100))
             project_rows=[x for x in project_rows if x.get("coach_id")==me["id"]] if me["role"]=="coach" else [x for x in project_rows if x.get("coach_id") in names]
             for row in project_rows:
                 row["coach_name"]=names.get(row.pop("coach_id"),"未知")
@@ -574,12 +576,12 @@ def installment_payment_entry(me):
     purchases=rows(client().table("purchase_balances").select("purchase_id,member_name,course_name,coach_id"))
     operational_ids=set(coaches.values())
     purchases=[x for x in purchases if x.get("coach_id")==me["id"]] if me["role"]=="coach" else [x for x in purchases if x.get("coach_id") in operational_ids]
-    installment_rows=rows(client().table("purchases").select("id,total_amount,installment_count").eq("payment_plan","installment"))
+    installment_rows=paged_rows(lambda: client().table("purchases").select("id,total_amount,installment_count").eq("payment_plan","installment").order("id"))
     installment_map={x["id"]:x for x in installment_rows}
     all_purchase_keys=paged_rows(lambda: client().table("purchases").select("id,purchase_code,purchase_date,created_at").order("purchase_date").order("created_at").order("id"))
     installment_code_map=_build_purchase_code_map(all_purchase_keys)
     installment_ids=set(installment_map)
-    payment_rows=rows(client().table("purchase_payments").select("purchase_id,installment_no,amount").in_("purchase_id",list(installment_ids))) if installment_ids else []
+    payment_rows=paged_rows(lambda: client().table("purchase_payments").select("purchase_id,installment_no,amount").in_("purchase_id",list(installment_ids)).order("id")) if installment_ids else []
     payment_summary={}
     for payment in payment_rows:
         summary=payment_summary.setdefault(payment["purchase_id"],{"amount":0.0,"numbers":set()})
@@ -722,12 +724,12 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
         if query_start>query_end:
             st.error("開始日期不可晚於結束日期。")
         else:
-            usages=query_read(query_data,"usage_query_tabs:928",lambda: rows(client().table("session_usages").select("purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,deducted_amount").gte("usage_date",str(query_start)).lte("usage_date",str(query_end)).order("usage_date",desc=True)))
+            usages=query_read(query_data,"usage_query_tabs:928",lambda: paged_rows(lambda: client().table("session_usages").select("purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,deducted_amount").gte("usage_date",str(query_start)).lte("usage_date",str(query_end)).order("usage_date",desc=True).order("id")))
             usages=[x for x in usages if x.get("coach_id") in operational_ids]
-            trial_hours=query_read(query_data,"usage_query_tabs:930",lambda: rows(client().table("trial_items").select("coach_id,content,course_type,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end))))
-            single_hours=query_read(query_data,"usage_query_tabs:931",lambda: rows(client().table("single_sales").select("coach_id,content,course_type,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end))))
-            event_hours=query_read(query_data,"usage_query_tabs:932",lambda: rows(client().table("event_supports").select("coach_id,hours,deducted_hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end))))
-            project_hours=query_read(query_data,"usage_query_tabs:933",lambda: rows(client().table("project_entries").select("coach_id,item_hours,quantity,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end))))
+            trial_hours=query_read(query_data,"usage_query_tabs:930",lambda: paged_rows(lambda: client().table("trial_items").select("coach_id,content,course_type,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)).order("id")))
+            single_hours=query_read(query_data,"usage_query_tabs:931",lambda: paged_rows(lambda: client().table("single_sales").select("coach_id,content,course_type,hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)).order("id")))
+            event_hours=query_read(query_data,"usage_query_tabs:932",lambda: paged_rows(lambda: client().table("event_supports").select("coach_id,hours,deducted_hours,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)).order("id")))
+            project_hours=query_read(query_data,"usage_query_tabs:933",lambda: paged_rows(lambda: client().table("project_entries").select("coach_id,item_hours,quantity,entry_date").gte("entry_date",str(query_start)).lte("entry_date",str(query_end)).order("id")))
             trial_hours=[x for x in trial_hours if x.get("coach_id") in operational_ids]
             single_hours=[x for x in single_hours if x.get("coach_id") in operational_ids]
             event_hours=[x for x in event_hours if x.get("coach_id") in operational_ids]
@@ -953,7 +955,7 @@ def usage_page(me):
                 balances=rows(client().table("purchase_balances").select("*").eq("member_id",member_map[member_name]).gt("remaining_sessions",0))
                 balances=[x for x in balances if x.get("coach_id")==me["id"]] if me["role"]=="coach" else [x for x in balances if x.get("coach_id") in set(coaches.values())]
                 balance_purchase_ids=[x["purchase_id"] for x in balances]
-                balance_purchase_dates=rows(client().table("purchases").select("id,purchase_date").in_("id",balance_purchase_ids)) if balance_purchase_ids else []
+                balance_purchase_dates=paged_rows(lambda: client().table("purchases").select("id,purchase_date").in_("id",balance_purchase_ids).order("id")) if balance_purchase_ids else []
                 balance_purchase_date_map={x["id"]:x.get("purchase_date") for x in balance_purchase_dates}
                 for balance in balances: balance["purchase_date"]=balance_purchase_date_map.get(balance["purchase_id"])
                 balances.sort(key=lambda x:str(x.get("purchase_date") or ""),reverse=True)
@@ -999,7 +1001,7 @@ def usage_page(me):
                                 "p_actual_usage_date":str(effective_actual_date)}).execute()
                             st.success("扣課完成。"); st.rerun()
                         except Exception as exc: st.error(f"扣課失敗：{exc}")
-                    history=rows(client().table("session_usages").select("usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount,note").eq("purchase_id",selected["purchase_id"]).order("session_seq",desc=True))
+                    history=paged_rows(lambda: client().table("session_usages").select("usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount,note").eq("purchase_id",selected["purchase_id"]).order("session_seq",desc=True).order("id"))
                     names={v:k for k,v in coaches.items()}; history=[x for x in history if x.get("coach_id") in names]
                     for x in history: x["coach_name"]=names.get(x.pop("coach_id"),"未知")
                     for x in history: x["is_makeup_label"]="是" if x.get("is_makeup") else "否"
@@ -1018,7 +1020,7 @@ def usage_page(me):
             return query.eq("coach_id",recent_coach_id) if recent_coach_id else query.in_("coach_id",list(coaches.values()))
         recent_usages=paged_rows(recent_usage_query)
         recent_purchase_ids=list({x["purchase_id"] for x in recent_usages})
-        recent_purchases=(rows(client().table("purchases").select("id,member_id,course_name").in_("id",recent_purchase_ids))
+        recent_purchases=(paged_rows(lambda: client().table("purchases").select("id,member_id,course_name").in_("id",recent_purchase_ids).order("id"))
             if recent_purchase_ids else [])
         recent_purchase_map={x["id"]:x for x in recent_purchases}
         recent_member_ids=list({x["member_id"] for x in recent_purchases if x.get("member_id")})
@@ -1068,26 +1070,26 @@ def dashboard_page(me):
     if start>end: st.error("開始日期不可晚於結束日期。") ; return
     ids=[coaches[x] for x in selected]
     cancellations=rows(client().table("session_cancellations").select("coach_id,cancelled_sessions,cancel_date").gte("cancel_date",str(start)).lte("cancel_date",str(end)))
-    trials=rows(client().table("trial_items").select("coach_id,member_name,content,hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
-    single_sales=rows(client().table("single_sales").select("coach_id,hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
-    event_supports=rows(client().table("event_supports").select("coach_id,hours,deducted_hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
-    project_entries=rows(client().table("project_entries").select("coach_id,item_hours,quantity,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)))
-    purchases=rows(client().table("purchases").select("id,coach_id,purchase_kind,total_sessions,total_amount,purchase_date").gte("purchase_date",str(start)).lte("purchase_date",str(end)))
+    trials=paged_rows(lambda: client().table("trial_items").select("coach_id,member_name,content,hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)).order("id"))
+    single_sales=paged_rows(lambda: client().table("single_sales").select("coach_id,hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)).order("id"))
+    event_supports=paged_rows(lambda: client().table("event_supports").select("coach_id,hours,deducted_hours,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)).order("id"))
+    project_entries=paged_rows(lambda: client().table("project_entries").select("coach_id,item_hours,quantity,entry_date").gte("entry_date",str(start)).lte("entry_date",str(end)).order("id"))
+    purchases=paged_rows(lambda: client().table("purchases").select("id,coach_id,purchase_kind,total_sessions,total_amount,purchase_date").gte("purchase_date",str(start)).lte("purchase_date",str(end)).order("id"))
     def dashboard_usage_query():
         return (client().table("session_usages").select("id,purchase_id,coach_id,session_seq,deducted_amount,usage_date,actual_usage_date,is_makeup")
             .gte("usage_date",str(start)).lte("usage_date",str(end))
             .order("usage_date").order("id"))
     usages=paged_rows(dashboard_usage_query)
     dashboard_usage_purchase_ids=list({x["purchase_id"] for x in usages})
-    completion_purchases=(rows(client().table("purchases").select("id,coach_id,total_sessions").in_("id",dashboard_usage_purchase_ids))
+    completion_purchases=(paged_rows(lambda: client().table("purchases").select("id,coach_id,total_sessions").in_("id",dashboard_usage_purchase_ids).order("id"))
         if dashboard_usage_purchase_ids else [])
     completion_purchase_map={x["id"]:x for x in completion_purchases}
     completed_ids=completed_purchase_ids(usages,completion_purchase_map)
-    payments=rows(client().table("purchase_payments").select("purchase_id,amount,paid_date").gte("paid_date",str(start)).lte("paid_date",str(end)))
+    payments=paged_rows(lambda: client().table("purchase_payments").select('purchase_id,amount,paid_date,net_amount,calculation_rule_version').gte("paid_date",str(start)).lte("paid_date",str(end)).order("id"))
     payment_purchase_ids=list({x["purchase_id"] for x in payments})
     payment_purchase_map={}
     if payment_purchase_ids:
-        payment_purchases=rows(client().table("purchases").select("id,coach_id").in_("id",payment_purchase_ids))
+        payment_purchases=paged_rows(lambda: client().table("purchases").select("id,coach_id").in_("id",payment_purchase_ids).order("id"))
         payment_purchase_map={x["id"]:x["coach_id"] for x in payment_purchases}
     names={v:k for k,v in coaches.items()}; result=[]
     for cid in ids:
@@ -1409,7 +1411,7 @@ def operation_item_admin_page(me, item_type, title):
             c1,c2,c3=st.columns(3)
             new_name=c1.text_input("新增項目名稱").strip()
             new_hours=c2.number_input("每堂課時數",0.25,24.0,1.0,step=0.25)
-            new_amount=c3.number_input("預設金額（未稅）",0.0,1000000000.0,0.0,step=100.0,format="%.0f")
+            new_amount=c3.number_input("預設金額（含稅）",0.0,1000000000.0,0.0,step=100.0,format="%.0f")
             new_detail=st.text_input("內容").strip() if item_type=="trial" else ""
             new_course_type=st.text_input("課程屬性").strip()
             add_item=st.form_submit_button("新增項目",type="primary")
@@ -1448,7 +1450,7 @@ def operation_item_admin_page(me, item_type, title):
                 edited_course_type=st.text_input("修改後課程屬性",value=current.get("course_type") or "").strip()
                 c1,c2=st.columns(2)
                 edited_hours=c1.number_input("修改後每堂課時數",0.25,24.0,float(current.get("session_hours") or 1),step=0.25)
-                edited_amount=c2.number_input("修改後預設金額（未稅）",0.0,1000000000.0,float(current.get("default_amount") or 0),step=100.0,format="%.0f")
+                edited_amount=c2.number_input("修改後預設金額（含稅）",0.0,1000000000.0,float(current.get("default_amount") or 0),step=100.0,format="%.0f")
                 edited_active=st.checkbox("啟用體驗項目",value=bool(current.get("active",True))) if item_type=="trial" else True
                 update_item=st.form_submit_button("儲存修改",type="primary")
             if update_item:
@@ -1584,7 +1586,7 @@ def project_admin_page(me):
                         st.success("儲值紀錄已新增，累計儲值及剩餘金額已更新。"); st.rerun()
                     except Exception as exc: st.error(f"新增儲值失敗：{exc}")
 
-            deposits=rows(admin.table("project_deposits").select("id,project_id,deposit_date,amount,transaction_type,reversed_deposit_id,note,created_at")
+            deposits=rows(admin.table("project_deposits").select('id,project_id,deposit_date,amount,transaction_type,reversed_deposit_id,note,created_at,net_amount,calculation_rule_version')
                 .order("deposit_date",desc=True).order("created_at",desc=True).limit(500))
             project_names_by_id={x["id"]:x["project_name"] for x in projects}
             reversed_ids={x.get("reversed_deposit_id") for x in deposits if x.get("reversed_deposit_id")}
@@ -1768,15 +1770,16 @@ def _financial_backup_frames(table_data):
 
     prepaid_rows=[]; outstanding_rows=[]
     for p in sorted(purchases,key=lambda x:str(x.get("purchase_date") or ""),reverse=True):
-        pid=p.get("id"); total=float(p.get("total_amount") or 0); received=min(paid_map.get(pid,0),total)
-        used=min(used_map.get(pid,0),total); total_sessions=int(p.get("total_sessions") or 0); session_count=used_sessions.get(pid,0)
+        pid=p.get("id"); total=float(p.get("total_amount") or 0); received=paid_map.get(pid,0)
+        used=used_map.get(pid,0); total_sessions=int(p.get("total_sessions") or 0); session_count=used_sessions.get(pid,0)
         if received>=total: payment_status="付清"
         elif p.get("payment_plan")=="installment": payment_status=f'已付 {len(paid_installments.get(pid,set()))}/{int(p.get("installment_count") or 0)} 期'
         else: payment_status="未付清"
         prepaid_rows.append({"購買_ID":purchase_codes.get(pid,""),"成交日期":p.get("purchase_date"),"會員名稱":member_name.get(p.get("member_id"),""),
             "教練":coach_name.get(p.get("coach_id"),""),"課程名稱":p.get("course_name") or "","堂數":total_sessions,
             "分期期數／付清":payment_status,"成交金額":round(total),"實際預收金額":round(received)})
-        raw_balance=max(received-used,0); balance=raw_balance if p.get("status")=="active" else 0
+        term=next((x for x in terminations if x['purchase_id']==pid),None)
+        balance=ledger_balance(received,used,term,'含稅')
         outstanding_rows.append({"成交日期":p.get("purchase_date"),"購買_ID":purchase_codes.get(pid,""),"會員名稱":member_name.get(p.get("member_id"),""),
             "教練":coach_name.get(p.get("coach_id"),""),"課程名稱":p.get("course_name") or "","實際預收金額":round(received),
             "累計銷課金額":round(used),"實際預收剩餘金額":round(balance),"堂數":f"{session_count}／{total_sessions}",
@@ -1802,7 +1805,7 @@ def _financial_backup_frames(table_data):
         totals={}
         for x in records:
             course_type=str(x.get("course_type") or "未分類").strip() or "未分類"
-            totals[course_type]=totals.get(course_type,0)+float(x.get("amount") or 0)
+            totals[course_type]=totals.get(course_type,0)+event_net(x,"amount")
         return pd.DataFrame([{"課程屬性":k,"未稅金額":round(v)} for k,v in sorted(totals.items())],columns=["課程屬性","未稅金額"])
 
     referral_groups={}
@@ -1829,8 +1832,8 @@ def _financial_backup_frames(table_data):
         p=purchase_map.get(x.get("purchase_id"),{}); expired=x.get("termination_type")=="expired"
         termination_rows.append({"日期":x.get("termination_date"),"購買_ID":purchase_codes.get(x.get("purchase_id"),""),"會員名稱":member_name.get(p.get("member_id"),""),
             "教練":coach_name.get(p.get("coach_id"),""),"課程名稱":p.get("course_name") or "","中止類型":"逾期中止" if expired else "退費中止",
-            "退費前剩餘金額（未稅）":_tax_display_amount(x.get("remaining_amount"),"未稅"),"逾期入帳金額（未稅）":_tax_display_amount(x.get("recognized_amount"),"未稅") if expired else 0,
-            "退費手續費（未稅）":_tax_display_amount(x.get("fee_amount"),"未稅") if not expired else 0,"實際退費金額（未稅）":_tax_display_amount(x.get("refund_amount"),"未稅") if not expired else 0,
+            "退費前剩餘金額（未稅）":termination_money(x,"remaining_amount","未稅"),"逾期入帳金額（未稅）":termination_money(x,"recognized_amount","未稅") if expired else 0,
+            "退費手續費（未稅）":termination_money(x,"fee_amount","未稅") if not expired else 0,"實際退費金額（未稅）":termination_money(x,"refund_amount","未稅") if not expired else 0,
             "中止原因":x.get("reason") or "","備註":x.get("note") or ""})
 
     usage_rows=[]
@@ -1865,8 +1868,8 @@ def _financial_backup_frames(table_data):
             +sum(float(purchase_map.get(x.get("purchase_id"),{}).get("session_hours") or 1) for x in execution_usages if is_magnetic_wave_purchase(purchase_map.get(x.get("purchase_id"),{}),course_type_map)))
         coach_hours.append({"報表月份":report_month,"教練":name,"體驗時數":trial_hours,"單堂時數":single_hours,"活動時數":event_hours,"專案時數":project_hours,
             "銷課時數":normal_hours,"可計執行時數":trial_hours+single_hours+event_hours+project_hours+normal_hours,"動磁波時數":magnetic_hours})
-        trial_rev=sum(_tax_display_amount(x.get("amount"),"未稅") for x in month_trials if x.get("coach_id")==coach_id); single_rev=sum(_tax_display_amount(x.get("amount"),"未稅") for x in month_singles if x.get("coach_id")==coach_id)
-        project_rev=sum(_tax_display_amount(x.get("line_amount"),"未稅") for x in month_projects if x.get("coach_id")==coach_id); usage_rev=sum(usage_net_amount(x) for x in coach_usages)
+        trial_rev=sum(event_net(x,"amount") for x in month_trials if x.get("coach_id")==coach_id); single_rev=sum(event_net(x,"amount") for x in month_singles if x.get("coach_id")==coach_id)
+        project_rev=sum(event_net(x,"line_amount") for x in month_projects if x.get("coach_id")==coach_id); usage_rev=sum(usage_net_amount(x) for x in coach_usages)
         coach_revenues.append({"報表月份":report_month,"教練":name,"體驗項目金額（未稅）":round(trial_rev),"單堂銷售金額（未稅）":round(single_rev),"專案（未稅）":round(project_rev),"銷課（未稅）":round(usage_rev),"金額總計（未稅）":round(trial_rev+single_rev+project_rev+usage_rev)})
 
     bonus_rules=sorted([x for x in table_data.get("bonus_rules",[]) if x.get("active")],key=lambda x:str(x.get("effective_from") or ""),reverse=True)
@@ -1965,7 +1968,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.14"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.18"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -1997,11 +2000,11 @@ def data_io_page(me):
         operational_ids = set(coach_map.values())
         id_to_name = {x["id"]: x["display_name"] for x in operational_profiles}
         members = rows(admin.table("members").select("*").order("member_name"))
-        operations = rows(admin.table("daily_operations").select("*").gte("operation_date", str(start)).lte("operation_date", str(end)).order("operation_date"))
-        purchases = rows(admin.table("purchases").select("*").gte("purchase_date", str(start)).lte("purchase_date", str(end)).order("purchase_date"))
-        usages = rows(admin.table("session_usages").select("*").gte("usage_date", str(start)).lte("usage_date", str(end)).order("usage_date"))
+        operations = paged_rows(lambda: admin.table("daily_operations").select("*").gte("operation_date", str(start)).lte("operation_date", str(end)).order("operation_date").order("id"))
+        purchases = paged_rows(lambda: admin.table("purchases").select("*").gte("purchase_date", str(start)).lte("purchase_date", str(end)).order("purchase_date").order("id"))
+        usages = paged_rows(lambda: admin.table("session_usages").select("*").gte("usage_date", str(start)).lte("usage_date", str(end)).order("usage_date").order("id"))
         purchase_ids = {x["id"] for x in purchases}
-        payments = rows(admin.table("purchase_payments").select("*").gte("paid_date", str(start)).lte("paid_date", str(end)).order("paid_date"))
+        payments = paged_rows(lambda: admin.table("purchase_payments").select("*").gte("paid_date", str(start)).lte("paid_date", str(end)).order("paid_date").order("id"))
         effective_ids = coach_ids or operational_ids
         operations = [x for x in operations if x.get("coach_id") in effective_ids]
         purchases = [x for x in purchases if x.get("coach_id") in effective_ids]
@@ -2122,7 +2125,7 @@ def member_course_io_page(me):
         purchase_reference_to_id[purchase_uuid.casefold()]=purchase["id"]
         if purchase_code:
             purchase_reference_to_id[purchase_code.casefold()]=purchase["id"]
-    payments=rows(admin.table("purchase_payments").select("purchase_id,amount,paid_date"))
+    payments=paged_rows(lambda: admin.table("purchase_payments").select('purchase_id,amount,paid_date,net_amount,calculation_rule_version').order("id"))
     paid_map={}
     paid_date_map={}
     for x in payments:
@@ -2137,7 +2140,7 @@ def member_course_io_page(me):
             "payment_plan":x["payment_plan"],"installment_count":x["installment_count"],
             "paid_amount":paid_map.get(x["id"],0),"paid_date":paid_date_map.get(x["id"],""),
             "referral":x.get("referral") or "","note":x.get("note") or ""})
-    usages=rows(admin.table("session_usages").select("*").order("usage_date"))
+    usages=paged_rows(lambda: admin.table("session_usages").select("*").order("usage_date").order("id"))
     purchase_map={x["id"]:x for x in purchases}
     usage_rows=[]
     for x in usages:
@@ -2148,9 +2151,9 @@ def member_course_io_page(me):
             "is_makeup":bool(x.get("is_makeup")),"coach_username":id_to_display_name.get(x["coach_id"],""),
             "session_seq":x["session_seq"],"deducted_amount":x["deducted_amount"],"deducted_net_amount":usage_net_amount(x),"note":x.get("note") or ""})
     usage_export_columns=["purchase_uuid","purchase_id","usage_id","member_name","course_name","usage_date","actual_usage_date","is_makeup","coach_username","session_seq","deducted_amount","deducted_net_amount","note"]
-    trial_rows=rows(admin.table("trial_items").select("entry_date,member_name,content,detail_content,hours,amount,note,coach_id,created_at").order("entry_date"))
-    single_sale_rows=rows(admin.table("single_sales").select("entry_date,member_name,content,hours,amount,note,coach_id,created_at").order("entry_date"))
-    event_rows=rows(admin.table("event_supports").select("entry_date,content,hours,deducted_hours,deduction_reason,coach_id,created_at").order("entry_date"))
+    trial_rows=paged_rows(lambda: admin.table("trial_items").select('entry_date,member_name,content,detail_content,hours,amount,note,coach_id,created_at,net_amount,calculation_rule_version').order("entry_date").order("id"))
+    single_sale_rows=paged_rows(lambda: admin.table("single_sales").select('entry_date,member_name,content,hours,amount,note,coach_id,created_at,net_amount,calculation_rule_version').order("entry_date").order("id"))
+    event_rows=paged_rows(lambda: admin.table("event_supports").select("entry_date,content,hours,deducted_hours,deduction_reason,coach_id,created_at").order("entry_date").order("id"))
     for collection in (trial_rows,single_sale_rows,event_rows):
         for item in collection:
             item["coach_username"]=id_to_display_name.get(item.pop("coach_id"),"")
@@ -2345,7 +2348,7 @@ def member_course_io_page(me):
                         payload={k:v for k,v in item.items() if k not in ("source_id","member_name","paid_amount","paid_date")}
                         payload["report_category"]=payload.get("report_category") or import_report_category.get(payload.get("course_name"),"未分類")
                         payload.update({"member_id":member_id,"created_by":me["id"]})
-                        created=rows(admin.table("purchases").insert(payload))[0]
+                        created=paged_rows(lambda: admin.table("purchases").insert(payload).order("id"))[0]
                         source_key=str(item.get("source_id") or "").strip().casefold()
                         if source_key:
                             purchase_reference_to_id[source_key]=created["id"]
@@ -2373,8 +2376,8 @@ def member_course_io_page(me):
         except Exception as exc: st.error(f"無法匯入檔案：{exc}")
 
 def _sync_daily_classes(admin, operation_date, coach_id):
-    held=len(rows(admin.table("session_usages").select("id").eq("usage_date",str(operation_date)).eq("coach_id",coach_id)))
-    existing=rows(admin.table("daily_operations").select("id").eq("operation_date",str(operation_date)).eq("coach_id",coach_id))
+    held=len(paged_rows(lambda: admin.table("session_usages").select("id").eq("usage_date",str(operation_date)).eq("coach_id",coach_id).order("id")))
+    existing=paged_rows(lambda: admin.table("daily_operations").select("id").eq("operation_date",str(operation_date)).eq("coach_id",coach_id).order("id"))
     if existing:
         admin.table("daily_operations").update({"classes_held":held}).eq("id",existing[0]["id"]).execute()
     elif held:
@@ -2401,7 +2404,7 @@ def _load_record_admin_data(admin,data_type,id_name):
     elif data_type=="課程購買":
         records=rows(admin.table("purchase_balances").select("*").order("expiry_date",desc=True).limit(500))
         record_purchase_ids=[x["purchase_id"] for x in records]
-        purchase_details=rows(admin.table("purchases").select("id,purchase_date,purchase_kind,coach_id").in_("id",record_purchase_ids)) if record_purchase_ids else []
+        purchase_details=paged_rows(lambda: admin.table("purchases").select("id,purchase_date,purchase_kind,coach_id").in_("id",record_purchase_ids).order("id")) if record_purchase_ids else []
         purchase_detail_map={x["id"]:x for x in purchase_details}
         all_purchase_keys=paged_rows(lambda: admin.table("purchases").select("id,purchase_code,purchase_date,created_at").order("purchase_date").order("created_at").order("id"))
         record_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
@@ -2538,10 +2541,10 @@ def record_admin_page(me):
             reason=st.text_input("取消原因",record.get("reason") or "")
         elif data_type=="體驗項目":
             c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["entry_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
-            member_name=st.text_input("體驗會員姓名",record.get("member_name") or ""); content=st.text_input("體驗項目",record["content"]); detail_content=st.text_input("內容",record.get("detail_content") or ""); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25); amount=st.number_input("金額（未稅）",0.0,1000000000.0,float(record.get("amount") or 0),step=100.0,format="%.0f"); note=st.text_input("備註",record.get("note") or "")
+            member_name=st.text_input("體驗會員姓名",record.get("member_name") or ""); content=st.text_input("體驗項目",record["content"]); detail_content=st.text_input("內容",record.get("detail_content") or ""); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25); amount=st.number_input("金額（含稅）",0.0,1000000000.0,float(record.get("amount") or 0),step=100.0,format="%.0f"); note=st.text_input("備註",record.get("note") or "")
         elif data_type=="單堂銷售":
             c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["entry_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
-            member_name=st.text_input("單堂銷售會員姓名",record.get("member_name") or ""); content=st.text_input("銷售內容",record["content"]); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25); amount=st.number_input("金額（未稅）",0.0,1000000000.0,float(record.get("amount") or 0),step=100.0,format="%.0f"); note=st.text_input("備註",record.get("note") or "")
+            member_name=st.text_input("單堂銷售會員姓名",record.get("member_name") or ""); content=st.text_input("銷售內容",record["content"]); hours=st.number_input("時數",0.25,24.0,float(record["hours"]),step=0.25); amount=st.number_input("金額（含稅）",0.0,1000000000.0,float(record.get("amount") or 0),step=100.0,format="%.0f"); note=st.text_input("備註",record.get("note") or "")
         elif data_type=="活動支援":
             c1,c2=st.columns(2); d=c1.date_input("日期",pd.to_datetime(record["entry_date"]).date()); coach=c2.selectbox("教練",coach_names,index=current_coach_index)
             content=st.text_input("活動內容",record["content"])
@@ -2641,7 +2644,7 @@ def record_admin_page(me):
     purchase_delete_blockers=[]
     if data_type=="課程購買" and delete_records:
         selected_purchase_ids=list({item["purchase_id"] for item in delete_records})
-        existing_usage_rows=rows(admin.table("session_usages").select("purchase_id").in_("purchase_id",selected_purchase_ids))
+        existing_usage_rows=paged_rows(lambda: admin.table("session_usages").select("purchase_id").in_("purchase_id",selected_purchase_ids).order("id"))
         usage_count_by_purchase={}
         for usage in existing_usage_rows:
             purchase_id=usage["purchase_id"]
@@ -2820,7 +2823,7 @@ def session_usage_export_query(me):
             break
         usage_offset+=usage_page_size
     purchase_ids=list({x["purchase_id"] for x in usage_rows})
-    purchases=rows(admin.table("purchases").select("id,member_id,course_name,session_hours").in_("id",purchase_ids)) if purchase_ids else []
+    purchases=paged_rows(lambda: admin.table("purchases").select("id,member_id,course_name,session_hours").in_("id",purchase_ids).order("id")) if purchase_ids else []
     purchase_map={x["id"]:x for x in purchases}
     member_ids=list({x["member_id"] for x in purchases})
     members=rows(admin.table("members").select("id,member_name").in_("id",member_ids)) if member_ids else []
@@ -2949,7 +2952,7 @@ def customer_admin_page(me):
                     .eq("member_id",current["id"]).order("purchase_date",desc=True).order("created_at",desc=True))
                 customer_purchase_ids=[x["id"] for x in customer_purchases]
                 customer_payments=(paged_rows(lambda: data_api.table("purchase_payments")
-                    .select("purchase_id,installment_no,amount,paid_date").in_("purchase_id",customer_purchase_ids).order("paid_date"))
+                    .select('purchase_id,installment_no,amount,paid_date,net_amount,calculation_rule_version').in_("purchase_id",customer_purchase_ids).order("paid_date"))
                     if customer_purchase_ids else [])
                 customer_payment_summary={}
                 for payment in customer_payments:
@@ -3123,7 +3126,7 @@ def installment_payment_admin_page(me):
             .order("purchase_date").order("created_at").order("id")))
         purchase_ids=[x["id"] for x in purchases]
         payments=(query_read(query_data,"installment_payment_admin_page:3333",lambda: paged_rows(lambda: admin.table("purchase_payments")
-            .select("id,purchase_id,installment_no,amount,paid_date,payment_kind,created_at")
+            .select('id,purchase_id,installment_no,amount,paid_date,payment_kind,created_at,net_amount,calculation_rule_version')
             .in_("purchase_id",purchase_ids).order("paid_date",desc=True).order("created_at",desc=True)))
             if purchase_ids else [])
     except Exception as exc:
@@ -3301,34 +3304,11 @@ def data_management_page(me):
     elif management_view=="修改／刪除": record_admin_page(me)
 
 def _tax_display_amount(amount, tax_mode):
-    value=Decimal(str(amount or 0))
-    if tax_mode=="未稅": value=value/Decimal("1.05")
-    return int(value.quantize(Decimal("1"),rounding=ROUND_HALF_UP))
+    return display_money(amount, tax_mode)
 
 def _allocate_payment_net_amounts(purchases, payments):
-    """依收款日、建立時間、ID分攤未稅額；呼叫端須先載入截至截止日的全部前期收款。"""
-    purchase_map={x["id"]:x for x in purchases}
-    balances={}; result=[]
-    for payment in sorted(payments,key=lambda x:(str(x.get("paid_date") or ""),str(x.get("created_at") or ""),str(x.get("id") or ""))):
-        pid=payment["purchase_id"]
-        if pid not in purchase_map:
-            raise ValueError("收款找不到對應購課資料，無法計算未稅尾差；請先確認購買_ID。")
-        total=Decimal(str(purchase_map[pid].get("total_amount") or 0))
-        amount=Decimal(str(payment.get("amount") or 0))
-        if not total.is_finite() or not amount.is_finite() or total<0 or amount<0:
-            raise ValueError("成交或收款金額異常，無法計算未稅尾差；請先查核原始資料。")
-        prior_gross,prior_net=balances.get(pid,(Decimal("0"),0))
-        cumulative=prior_gross+amount
-        net=_tax_display_amount(amount,"未稅")
-        if cumulative>=total and amount>0:
-            # 實際付清的那一筆吸收尾差；超收另計未稅，不能截掉真實超收。
-            target=_tax_display_amount(total,"未稅")+_tax_display_amount(cumulative-total,"未稅")
-            net=target-prior_net
-        if net<0:
-            raise ValueError("前期未稅四捨五入已超過整筆未稅額，請人工查核收款尾差；系統不自動歸零。")
-        balances[pid]=(cumulative,prior_net+net)
-        result.append({**payment,"_net_amount":net})
-    return result
+    """完整前期收款交由唯一分配核心；付清款吸收尾差。"""
+    return payment_allocations(purchases, payments)
 
 def _bonus_rule_for_date(rules,event_date):
     target=pd.to_datetime(event_date).date()
@@ -3375,10 +3355,10 @@ def _course_termination_history_frame(terminations, purchase_map, member_name_ma
             "課程":purchase.get("course_name",""),
             "中止類型":"逾期中止" if item["termination_type"]=="expired" else "退費中止",
             "剩餘堂數":item["remaining_sessions"],
-            "餘額":float(item["remaining_amount"]) if tax_mode=="含稅" else _tax_display_amount(item["remaining_amount"],tax_mode),
-            "逾期入帳":(float(item["recognized_amount"]) if tax_mode=="含稅" else _tax_display_amount(item["recognized_amount"],tax_mode)) if item["termination_type"]=="expired" else 0,
-            "退費手續費":float(item["fee_amount"]) if tax_mode=="含稅" else _tax_display_amount(item["fee_amount"],tax_mode),
-            "實際退費":float(item["refund_amount"]) if tax_mode=="含稅" else _tax_display_amount(item["refund_amount"],tax_mode),
+            "餘額":float(item["remaining_amount"]) if tax_mode=="含稅" else termination_money(item,"remaining_amount",tax_mode),
+            "逾期入帳":(float(item["recognized_amount"]) if tax_mode=="含稅" else termination_money(item,"recognized_amount",tax_mode)) if item["termination_type"]=="expired" else 0,
+            "退費手續費":float(item["fee_amount"]) if tax_mode=="含稅" else termination_money(item,"fee_amount",tax_mode),
+            "實際退費":float(item["refund_amount"]) if tax_mode=="含稅" else termination_money(item,"refund_amount",tax_mode),
             "結單計算":"計算" if item["completion_bonus_eligible"] else "不計算",
             "中止原因":item.get("reason") or "",
         })
@@ -3420,7 +3400,7 @@ def course_termination_report_page(me):
                     .in_("id",history_purchase_ids).order("id")) if history_purchase_ids else []
                 history_purchase_map={x["id"]:x for x in history_purchases}
                 history_df=_course_termination_history_frame(terminations,history_purchase_map,member_name_map,purchase_code_map,tax_mode)
-                st.caption(f"金額皆為{tax_mode}；餘額為中止前剩餘金額。未稅沿用既有報表換算方式。")
+                st.caption(f"金額皆為{tax_mode}；餘額為中止前剩餘金額。未稅依保存的實收、銷課及中止拆分計算。")
                 money_config={x:st.column_config.NumberColumn(format="$ %.0f")
                     for x in ["餘額","逾期入帳","退費手續費","實際退費"]}
                 st.dataframe(history_df,hide_index=True,width="stretch",column_config=money_config)
@@ -3436,9 +3416,15 @@ def course_termination_report_page(me):
         active_ids=[x["purchase_id"] for x in balances]
         active_purchases=paged_rows(lambda: client().table("purchases").select("id,purchase_date,member_id,course_name,total_amount,total_sessions").in_("id",active_ids).order("id")) if active_ids else []
         active_purchase_map={x["id"]:x for x in active_purchases}
+        active_payments=paged_rows(lambda: client().table('purchase_payments').select('id,purchase_id,amount,paid_date').in_('purchase_id',active_ids).order('id')) if active_ids else []
+        paid_by={}
+        for payment in active_payments:
+            paid_by[payment['purchase_id']]=paid_by.get(payment['purchase_id'],Decimal('0'))+Decimal(str(payment['amount']))
         option_map={}
         for balance in balances:
             purchase=active_purchase_map.get(balance["purchase_id"],{})
+            used_gross=Decimal(str(purchase.get('total_amount')))-Decimal(str(balance['remaining_amount']))
+            balance['remaining_amount']=paid_by.get(balance['purchase_id'],Decimal('0'))-used_gross
             label=(f'{purchase.get("purchase_date") or "日期不明"}｜{purchase_code_map.get(balance["purchase_id"],"")}｜'
                    f'{balance["member_name"]}｜{balance["course_name"]}｜剩 {balance["remaining_sessions"]} 堂｜$ {float(balance["remaining_amount"]):,.0f}')
             option_map[label]=balance
@@ -3587,14 +3573,14 @@ def general_queries_page(me):
         if purchase_key:
             purchases=[x for x in purchases if purchase_key in str(codes.get(x["id"],x["id"])).casefold() or purchase_key in str(x["id"]).casefold()]
         ids=[x["id"] for x in purchases]
-        payments=(query_read(query_data,"general_queries_page:3800",lambda: paged_rows(lambda: client().table("purchase_payments").select("id,purchase_id,installment_no,amount,paid_date,created_at")
+        payments=(query_read(query_data,"general_queries_page:3800",lambda: paged_rows(lambda: client().table("purchase_payments").select('id,purchase_id,installment_no,amount,paid_date,created_at,net_amount,calculation_rule_version')
             .in_("purchase_id",ids).lte("paid_date",str(cutoff)).order("paid_date").order("id"))) if ids else [])
         usages=(query_read(query_data,"general_queries_page:3802",lambda: paged_rows(lambda: client().table("session_usages").select("id,purchase_id,usage_date,created_at")
             .in_("purchase_id",ids).lte("usage_date",str(cutoff)).order("usage_date").order("id"))) if ids else [])
         try:
-            terminations=(query_read(query_data,"general_queries_page:3805",lambda: paged_rows(lambda: client().table("course_terminations").select("id,purchase_id,termination_date,termination_type,created_at")
+            terminations=(query_read(query_data,"general_queries_page:3805",lambda: paged_rows(lambda: client().table("course_terminations").select('id,purchase_id,termination_date,termination_type,created_at,remaining_amount,recognized_amount,fee_amount,refund_amount,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version')
                 .in_("purchase_id",ids).lte("termination_date",str(cutoff)).order("termination_date").order("id"))) if ids else [])
-        except Exception: terminations=[]
+        except Exception as exc: raise ValueError("中止資料讀取失敗，停止計算，避免誤列餘額。") from exc
         paid={}; paid_net={}; paid_terms={}; used={}; last_used={}
         for item in _allocate_payment_net_amounts(purchases,payments):
             pid=item["purchase_id"]; paid[pid]=paid.get(pid,0)+float(item.get("amount") or 0)
@@ -3640,7 +3626,7 @@ def general_queries_page(me):
 
     def render_prepaid_results(*,start=None,end=None,member_keyword="",installment_filter="全部",key):
         def payment_query_builder():
-            query=(client().table("purchase_payments").select("id,purchase_id,installment_no,amount,paid_date,payment_kind,created_at")
+            query=(client().table("purchase_payments").select('id,purchase_id,installment_no,amount,paid_date,payment_kind,created_at,net_amount,calculation_rule_version')
                 .order("paid_date",desc=True).order("created_at",desc=True).order("id",desc=True))
             if start is not None: query=query.gte("paid_date",str(start))
             query=query.lte("paid_date",str(end or date.today()))
@@ -3651,7 +3637,7 @@ def general_queries_page(me):
         purchase_map={x["id"]:x for x in purchases}; names=member_maps(); codes=purchase_codes(); keyword=member_keyword.casefold(); result=[]
         status_cutoff=end or date.today()
         status_payments=(query_read(query_data,"general_queries_page:3863",lambda: paged_rows(lambda: client().table("purchase_payments")
-            .select("id,purchase_id,amount,paid_date,created_at").in_("purchase_id",ids).lte("paid_date",str(status_cutoff))
+            .select('id,purchase_id,amount,paid_date,created_at,net_amount,calculation_rule_version').in_("purchase_id",ids).lte("paid_date",str(status_cutoff))
             .order("paid_date").order("created_at").order("id"))) if ids else [])
         allocated_payments=_allocate_payment_net_amounts(purchases,status_payments)
         payment_net_map={x["id"]:x["_net_amount"] for x in allocated_payments}
@@ -3693,15 +3679,15 @@ def general_queries_page(me):
             .lte("purchase_date",str(cutoff)).order("purchase_date",desc=True).order("id",desc=True)))
         if keyword: purchases=[x for x in purchases if keyword in names.get(x.get("member_id"),"").casefold()]
         ids=[x["id"] for x in purchases]
-        payments=(query_read(query_data,"general_queries_page:3906",lambda: paged_rows(lambda: client().table("purchase_payments").select("id,purchase_id,installment_no,amount,paid_date,created_at")
+        payments=(query_read(query_data,"general_queries_page:3906",lambda: paged_rows(lambda: client().table("purchase_payments").select('id,purchase_id,installment_no,amount,paid_date,created_at,net_amount,calculation_rule_version')
             .in_("purchase_id",ids).lte("paid_date",str(cutoff)).order("paid_date").order("id"))) if ids else [])
         usages=(query_read(query_data,"general_queries_page:3908",lambda: paged_rows(lambda: client().table("session_usages").select("id,purchase_id,usage_date,deducted_amount,deducted_net_amount,created_at")
             .in_("purchase_id",ids).lte("usage_date",str(cutoff)).order("usage_date").order("id"))) if ids else [])
         try:
             terminations=(query_read(query_data,"general_queries_page:3911",lambda: paged_rows(lambda: client().table("course_terminations")
-                .select("id,purchase_id,termination_date,termination_type,recognized_amount,fee_amount,refund_amount,created_at")
+                .select('id,purchase_id,termination_date,termination_type,recognized_amount,fee_amount,refund_amount,created_at,remaining_amount,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version')
                 .in_("purchase_id",ids).lte("termination_date",str(cutoff)).order("termination_date").order("id"))) if ids else [])
-        except Exception: terminations=[]
+        except Exception as exc: raise ValueError("中止資料讀取失敗，停止計算，避免誤列餘額。") from exc
         payment_by={}; usage_by={}; termination_by={}
         for x in _allocate_payment_net_amounts(purchases,payments): payment_by.setdefault(x["purchase_id"],[]).append(x)
         for x in usages: usage_by.setdefault(x["purchase_id"],[]).append(x)
@@ -3712,9 +3698,9 @@ def general_queries_page(me):
             if tax_mode=="未稅":
                 received=sum(x["_net_amount"] for x in purchase_payments)
                 used_amount=sum(usage_net_amount(x) for x in purchase_usages)
-                expired=_tax_display_amount(termination.get("recognized_amount"),"未稅") if termination and termination.get("termination_type")=="expired" else 0
-                fee=_tax_display_amount(termination.get("fee_amount"),"未稅") if termination and termination.get("termination_type")=="refund" else 0
-                refund=_tax_display_amount(termination.get("refund_amount"),"未稅") if termination and termination.get("termination_type")=="refund" else 0
+                expired=termination_money(termination,"recognized_amount","未稅") if termination and termination.get("termination_type")=="expired" else 0
+                fee=termination_money(termination,"fee_amount","未稅") if termination and termination.get("termination_type")=="refund" else 0
+                refund=termination_money(termination,"refund_amount","未稅") if termination and termination.get("termination_type")=="refund" else 0
             else:
                 received=sum(float(x.get("amount") or 0) for x in purchase_payments); used_amount=sum(float(x.get("deducted_amount") or 0) for x in purchase_usages)
                 expired=float(termination.get("recognized_amount") or 0) if termination and termination.get("termination_type")=="expired" else 0
@@ -3895,20 +3881,23 @@ def financial_report_page(me):
             financial_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
 
             # 預收明細以付款日期判斷是否列入，包含查詢期間收到的分期款。
-            period_payments=query_read(query_data,"financial_report_page:4102",lambda: paged_rows(lambda: client().table("purchase_payments").select("id,purchase_id,amount,paid_date,created_at").gte("paid_date",str(start)).lte("paid_date",str(end)).order("paid_date",desc=True).order("id",desc=True)))
+            period_payments=query_read(query_data,"financial_report_page:4102",lambda: paged_rows(lambda: client().table("purchase_payments").select('id,purchase_id,amount,paid_date,created_at,net_amount,calculation_rule_version').gte("paid_date",str(start)).lte("paid_date",str(end)).order("paid_date",desc=True).order("id",desc=True)))
             period_purchase_ids=list({x["purchase_id"] for x in period_payments})
-            purchases=query_read(query_data,"financial_report_page:4104",lambda: rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,purchase_kind,payment_plan,installment_count,referral,note,status").in_("id",period_purchase_ids))) if period_purchase_ids else []
+            purchases=query_read(query_data,"financial_report_page:4104",lambda: paged_rows(lambda: client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,purchase_kind,payment_plan,installment_count,referral,note,status").in_("id",period_purchase_ids).order("id"))) if period_purchase_ids else []
             if selected_coach_id: purchases=[x for x in purchases if x.get("coach_id")==selected_coach_id]
             if selected_member_id: purchases=[x for x in purchases if x.get("member_id")==selected_member_id]
             purchase_ids=[x["id"] for x in purchases]
             period_payments=[x for x in period_payments if x["purchase_id"] in set(purchase_ids)]
-            balance_usages=query_read(query_data,"financial_report_page:4109",lambda: rows(client().table("session_usages").select("purchase_id,deducted_amount,usage_date").in_("purchase_id",purchase_ids).lte("usage_date",str(end)))) if purchase_ids else []
-            balance_payments=query_read(query_data,"financial_report_page:4110",lambda: paged_rows(lambda: client().table("purchase_payments").select("id,purchase_id,installment_no,amount,paid_date,created_at").in_("purchase_id",purchase_ids).lte("paid_date",str(end)).order("paid_date").order("id"))) if purchase_ids else []
+            balance_usages=query_read(query_data,"financial_report_page:4109",lambda: paged_rows(lambda: client().table("session_usages").select("id,purchase_id,deducted_amount,deducted_net_amount,usage_date").in_("purchase_id",purchase_ids).lte("usage_date",str(end)).order("id"))) if purchase_ids else []
+            balance_payments=query_read(query_data,"financial_report_page:4110",lambda: paged_rows(lambda: client().table("purchase_payments").select('id,purchase_id,installment_no,amount,paid_date,created_at,net_amount,calculation_rule_version').in_("purchase_id",purchase_ids).lte("paid_date",str(end)).order("paid_date").order("id"))) if purchase_ids else []
             allocated_balance_payments=_allocate_payment_net_amounts(purchases,balance_payments)
             period_net_by_id={x["id"]:x["_net_amount"] for x in allocated_balance_payments}
-            used_amount_map={}
+            used_amount_map={}; used_net_map={}; cumulative_net_map={}
+            for payment in allocated_balance_payments:
+                cumulative_net_map[payment['purchase_id']]=cumulative_net_map.get(payment['purchase_id'],0)+payment['_net_amount']
             for usage in balance_usages:
                 used_amount_map[usage["purchase_id"]]=used_amount_map.get(usage["purchase_id"],0)+float(usage["deducted_amount"])
+                used_net_map[usage['purchase_id']]=used_net_map.get(usage['purchase_id'],0)+usage_net_amount(usage)
             received_amount_map={}
             paid_installments_map={}
             for payment in balance_payments:
@@ -3925,8 +3914,8 @@ def financial_report_page(me):
             status_label_map={"active":"進行中","completed":"已完成","expired":"逾期中止","cancelled":"退費中止"}
             completed_ids=[x["id"] for x in purchases if x.get("status")=="completed"]
             terminated_ids=[x["id"] for x in purchases if x.get("status") in ("expired","cancelled")]
-            completion_usages=query_read(query_data,"financial_report_page:4132",lambda: rows(client().table("session_usages").select("purchase_id,usage_date").in_("purchase_id",completed_ids).order("usage_date",desc=True))) if completed_ids else []
-            termination_records=query_read(query_data,"financial_report_page:4133",lambda: rows(client().table("course_terminations").select("purchase_id,termination_date").in_("purchase_id",terminated_ids).order("termination_date",desc=True))) if terminated_ids else []
+            completion_usages=query_read(query_data,"financial_report_page:4132",lambda: paged_rows(lambda: client().table("session_usages").select("purchase_id,usage_date").in_("purchase_id",completed_ids).order("usage_date",desc=True).order("id"))) if completed_ids else []
+            termination_records=query_read(query_data,"financial_report_page:4133",lambda: paged_rows(lambda: client().table("course_terminations").select('purchase_id,termination_date,remaining_amount,recognized_amount,fee_amount,refund_amount,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version').in_("purchase_id",terminated_ids).order("termination_date",desc=True).order("id"))) if terminated_ids else []
             course_end_date_map={}
             for usage in completion_usages:
                 course_end_date_map.setdefault(usage["purchase_id"],usage.get("usage_date"))
@@ -3936,8 +3925,8 @@ def financial_report_page(me):
             for purchase in purchases:
                 contracted=float(purchase["total_amount"])
                 period_prepaid=period_received_map.get(purchase["id"],0)
-                cumulative_prepaid=min(received_amount_map.get(purchase["id"],0),contracted)
-                used=min(used_amount_map.get(purchase["id"],0),contracted)
+                cumulative_prepaid=received_amount_map.get(purchase["id"],0)
+                used=used_amount_map.get(purchase["id"],0)
                 remaining=cumulative_prepaid-used
                 purchase_in_period=str(start)<=str(purchase["purchase_date"])<=str(end)
                 if cumulative_prepaid>=contracted:
@@ -3956,11 +3945,11 @@ def financial_report_page(me):
                     "課程結束日期":course_end_date_map.get(purchase["id"]),"分期付清":payment_status,
                     "醫生轉介":purchase.get("referral") or "","備註":purchase.get("note") or "",
                     "成交總金額":_tax_display_amount(contracted,detail_tax_mode) if purchase_in_period else None,"實際預收金額":period_received_net_map.get(purchase["id"],0) if detail_tax_mode=="未稅" else _tax_display_amount(period_prepaid,detail_tax_mode),
-                    "銷課金額":_tax_display_amount(used,detail_tax_mode),"剩餘金額":_tax_display_amount(remaining,detail_tax_mode),
+                    "銷課金額":used_net_map.get(purchase['id'],0) if detail_tax_mode=='未稅' else _tax_display_amount(used,detail_tax_mode),"剩餘金額":cumulative_net_map.get(purchase['id'],0)-used_net_map.get(purchase['id'],0) if detail_tax_mode=='未稅' else _tax_display_amount(remaining,detail_tax_mode),
                     "_含稅成交":contracted if purchase_in_period else 0,"_含稅預收":period_prepaid,"_未稅預收":period_received_net_map.get(purchase["id"],0),"_含稅銷課":used,"_含稅剩餘":remaining})
             balance_rows.sort(key=lambda x:str(x.get("日期") or ""),reverse=True)
             balance_df=pd.DataFrame(balance_rows,columns=["日期","會員名稱","成交總金額","實際預收金額","銷課金額","剩餘金額"])
-            totals_df=pd.DataFrame([{"成交總金額":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
+            totals_df=pd.DataFrame([{"成交總金額":sum(_tax_display_amount(x["_含稅成交"],total_tax_mode) for x in balance_rows),
                 "實際預收總金額":sum(x["_未稅預收"] for x in balance_rows) if total_tax_mode=="未稅" else _tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode)}])
             prepaid_total_rows=[{
                 "購買_ID":x["購買_ID"],"成交日期":x["成交日期"],"會員名稱":x["會員名稱"],"堂數":x["堂數"],
@@ -3973,19 +3962,19 @@ def financial_report_page(me):
             prepaid_total_rows.append({
                 "購買_ID":"合計","成交日期":None,"會員名稱":"","堂數":sum(x["堂數"] for x in balance_rows),
                 "課程名稱":"","教練":"",
-                "成交金額":_tax_display_amount(sum(x["_含稅成交"] for x in balance_rows),total_tax_mode),
+                "成交金額":sum(_tax_display_amount(x["_含稅成交"],total_tax_mode) for x in balance_rows),
                 "有效日期":None,"購買類型":"","課程狀態":"","課程結束日期":None,
                 "分期付清":"","醫生轉介":"","備註":"",
             })
             prepaid_total_df=pd.DataFrame(prepaid_total_rows,columns=["購買_ID","成交日期","會員名稱","堂數","課程名稱","教練","成交金額","有效日期","購買類型","課程狀態","課程結束日期","分期付清","醫生轉介","備註"])
 
             # 預收餘額明細為截至今日的即時餘額，不受上方日期區間限制。
-            outstanding_purchases=query_read(query_data,"financial_report_page:4187",lambda: rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,status")
-                .in_("status",["active","completed","expired","cancelled"]).lte("purchase_date",str(date.today())).order("purchase_date",desc=True)))
+            outstanding_purchases=query_read(query_data,"financial_report_page:4187",lambda: paged_rows(lambda: client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,status")
+                .in_("status",["active","completed","expired","cancelled"]).lte("purchase_date",str(date.today())).order("purchase_date",desc=True).order("id")))
             if selected_coach_id: outstanding_purchases=[x for x in outstanding_purchases if x.get("coach_id")==selected_coach_id]
             if selected_member_id: outstanding_purchases=[x for x in outstanding_purchases if x.get("member_id")==selected_member_id]
             outstanding_ids=[x["id"] for x in outstanding_purchases]
-            outstanding_payments=query_read(query_data,"financial_report_page:4192",lambda: paged_rows(lambda: client().table("purchase_payments").select("id,purchase_id,amount,paid_date,created_at")
+            outstanding_payments=query_read(query_data,"financial_report_page:4192",lambda: paged_rows(lambda: client().table("purchase_payments").select('id,purchase_id,amount,paid_date,created_at,net_amount,calculation_rule_version')
                 .in_("purchase_id",outstanding_ids).lte("paid_date",str(date.today()))
                 .order("paid_date").order("created_at").order("id"))) if outstanding_ids else []
             outstanding_usages=query_read(query_data,"financial_report_page:4195",lambda: paged_rows(lambda: client().table("session_usages").select("id,purchase_id,deducted_amount,deducted_net_amount,usage_date,created_at")
@@ -3999,22 +3988,21 @@ def financial_report_page(me):
                 outstanding_used_map[usage["purchase_id"]]=outstanding_used_map.get(usage["purchase_id"],0)+float(usage.get("deducted_amount") or 0)
                 outstanding_used_net_map[usage["purchase_id"]]=outstanding_used_net_map.get(usage["purchase_id"],0)+usage_net_amount(usage)
                 outstanding_used_sessions_map[usage["purchase_id"]]=outstanding_used_sessions_map.get(usage["purchase_id"],0)+1
+            outstanding_terms=query_read(query_data,'finance_center_outstanding_terms',lambda: paged_rows(lambda: client().table('course_terminations').select('*').in_('purchase_id',outstanding_ids).lte('termination_date',str(date.today())).order('id'))) if outstanding_ids else []
+            outstanding_term_map={x['purchase_id']:x for x in outstanding_terms}
             outstanding_rows=[]
             for purchase in outstanding_purchases:
                 contracted=float(purchase.get("total_amount") or 0)
-                received=min(outstanding_paid_map.get(purchase["id"],0),contracted)
-                used=min(outstanding_used_map.get(purchase["id"],0),contracted)
+                received=outstanding_paid_map.get(purchase["id"],0)
+                used=outstanding_used_map.get(purchase["id"],0)
                 used_sessions=outstanding_used_sessions_map.get(purchase["id"],0)
                 total_sessions=int(purchase.get("total_sessions") or 0)
                 remaining_sessions=max(total_sessions-used_sessions,0)
-                raw_prepaid_balance=max(received-used,0)
-                # 已完成、逾期中止及退費中止均視為已結清，不再列為可使用的預收餘額；
-                # 但保留明細列，讓財務人員可查閱其實收、銷課及最終課程狀態。
-                prepaid_balance=raw_prepaid_balance if purchase.get("status")=="active" else 0
+                term=outstanding_term_map.get(purchase['id'])
+                prepaid_balance=float(ledger_balance(received,used,term,'含稅'))
                 received_net=outstanding_paid_net_map.get(purchase["id"],0)
                 used_net=outstanding_used_net_map.get(purchase["id"],0)
-                prepaid_net_balance=max(received_net-used_net,0) if purchase.get("status")=="active" else 0
-                if purchase.get("status")=="active" and (prepaid_balance<=0 or remaining_sessions<=0): continue
+                prepaid_net_balance=int(ledger_balance(received_net,used_net,term,'未稅'))
                 outstanding_rows.append({"成交日期":purchase.get("purchase_date"),"購買_ID":financial_purchase_code_map.get(purchase["id"],""),
                     "會員名稱":member_name_map.get(purchase.get("member_id"),""),"課程名稱":purchase.get("course_name") or "",
                     "實際預收金額":received_net if detail_tax_mode=="未稅" else _tax_display_amount(received,detail_tax_mode),"累計銷課金額":used_net if detail_tax_mode=="未稅" else _tax_display_amount(used,detail_tax_mode),
@@ -4028,14 +4016,14 @@ def financial_report_page(me):
             prepaid_projects=query_read(query_data,"financial_report_page:4232",lambda: rows(client().table("projects").select("id,project_name,funding_type").eq("funding_type","stored").order("project_name")))
             prepaid_project_map={x["id"]:x["project_name"] for x in prepaid_projects}
             prepaid_project_ids=list(prepaid_project_map)
-            prepaid_deposits=query_read(query_data,"financial_report_page:4235",lambda: rows(client().table("project_deposits").select("project_id,deposit_date,amount,transaction_type,note")
-                .in_("project_id",prepaid_project_ids).lte("deposit_date",str(date.today())).order("deposit_date",desc=True))) if prepaid_project_ids else []
-            prepaid_project_entries=query_read(query_data,"financial_report_page:4237",lambda: rows(client().table("project_entries").select("project_id,entry_date,line_amount")
-                .in_("project_id",prepaid_project_ids).lte("entry_date",str(date.today())))) if prepaid_project_ids else []
+            prepaid_deposits=query_read(query_data,"financial_report_page:4235",lambda: paged_rows(lambda: client().table("project_deposits").select('project_id,deposit_date,amount,transaction_type,note,net_amount,calculation_rule_version')
+                .in_("project_id",prepaid_project_ids).lte("deposit_date",str(date.today())).order("deposit_date",desc=True).order("id"))) if prepaid_project_ids else []
+            prepaid_project_entries=query_read(query_data,"financial_report_page:4237",lambda: paged_rows(lambda: client().table("project_entries").select('project_id,entry_date,line_amount,net_amount,calculation_rule_version')
+                .in_("project_id",prepaid_project_ids).lte("entry_date",str(date.today())).order("id"))) if prepaid_project_ids else []
             project_prepaid_rows=[{
                 "儲值日期":x.get("deposit_date"),"專案名稱":prepaid_project_map.get(x.get("project_id"),"未知"),
                 "類型":{"opening":"期初儲值","deposit":"後續儲值","reversal":"沖銷"}.get(x.get("transaction_type"),x.get("transaction_type") or ""),
-                "儲值金額（未稅）":_tax_display_amount(x.get("amount"),"未稅"),"備註":x.get("note") or ""
+                "儲值金額（未稅）":event_net(x,"amount"),"備註":x.get("note") or ""
             } for x in prepaid_deposits]
             project_prepaid_df=pd.DataFrame(project_prepaid_rows,columns=["儲值日期","專案名稱","類型","儲值金額（未稅）","備註"])
 
@@ -4052,20 +4040,22 @@ def financial_report_page(me):
             with detail_tabs[1]:
                 actual_prepaid_balance_total=sum(x["實際預收剩餘金額"] for x in outstanding_rows)
                 st.metric(f"目前預收餘額（{detail_tax_mode}）",f"$ {actual_prepaid_balance_total:,.0f}")
-                st.caption(f"本表不受上方日期區間限制，列出截至 {date.today()} 的進行中、已完成、逾期中止及退費中止課程。已完成與已中止課程視為結清，目前預收餘額顯示為 0；教練及會員篩選仍然有效。目前顯示：{detail_tax_mode}金額。")
+                st.caption(f"本表不受上方日期區間限制，列出截至 {date.today()} 的課程。餘額＝已收－銷課－逾期入帳－手續費－退款；不依課程狀態強制歸零，保留負餘額。教練及會員篩選仍然有效。目前顯示：{detail_tax_mode}金額。")
                 st.dataframe(center_member_report_columns(outstanding_balance_df,["實際預收金額","實際預收剩餘金額"]),hide_index=True,width="stretch",column_config=money_config)
             with detail_tabs[2]:
                 project_deposit_gross=sum(float(x.get("amount") or 0) for x in prepaid_deposits)
                 project_used_gross=sum(float(x.get("line_amount") or 0) for x in prepaid_project_entries)
                 project_balance_gross=project_deposit_gross-project_used_gross
-                project_prepaid_total=_tax_display_amount(project_balance_gross,"未稅")
+                project_deposit_net=event_net_total(prepaid_deposits,'amount')
+                project_used_net=event_net_total(prepaid_project_entries,'line_amount')
+                project_prepaid_total=project_deposit_net-project_used_net
                 project_prepaid_summary_df=pd.DataFrame([{
-                    "儲值總額（未稅）":_tax_display_amount(project_deposit_gross,"未稅"),
-                    "已操作項目金額（未稅）":_tax_display_amount(project_used_gross,"未稅"),
+                    "儲值總額（未稅）":project_deposit_net,
+                    "已操作項目金額（未稅）":project_used_net,
                     "儲值餘額總計未稅":project_prepaid_total,
                 }])
                 st.metric("儲值餘額總計未稅",f"$ {project_prepaid_total:,.0f}")
-                st.caption(f"截至 {date.today()} 的儲值餘額＝儲值金額－已操作項目金額，再以 ÷ 1.05 換算未稅；不受上方日期、教練及會員篩選影響。")
+                st.caption(f"截至 {date.today()} 的未稅儲值餘額＝逐筆未稅儲值（含沖銷）－逐筆未稅執行；不對含稅餘額重新換算。不受上方日期、教練及會員篩選影響。")
                 st.dataframe(project_prepaid_df,hide_index=True,width="stretch",column_config={"儲值金額（未稅）":st.column_config.NumberColumn(format="$ %.0f")})
             export_data=_excel_bytes({"成交預收總表":prepaid_total_df,"成交預收彙總":totals_df,"預收餘額明細":outstanding_balance_df,
                 "專案儲值餘額彙總":project_prepaid_summary_df,"專案預收儲值餘額":project_prepaid_df})
@@ -4090,10 +4080,10 @@ def financial_report_page(me):
                 coach_ids=[selected_coach_id] if selected_coach_id else list(coach_name_map)
                 coach_detail_tabs=st.tabs(["教練執課時數總表","會員回購"])
 
-                usages=query_read(query_data,"financial_report_page:4298",lambda: rows(client().table("session_usages").select("purchase_id,usage_date,coach_id").gte("usage_date",str(coach_start)).lte("usage_date",str(coach_end))))
+                usages=query_read(query_data,"financial_report_page:4298",lambda: paged_rows(lambda: client().table("session_usages").select("purchase_id,usage_date,coach_id").gte("usage_date",str(coach_start)).lte("usage_date",str(coach_end)).order("id")))
                 if selected_coach_id: usages=[x for x in usages if x.get("coach_id")==selected_coach_id]
                 usage_purchase_ids=list({x["purchase_id"] for x in usages})
-                usage_purchases=query_read(query_data,"financial_report_page:4301",lambda: rows(client().table("purchases").select("id,member_id,course_name,session_hours").in_("id",usage_purchase_ids))) if usage_purchase_ids else []
+                usage_purchases=query_read(query_data,"financial_report_page:4301",lambda: paged_rows(lambda: client().table("purchases").select("id,member_id,course_name,session_hours").in_("id",usage_purchase_ids).order("id"))) if usage_purchase_ids else []
                 usage_purchase_map={x["id"]:x for x in usage_purchases}
                 if selected_member_id:
                     usages=[x for x in usages if usage_purchase_map.get(x["purchase_id"],{}).get("member_id")==selected_member_id]
@@ -4106,9 +4096,9 @@ def financial_report_page(me):
                     if cid in course_hours_by_coach and course_name:
                         course_hours_by_coach[cid][course_name]+=float(purchase.get("session_hours") or 1)
 
-                trial_items=query_read(query_data,"financial_report_page:4314",lambda: rows(client().table("trial_items").select("coach_id,member_name,hours,entry_date").gte("entry_date",str(coach_start)).lte("entry_date",str(coach_end))))
-                single_sales=query_read(query_data,"financial_report_page:4315",lambda: rows(client().table("single_sales").select("coach_id,member_name,hours,entry_date").gte("entry_date",str(coach_start)).lte("entry_date",str(coach_end))))
-                project_entries=query_read(query_data,"financial_report_page:4316",lambda: rows(client().table("project_entries").select("coach_id,item_hours,quantity,entry_date").gte("entry_date",str(coach_start)).lte("entry_date",str(coach_end))))
+                trial_items=query_read(query_data,"financial_report_page:4314",lambda: paged_rows(lambda: client().table("trial_items").select("coach_id,member_name,hours,entry_date").gte("entry_date",str(coach_start)).lte("entry_date",str(coach_end)).order("id")))
+                single_sales=query_read(query_data,"financial_report_page:4315",lambda: paged_rows(lambda: client().table("single_sales").select("coach_id,member_name,hours,entry_date").gte("entry_date",str(coach_start)).lte("entry_date",str(coach_end)).order("id")))
+                project_entries=query_read(query_data,"financial_report_page:4316",lambda: paged_rows(lambda: client().table("project_entries").select("coach_id,item_hours,quantity,entry_date").gte("entry_date",str(coach_start)).lte("entry_date",str(coach_end)).order("id")))
                 if selected_member_id:
                     wanted_name=member_name_map.get(selected_member_id,"").strip().casefold()
                     trial_items=[x for x in trial_items if str(x.get("member_name") or "").strip().casefold()==wanted_name]
@@ -4130,7 +4120,7 @@ def financial_report_page(me):
                 execution_columns=["教練"]+course_names+["銷課時數小計","體驗項目","單堂銷售","專案","每日營運時數小計","時數總計"]
                 execution_df=pd.DataFrame(execution_rows,columns=execution_columns)
 
-                repurchases=query_read(query_data,"financial_report_page:4338",lambda: rows(client().table("purchases").select("member_id,coach_id,course_name,purchase_kind,purchase_date").gte("purchase_date",str(coach_start)).lte("purchase_date",str(coach_end)).order("purchase_date",desc=True)))
+                repurchases=query_read(query_data,"financial_report_page:4338",lambda: paged_rows(lambda: client().table("purchases").select("member_id,coach_id,course_name,purchase_kind,purchase_date").gte("purchase_date",str(coach_start)).lte("purchase_date",str(coach_end)).order("purchase_date",desc=True).order("id")))
                 if selected_coach_id: repurchases=[x for x in repurchases if x.get("coach_id")==selected_coach_id]
                 if selected_member_id: repurchases=[x for x in repurchases if x.get("member_id")==selected_member_id]
                 repurchase_groups={}
@@ -4188,7 +4178,7 @@ def financial_report_page(me):
                 if other_start>other_end:
                     st.error("開始日期不可晚於結束日期。")
                 else:
-                    other_purchases=query_read(query_data,"financial_report_page:4397",lambda: rows(client().table("purchases").select("member_id,coach_id,purchase_kind,total_amount,purchase_date,referral,course_name").gte("purchase_date",str(other_start)).lte("purchase_date",str(other_end)).order("purchase_date",desc=True)))
+                    other_purchases=query_read(query_data,"financial_report_page:4397",lambda: paged_rows(lambda: client().table("purchases").select("member_id,coach_id,purchase_kind,total_amount,purchase_date,referral,course_name").gte("purchase_date",str(other_start)).lte("purchase_date",str(other_end)).order("purchase_date",desc=True).order("id")))
                     selected_other_coach_id=coaches.get(other_coach)
                     selected_other_member_id=member_id_map.get(other_member)
                     if selected_other_coach_id: other_purchases=[x for x in other_purchases if x.get("coach_id")==selected_other_coach_id]
@@ -4210,7 +4200,7 @@ def financial_report_page(me):
                     course_type_map={str(x.get("course_name") or "").strip():str(x.get("course_type") or "未分類").strip() or "未分類" for x in course_catalog}
                     course_type_totals={}
                     other_payments=query_read(query_data,"financial_report_page:4418",lambda: paged_rows(lambda: client().table("purchase_payments")
-                        .select("purchase_id,amount,paid_date,id,created_at")
+                        .select('purchase_id,amount,paid_date,id,created_at,net_amount,calculation_rule_version')
                         .gte("paid_date",str(other_start)).lte("paid_date",str(other_end))
                         .order("paid_date",desc=True).order("id",desc=True)))
                     payment_purchase_ids=list({x.get("purchase_id") for x in other_payments if x.get("purchase_id")})
@@ -4218,7 +4208,7 @@ def financial_report_page(me):
                         if payment_purchase_ids else [])
                     payment_purchase_map={x["id"]:x for x in payment_purchases}
                     prior_other_payments=(query_read(query_data,"financial_report_page:4426",lambda: paged_rows(lambda: client().table("purchase_payments")
-                        .select("id,purchase_id,amount,paid_date,created_at").in_("purchase_id",payment_purchase_ids)
+                        .select('id,purchase_id,amount,paid_date,created_at,net_amount,calculation_rule_version').in_("purchase_id",payment_purchase_ids)
                         .lte("paid_date",str(other_end)).order("paid_date").order("id"))) if payment_purchase_ids else [])
                     other_net_by_id={x["id"]:x["_net_amount"] for x in _allocate_payment_net_amounts(payment_purchases,prior_other_payments)}
                     for payment in other_payments:
@@ -4231,7 +4221,7 @@ def financial_report_page(me):
                         totals["received"]+=other_net_by_id[payment["id"]]
 
                     # 銷課依實際銷課日期、授課教練篩選；會員與課程屬性則由原購買紀錄關聯。
-                    usage_purchase_records=query_read(query_data,"financial_report_page:4440",lambda: rows(client().table("purchases").select("id,member_id,course_name")))
+                    usage_purchase_records=query_read(query_data,"financial_report_page:4440",lambda: paged_rows(lambda: client().table("purchases").select("id,member_id,course_name").order("id")))
                     usage_purchase_map={x["id"]:x for x in usage_purchase_records}
                     course_type_usages=[]
                     usage_page_size=1000
@@ -4270,7 +4260,7 @@ def financial_report_page(me):
                         st.caption("日期依課程購買日期；成交總金額為含稅金額。首購與續約欄位為購買筆數。")
                         st.dataframe(referral_df,hide_index=True,use_container_width=True,column_config={"成交總金額":st.column_config.NumberColumn(format="$ %.0f")})
                     if other_report_view=="課程屬性":
-                        st.caption("實際預收金額（未稅）依付款日期統計，包含首期及後續分期，教練與會員依原購買紀錄；銷課未稅金額依銷課日期及實際授課教練。未稅金額均以原含稅金額 ÷ 1.05 計算。")
+                        st.caption("實際預收金額（未稅）依付款日期統計，包含首期及後續分期，教練與會員依原購買紀錄；銷課未稅金額依銷課日期及實際授課教練。未稅依共同計算中心的逐筆分配金額加總。")
                         if course_type_df.empty:
                             st.info("查詢期間沒有成交或銷課資料。")
                         else:
@@ -4296,14 +4286,14 @@ def financial_report_page(me):
                             historical_purchases=[x for x in historical_purchases if x.get("member_id")==selected_other_member_id]
                         historical_ids=[x["id"] for x in historical_purchases]
                         historical_payments=(query_read(query_data,"financial_report_page:4504",lambda: paged_rows(lambda: client().table("purchase_payments")
-                            .select("id,purchase_id,amount,paid_date,created_at").in_("purchase_id",historical_ids)
+                            .select('id,purchase_id,amount,paid_date,created_at,net_amount,calculation_rule_version').in_("purchase_id",historical_ids)
                             .lte("paid_date",str(historical_cutoff)).order("paid_date").order("created_at").order("id"))) if historical_ids else [])
                         # 歷史預收餘額以「銷課日期」為截帳基準；截止日後才登錄的補單不回溯改寫歷史餘額。
                         historical_usages=(query_read(query_data,"financial_report_page:4508",lambda: paged_rows(lambda: client().table("session_usages")
                             .select("id,purchase_id,deducted_amount,deducted_net_amount,usage_date,actual_usage_date,created_at").in_("purchase_id",historical_ids)
                             .lte("usage_date",str(historical_cutoff)).order("usage_date").order("created_at").order("id"))) if historical_ids else [])
                         historical_terminations=(query_read(query_data,"financial_report_page:4511",lambda: paged_rows(lambda: client().table("course_terminations")
-                            .select("id,purchase_id,termination_type,termination_date,created_at").in_("purchase_id",historical_ids)
+                            .select('id,purchase_id,termination_type,termination_date,created_at,remaining_amount,recognized_amount,fee_amount,refund_amount,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version').in_("purchase_id",historical_ids)
                             .lte("termination_date",str(historical_cutoff)).order("termination_date").order("created_at").order("id"))) if historical_ids else [])
                         historical_paid_map={}; historical_paid_net_map={}; historical_usage_map={}; historical_termination_map={}
                         for payment in _allocate_payment_net_amounts(historical_purchases,historical_payments):
@@ -4312,29 +4302,28 @@ def financial_report_page(me):
                         for usage in historical_usages:
                             historical_usage_map.setdefault(usage["purchase_id"],{})[usage["id"]]=usage
                         for termination in historical_terminations:
-                            historical_termination_map[termination["purchase_id"]]=termination.get("termination_type")
+                            historical_termination_map[termination["purchase_id"]]=termination
                         historical_rows=[]
                         for purchase in historical_purchases:
                             purchase_id=purchase["id"]
                             contracted=float(purchase.get("total_amount") or 0)
-                            received=min(historical_paid_map.get(purchase_id,0),contracted)
+                            received=historical_paid_map.get(purchase_id,0)
                             purchase_usages=list(historical_usage_map.get(purchase_id,{}).values())
-                            used=min(sum(float(x.get("deducted_amount") or 0) for x in purchase_usages),contracted)
+                            used=sum(float(x.get("deducted_amount") or 0) for x in purchase_usages)
                             used_sessions=len(purchase_usages)
                             last_usage_date=max((str(x.get("usage_date") or "") for x in purchase_usages),default="")
                             total_sessions=int(purchase.get("total_sessions") or 0)
                             remaining_sessions=max(total_sessions-used_sessions,0)
-                            termination_type=historical_termination_map.get(purchase_id)
+                            term=historical_termination_map.get(purchase_id)
+                            termination_type=term.get('termination_type') if term else None
                             if termination_type=="expired": historical_status="逾期中止"
                             elif termination_type=="refund": historical_status="退費中止"
                             elif total_sessions>0 and used_sessions>=total_sessions: historical_status="已完成"
                             else: historical_status="進行中"
-                            raw_balance=max(received-used,0)
-                            prepaid_balance=raw_balance if historical_status=="進行中" else 0
+                            prepaid_balance=float(ledger_balance(received,used,term,'含稅'))
                             received_net=historical_paid_net_map.get(purchase_id,0)
                             used_net=sum(usage_net_amount(x) for x in purchase_usages)
-                            prepaid_net_balance=max(received_net-used_net,0) if historical_status=="進行中" else 0
-                            if historical_status=="進行中" and (prepaid_balance<=0 or remaining_sessions<=0): continue
+                            prepaid_net_balance=int(ledger_balance(received_net,used_net,term,'未稅'))
                             historical_rows.append({"成交日期":purchase.get("purchase_date"),"購買_ID":historical_code_map.get(purchase_id,""),
                                 "會員名稱":member_name_map.get(purchase.get("member_id"),""),"課程名稱":purchase.get("course_name") or "",
                                 "實際預收金額":received_net if historical_tax_mode=="未稅" else _tax_display_amount(received,historical_tax_mode),
@@ -4347,7 +4336,7 @@ def financial_report_page(me):
                         # 畫面總計與下載明細採相同口徑：每筆先換算並四捨五入，再加總。
                         historical_balance_total=sum(int(x["實際預收剩餘金額"]) for x in historical_rows)
                         st.metric(f"截至 {historical_cutoff} 預收餘額總計（{historical_tax_mode}）",f"$ {historical_balance_total:,.0f}")
-                        st.caption("本表只計算截止日期當日結束前的購課、付款、銷課、課程完成與中止；補單仍以銷課日期為截帳基準，截止日期之後的異動不會回溯影響結果。")
+                        st.caption("本表依截止日以前的成交、實際收款、銷課入帳及中止交易計算；未稅先逐筆分配再加總，保留負餘額，不以課程狀態強制歸零。補單以銷課日期而非實際服務日期截帳。經核准的歷史更正會另留稽核紀錄。")
                         historical_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["實際預收金額","累計銷課金額","實際預收剩餘金額"]}
                         st.dataframe(center_member_report_columns(historical_df,["實際預收金額","實際預收剩餘金額"]),
                             hide_index=True,width="stretch",column_config=historical_money_config)
@@ -4376,8 +4365,8 @@ def financial_report_page(me):
                     st.error("開始日期不可晚於結束日期。")
                 else:
                     selected_project_id=project_name_id.get(project_filter)
-                    entries=query_read(query_data,"financial_report_page:4586",lambda: rows(client().table("project_entries").select("entry_date,project_id,project_name,person_name,item_name,item_hours,quantity,unit_price,line_amount,note")
-                        .gte("entry_date",str(project_start)).lte("entry_date",str(project_end)).order("entry_date",desc=True)))
+                    entries=query_read(query_data,"financial_report_page:4586",lambda: paged_rows(lambda: client().table("project_entries").select('entry_date,project_id,project_name,person_name,item_name,item_hours,quantity,unit_price,line_amount,note,net_amount,calculation_rule_version')
+                        .gte("entry_date",str(project_start)).lte("entry_date",str(project_end)).order("entry_date",desc=True).order("id")))
                     if selected_project_id: entries=[x for x in entries if x.get("project_id")==selected_project_id]
                     if project_user_filter: entries=[x for x in entries if project_user_filter in str(x.get("person_name") or "").casefold()]
                     project_by_id={x["id"]:x for x in report_projects}
@@ -4394,14 +4383,14 @@ def financial_report_page(me):
 
                     stored_projects=[x for x in report_projects if x["funding_type"]=="stored" and (not selected_project_id or x["id"]==selected_project_id)]
                     stored_ids=[x["id"] for x in stored_projects]
-                    deposit_records=query_read(query_data,"financial_report_page:4604",lambda: rows(client().table("project_deposits").select("project_id,deposit_date,amount,transaction_type,note")
+                    deposit_records=query_read(query_data,"financial_report_page:4604",lambda: paged_rows(lambda: client().table("project_deposits").select('project_id,deposit_date,amount,transaction_type,note,net_amount,calculation_rule_version')
                         .in_("project_id",stored_ids).lte("deposit_date",str(date.today()))
-                        .order("deposit_date",desc=True))) if stored_ids else []
+                        .order("deposit_date",desc=True).order("id"))) if stored_ids else []
                     deposit_df=pd.DataFrame([{"儲值日期":x["deposit_date"],"專案名稱":project_by_id.get(x["project_id"],{}).get("project_name","未知"),
                         "類型":{"opening":"期初儲值","deposit":"後續儲值","reversal":"沖銷"}.get(x["transaction_type"],x["transaction_type"]),
                         "儲值金額":round(float(x.get("amount") or 0)),"備註":x.get("note") or ""} for x in deposit_records],
                         columns=["儲值日期","專案名稱","類型","儲值金額","備註"])
-                    cumulative=query_read(query_data,"financial_report_page:4611",lambda: rows(client().table("project_entries").select("project_id,line_amount,entry_date").in_("project_id",stored_ids).lte("entry_date",str(date.today())))) if stored_ids else []
+                    cumulative=query_read(query_data,"financial_report_page:4611",lambda: paged_rows(lambda: client().table("project_entries").select('project_id,line_amount,entry_date,net_amount,calculation_rule_version').in_("project_id",stored_ids).lte("entry_date",str(date.today())).order("id"))) if stored_ids else []
                     used_by_project={}
                     for x in cumulative:
                         used_by_project[x["project_id"]]=used_by_project.get(x["project_id"],0)+float(x.get("line_amount") or 0)
@@ -4456,11 +4445,11 @@ def financial_report_page(me):
                 st.error("開始日期不可晚於結束日期。")
             else:
                 daily_trial_records=query_read(query_data,"financial_report_page:4666",lambda: paged_rows(lambda: client().table("trial_items")
-                    .select("id,entry_date,coach_id,member_name,content,detail_content,course_type,hours,amount,note")
+                    .select('id,entry_date,coach_id,member_name,content,detail_content,course_type,hours,amount,note,net_amount,calculation_rule_version')
                     .gte("entry_date",str(daily_report_start)).lte("entry_date",str(daily_report_end))
                     .order("entry_date",desc=True).order("id",desc=True)))
                 daily_single_records=query_read(query_data,"financial_report_page:4670",lambda: paged_rows(lambda: client().table("single_sales")
-                    .select("id,entry_date,coach_id,member_name,content,course_type,hours,amount,note")
+                    .select('id,entry_date,coach_id,member_name,content,course_type,hours,amount,note,net_amount,calculation_rule_version')
                     .gte("entry_date",str(daily_report_start)).lte("entry_date",str(daily_report_end))
                     .order("entry_date",desc=True).order("id",desc=True)))
                 selected_daily_coach_id=daily_coaches.get(daily_report_coach)
@@ -4475,7 +4464,7 @@ def financial_report_page(me):
                     amount_by_course_type={}
                     for record in records:
                         course_type=str(record.get("course_type") or "未分類").strip() or "未分類"
-                        amount_by_course_type[course_type]=amount_by_course_type.get(course_type,Decimal("0"))+Decimal(str(record.get("amount") or 0))
+                        amount_by_course_type[course_type]=amount_by_course_type.get(course_type,Decimal("0"))+Decimal(event_net(record,"amount"))
                     summary_rows=[]
                     for course_type,amount in sorted(amount_by_course_type.items()):
                         summary_rows.append({"課程屬性":course_type,
@@ -4489,16 +4478,16 @@ def financial_report_page(me):
                     "日期":x.get("entry_date"),"教練":daily_coach_names.get(x.get("coach_id"),"未知教練"),
                     "體驗會員姓名":x.get("member_name") or "","體驗項目":x.get("content") or "",
                     "內容":x.get("detail_content") or "","課程屬性":x.get("course_type") or "未分類",
-                    "時數":float(x.get("hours") or 0),"金額":float(x.get("amount") or 0),"備註":x.get("note") or ""
-                } for x in daily_trial_records],columns=["日期","教練","體驗會員姓名","體驗項目","內容","課程屬性","時數","金額","備註"])
+                    "時數":float(x.get("hours") or 0),"金額（未稅）":event_net(x,"amount"),"備註":x.get("note") or ""
+                } for x in daily_trial_records],columns=["日期","教練","體驗會員姓名","體驗項目","內容","課程屬性","時數","金額（未稅）","備註"])
                 daily_single_detail_df=pd.DataFrame([{
                     "日期":x.get("entry_date"),"教練":daily_coach_names.get(x.get("coach_id"),"未知教練"),
                     "單堂銷售會員姓名":x.get("member_name") or "","銷售內容":x.get("content") or "",
                     "課程屬性":x.get("course_type") or "未分類","時數":float(x.get("hours") or 0),
-                    "金額":float(x.get("amount") or 0),"備註":x.get("note") or ""
-                } for x in daily_single_records],columns=["日期","教練","單堂銷售會員姓名","銷售內容","課程屬性","時數","金額","備註"])
+                    "金額（未稅）":event_net(x,"amount"),"備註":x.get("note") or ""
+                } for x in daily_single_records],columns=["日期","教練","單堂銷售會員姓名","銷售內容","課程屬性","時數","金額（未稅）","備註"])
                 daily_money_config={"未稅金額":st.column_config.NumberColumn(format="$ %.0f")}
-                daily_detail_config={"時數":st.column_config.NumberColumn(format="%.2f"),"金額":st.column_config.NumberColumn(format="$ %.0f")}
+                daily_detail_config={"時數":st.column_config.NumberColumn(format="%.2f"),"金額（未稅）":st.column_config.NumberColumn(format="$ %.0f")}
                 daily_operation_tabs=st.tabs(["體驗項目報表","單堂銷售報表"])
                 with daily_operation_tabs[0]:
                     daily_trial_total=int(daily_trial_df["未稅金額"].sum()) if not daily_trial_df.empty else 0
@@ -4541,10 +4530,10 @@ def financial_report_page(me):
             monthly_usages=query_read(query_data,"financial_report_page:4750",lambda: paged_rows(lambda: client().table("session_usages").select("id,purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount,deducted_net_amount")
                 .gte("usage_date",str(month_start)).lte("usage_date",str(month_end)).order("usage_date").order("id")))
             try:
-                monthly_terminations=query_read(query_data,"financial_report_page:4753",lambda: rows(client().table("course_terminations").select("purchase_id,termination_date,termination_type,remaining_amount,fee_amount,refund_amount,recognized_amount,completion_bonus_eligible,completion_bonus_coach_id,reason")
-                    .gte("termination_date",str(month_start)).lte("termination_date",str(month_end)).order("termination_date")))
-            except Exception:
-                monthly_terminations=[]
+                monthly_terminations=query_read(query_data,"financial_report_page:4753",lambda: paged_rows(lambda: client().table("course_terminations").select('purchase_id,termination_date,termination_type,remaining_amount,fee_amount,refund_amount,recognized_amount,completion_bonus_eligible,completion_bonus_coach_id,reason,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version')
+                    .gte("termination_date",str(month_start)).lte("termination_date",str(month_end)).order("termination_date").order("id")))
+            except Exception as exc:
+                raise ValueError('中止資料讀取失敗，停止月報計算，避免漏列逾期入帳或退款。') from exc
             monthly_purchase_ids=list({x["purchase_id"] for x in monthly_usages+monthly_terminations})
             monthly_purchases=query_read(query_data,"financial_report_page:4758",lambda: paged_rows(lambda: client().table("purchases").select("id,member_id,coach_id,course_name,report_category,session_hours,total_sessions,total_amount,purchase_date,purchase_kind,referral,created_at")
                 .in_("id",monthly_purchase_ids).order("id"))) if monthly_purchase_ids else []
@@ -4555,11 +4544,11 @@ def financial_report_page(me):
             monthly_member_ids=list({x.get("member_id") for x in monthly_purchases if x.get("member_id")})
             monthly_members=query_read(query_data,"financial_report_page:4765",lambda: paged_rows(lambda: client().table("members").select("id,member_name").in_("id",monthly_member_ids).order("id"))) if monthly_member_ids else []
             monthly_member_name={x["id"]:x["member_name"] for x in monthly_members}
-            monthly_trial=query_read(query_data,"financial_report_page:4767",lambda: rows(client().table("trial_items").select("entry_date,coach_id,content,course_type,hours,amount").gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date")))
-            monthly_single=query_read(query_data,"financial_report_page:4768",lambda: rows(client().table("single_sales").select("entry_date,coach_id,content,course_type,hours,amount").gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date")))
-            monthly_events=query_read(query_data,"financial_report_page:4769",lambda: rows(client().table("event_supports").select("entry_date,coach_id,hours,deducted_hours").gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date")))
-            monthly_projects=query_read(query_data,"financial_report_page:4770",lambda: rows(client().table("project_entries").select("entry_date,project_id,project_catalog_id,project_name,person_name,coach_id,item_name,item_hours,quantity,line_amount")
-                .gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date")))
+            monthly_trial=query_read(query_data,"financial_report_page:4767",lambda: paged_rows(lambda: client().table("trial_items").select('entry_date,coach_id,content,course_type,hours,amount,net_amount,calculation_rule_version').gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date").order("id")))
+            monthly_single=query_read(query_data,"financial_report_page:4768",lambda: paged_rows(lambda: client().table("single_sales").select('entry_date,coach_id,content,course_type,hours,amount,net_amount,calculation_rule_version').gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date").order("id")))
+            monthly_events=query_read(query_data,"financial_report_page:4769",lambda: paged_rows(lambda: client().table("event_supports").select("entry_date,coach_id,hours,deducted_hours").gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date").order("id")))
+            monthly_projects=query_read(query_data,"financial_report_page:4770",lambda: paged_rows(lambda: client().table("project_entries").select('entry_date,project_id,project_catalog_id,project_name,person_name,coach_id,item_name,item_hours,quantity,line_amount,net_amount,calculation_rule_version')
+                .gte("entry_date",str(month_start)).lte("entry_date",str(month_end)).order("entry_date").order("id")))
             monthly_project_ids=list({x.get("project_id") for x in monthly_projects if x.get("project_id")})
             monthly_project_master=query_read(query_data,"financial_report_page:4773",lambda: rows(client().table("projects").select("id,funding_type").in_("id",monthly_project_ids))) if monthly_project_ids else []
             monthly_project_type={x["id"]:x["funding_type"] for x in monthly_project_master}
@@ -4581,7 +4570,7 @@ def financial_report_page(me):
             monthly_stored_project_df=pd.DataFrame([{"日期":x["entry_date"],"專案":x["project_name"],
                 "教練":monthly_coach_name.get(x.get("coach_id"),"未知"),
                 "報表分類":monthly_project_report_category.get(x.get("project_catalog_id"),"未分類"),
-                "扣款金額（未稅）":_tax_display_amount(x.get("line_amount"),"未稅"),
+                "扣款金額（未稅）":event_net(x,"line_amount"),
                 "姓名":x.get("person_name") or ""} for x in monthly_projects if monthly_project_type.get(x.get("project_id"))=="stored"],
                 columns=["日期","專案","教練","報表分類","扣款金額（未稅）","姓名"])
             monthly_termination_rows=[]
@@ -4591,10 +4580,10 @@ def financial_report_page(me):
                 monthly_termination_rows.append({"日期":item["termination_date"],"購買_ID":bonus_purchase_code_map.get(item["purchase_id"],""),
                     "會員名稱":monthly_member_name.get(purchase.get("member_id"),"未知"),"課程名稱":purchase.get("course_name") or "",
                     "中止類型":"逾期中止" if is_expired else "退費中止",
-                    "退費前剩餘金額（未稅）":_tax_display_amount(item.get("remaining_amount"),"未稅"),
-                    "逾期入帳金額（未稅）":_tax_display_amount(item.get("recognized_amount"),"未稅") if is_expired else 0,
-                    "退費手續費（未稅）":_tax_display_amount(item.get("fee_amount"),"未稅") if not is_expired else 0,
-                    "實際退費金額（未稅）":_tax_display_amount(item.get("refund_amount"),"未稅") if not is_expired else 0,
+                    "退費前剩餘金額（未稅）":termination_money(item,"remaining_amount","未稅"),
+                    "逾期入帳金額（未稅）":termination_money(item,"recognized_amount","未稅") if is_expired else 0,
+                    "退費手續費（未稅）":termination_money(item,"fee_amount","未稅") if not is_expired else 0,
+                    "實際退費金額（未稅）":termination_money(item,"refund_amount","未稅") if not is_expired else 0,
                     "中止原因":item.get("reason") or ""})
             monthly_termination_df=pd.DataFrame(monthly_termination_rows,columns=["日期","購買_ID","會員名稱","課程名稱","中止類型","退費前剩餘金額（未稅）","逾期入帳金額（未稅）","退費手續費（未稅）","實際退費金額（未稅）","中止原因"])
 
@@ -4618,9 +4607,9 @@ def financial_report_page(me):
                 coach_hour_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"體驗時數":trial_hours,"單堂時數":single_hours,
                     "活動時數":event_hours,"專案時數":project_hours,"銷課時數":usage_hours,
                     "可計執行時數":trial_hours+single_hours+event_hours+project_hours+usage_hours,"動磁波時數":magnetic_wave_hours})
-                trial_revenue=sum(_tax_display_amount(x.get("amount"),"未稅") for x in coach_trials)
-                single_revenue=sum(_tax_display_amount(x.get("amount"),"未稅") for x in coach_singles)
-                project_revenue=sum(_tax_display_amount(x.get("line_amount"),"未稅") for x in monthly_projects if x.get("coach_id")==coach_id)
+                trial_revenue=sum(event_net(x,"amount") for x in coach_trials)
+                single_revenue=sum(event_net(x,"amount") for x in coach_singles)
+                project_revenue=sum(event_net(x,"line_amount") for x in monthly_projects if x.get("coach_id")==coach_id)
                 usage_revenue=sum(usage_net_amount(x) for x in monthly_usages if x.get("coach_id")==coach_id)
                 coach_revenue_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"體驗項目金額（未稅）":round(trial_revenue),"單堂銷售金額（未稅）":round(single_revenue),
                     "專案（未稅）":round(project_revenue),"銷課（未稅）":round(usage_revenue),"金額總計（未稅）":round(trial_revenue+single_revenue+project_revenue+usage_revenue)})
@@ -4633,8 +4622,8 @@ def financial_report_page(me):
             except Exception:
                 bonus_rules=[]; bonus_rule_error=True
 
-            talk_purchases=query_read(query_data,"financial_report_page:4845",lambda: rows(client().table("purchases").select("id,member_id,coach_id,course_name,total_amount,purchase_date,purchase_kind,referral,created_at")
-                .gte("purchase_date",str(month_start)).lte("purchase_date",str(month_end)).order("purchase_date")))
+            talk_purchases=query_read(query_data,"financial_report_page:4845",lambda: paged_rows(lambda: client().table("purchases").select("id,member_id,coach_id,course_name,total_amount,purchase_date,purchase_kind,referral,created_at")
+                .gte("purchase_date",str(month_start)).lte("purchase_date",str(month_end)).order("purchase_date").order("id")))
             bonus_member_ids=list({x.get("member_id") for x in monthly_purchases+talk_purchases if x.get("member_id")})
             missing_member_ids=[x for x in bonus_member_ids if x not in monthly_member_name]
             if missing_member_ids:
