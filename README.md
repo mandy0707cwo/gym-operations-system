@@ -1,5 +1,7 @@
 # v1.13.18 正式共同計算中心
 
+2026-10-18 已提交並部署，台灣18:03完成啟動，登入頁正常；資料庫更正及逐筆勾稽完成。實際發布紀錄見 [RELEASE_STATUS_v1.13.18.md](RELEASE_STATUS_v1.13.18.md)。
+
 Streamlit + Supabase 線上營運系統。主要入口、教練權限、含稅輸入及獎金機制維持；財務未稅保存、查詢與下載統一新規格。發布結果另見本版驗收與發布紀錄。
 
 安裝：`python -m pip install -r requirements.txt`。測試：`python verify_finance_center.py`。啟動：`python -m streamlit run app.py`。憑證沿用本機／Streamlit Secrets，禁止放進Git或交談。
