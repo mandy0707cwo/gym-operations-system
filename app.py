@@ -9,6 +9,7 @@ from course_defaults import apply_purchase_catalog_defaults, catalog_default_pay
 from ui_text import section_heading
 from confirmed_queries import confirm_query, query_read
 from operation_requests import Operation
+from usage_funds import usage_funds
 from navigation_platforms import (sidebar_pages, render_daily_execution,
     render_finance_platform, render_system_admin_platform)
 
@@ -26,6 +27,7 @@ load_dotenv()
 st.set_page_config(page_title="秀傳運醫營運系統", page_icon="🏋️", layout="wide")
 
 LABELS = {
+    "actual_prepaid_balance":"實際預收餘額(含稅)",
     "operation_date":"日期", "coach_name":"教練", "classes_held":"上課堂數",
     "classes_cancelled":"上課取消堂數", "trial_visits":"體驗人次",
     "trial_conversions":"體驗成交人次", "member_name":"會員名稱",
@@ -968,16 +970,31 @@ def usage_page(me):
                 balance_purchase_ids=[x["purchase_id"] for x in balances]
                 balance_purchase_dates=paged_rows(lambda: client().table("purchases").select("id,purchase_date").in_("id",balance_purchase_ids).order("id")) if balance_purchase_ids else []
                 balance_purchase_date_map={x["id"]:x.get("purchase_date") for x in balance_purchase_dates}
+                try:
+                    balance_payments=(paged_rows(lambda: client().table("purchase_payments")
+                        .select("id,purchase_id,amount").in_("purchase_id",balance_purchase_ids).order("id"))
+                        if balance_purchase_ids else [])
+                    balances=[usage_funds(x,balance_payments) for x in balances]
+                except Exception as exc:
+                    st.error(f"無法確認實際預收餘額，暫停銷課：{exc}")
+                    return
                 for balance in balances: balance["purchase_date"]=balance_purchase_date_map.get(balance["purchase_id"])
                 balances.sort(key=lambda x:str(x.get("purchase_date") or ""),reverse=True)
-                show_table(balances,["purchase_date","course_name","coach_name","total_sessions","used_sessions","remaining_sessions","remaining_amount","expiry_date","status"])
+                show_table(balances,["purchase_date","course_name","coach_name","total_sessions","used_sessions","remaining_sessions","actual_prepaid_balance","expiry_date","status"])
                 active=[x for x in balances if x["status"]=="active"]
                 if not active:
                     st.warning("此會員沒有可扣課的有效課程。")
                 else:
-                    lookup={f'{usage_purchase_code_map.get(x["purchase_id"],x["purchase_id"])}｜{member_name}｜{x["course_name"]}｜{int(x["total_sessions"])} 堂｜{x["coach_name"]}｜剩餘 {int(x["remaining_sessions"])} 堂｜餘額 $ {float(x["remaining_amount"]):,.0f}':x for x in active}
+                    lookup={f'{usage_purchase_code_map.get(x["purchase_id"],x["purchase_id"])}｜{member_name}｜{x["course_name"]}｜{int(x["total_sessions"])} 堂｜{x["coach_name"]}｜剩餘 {int(x["remaining_sessions"])} 堂｜實際預收餘額(含稅) $ {x["actual_prepaid_balance"]:,.2f}':x for x in active}
                     label=st.selectbox("選擇課程",list(lookup),key=f"usage_course_{member_map[member_name]}")
                     selected=lookup[label]
+                    per=selected["next_usage_amount"]
+                    insufficient=selected["usage_shortfall"]>0
+                    st.caption(f'實際預收餘額(含稅)：$ {selected["actual_prepaid_balance"]:,.2f}；本次銷課金額(含稅)：$ {per:,.2f}。以已登錄收款減累計銷課計算，非成交餘額。')
+                    if insufficient:
+                        st.warning(f'實際預收餘額不足，差額(含稅) $ {selected["usage_shortfall"]:,.2f}。一般教練須先確認並登錄後續期款，再重新載入銷課。')
+                        if me["role"]!="coach":
+                            st.caption("目前角色仍維持既有銷課權限；此版本未新增欠款授課核准流程。")
                     with st.form(f'consume_{selected["purchase_id"]}_{st.session_state.get("usage_form_revision",0)}'):
                         c1,c2=st.columns(2)
                         usage_date=c1.date_input("銷課日期",date.today(),**coach_date_limit)
@@ -997,11 +1014,12 @@ def usage_page(me):
                         else:
                             makeup_order=False
                             actual_usage_date=usage_date
-                        note=st.text_area("備註",placeholder="可輸入本次銷課備註"); submit=st.form_submit_button("確認扣除 1 堂")
-                    per=Decimal(str(selected["remaining_amount"])) if selected["remaining_sessions"]==1 else (Decimal(str(selected["total_amount"]))/selected["total_sessions"]).quantize(Decimal("0.01"))
-                    st.caption(f"本次預計扣除：1 堂／$ {per:,.0f}；最後一堂會自動扣完剩餘金額。")
+                        note=st.text_area("備註",placeholder="可輸入本次銷課備註"); submit=st.form_submit_button("確認扣除 1 堂",disabled=me["role"]=="coach" and insufficient)
+                    st.caption(f"本次預計扣除：1 堂／$ {per:,.2f}；最後一堂依成交總額扣除前期銷課合計計算，不以實收餘額當作課程單價。")
                     if submit:
                         try:
+                            if me["role"]=="coach" and insufficient:
+                                raise ValueError("實際預收餘額不足，請先登錄後續期款並重新載入")
                             if me["role"]=="coach" and usage_date<date.today():
                                 raise ValueError("教練只能填寫今天或未來的銷課日期")
                             effective_actual_date=actual_usage_date if makeup_order else usage_date
@@ -1982,7 +2000,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.20"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.21"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},

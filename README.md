@@ -148,3 +148,9 @@ SUPABASE_SECRET_KEY = "YOUR_SUPABASE_SECRET_KEY"
 
 既有系統升級至 v1.8.0 時，請先在 Supabase SQL Editor 執行 `migration_bonus_rules_v1_8_0.sql`，再等待 Streamlit 重新部署。初始規則為談單 3%、結單 4%，醫生轉介首購不計獎金。
 
+# v1.13.21 銷課實收額檢查
+
+一般教練不足實際預收餘額時暫停銷課，畫面與資料庫雙重檢查。其他角色維持既有權限並顯示不足警告；未新增管理員欠款授課核准流程。歷史交易、財務中心、未稅尾差及購課／銷課操作碼不變。
+
+必須先確認備份，再套用本版 migration，最後部署 `app.py` 與新增的 `usage_funds.py`；勿只上傳單一檔案。正式資料庫已套用本版限制，GitHub及雲端狀態見 [發布紀錄](RELEASE_STATUS_v1.13.21.md)。詳見 [升級與復原](UPGRADE_v1.13.21.md) 及 [驗證結果](VERIFICATION_v1.13.21.md)。本版測試使用本機虛構資料，不呼叫正式銷課 API。
+

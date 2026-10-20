@@ -4,6 +4,7 @@ from streamlit.testing.v1 import AppTest
 import test_purchase_installment_ui as purchase_ui
 
 SCRIPT=purchase_ui.SCRIPT.replace('"rows","purchase_page"','"usage_page","rows","purchase_page"')
+SCRIPT=SCRIPT.replace('from operation_requests import Operation','from operation_requests import Operation\nfrom usage_funds import usage_funds')
 SCRIPT=SCRIPT.replace(' def order(self,*_,**__): return self',' def limit(self,*_,**__): return self\n def order(self,*_,**__): return self')
 SCRIPT=SCRIPT.replace('  if self.table in ("operation_status","cancel_operation"):', '''  if self.table=="consume_session_idempotent":
    token=(str(me["id"]),self.payload["p_operation_id"])

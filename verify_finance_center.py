@@ -27,10 +27,12 @@ if __name__=='__main__':
         suite.addTests(unittest.defaultTestLoader.loadTestsFromModule(module))
         for test_name,test in inspect.getmembers(module,inspect.isfunction):
             if test_name.startswith('test_'):suite.addTest(unittest.FunctionTestCase(test))
+    for name in ['test_usage_funds','test_usage_funds_ui']:
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromName(name))
     started=time.monotonic()
     result=unittest.TextTestRunner(verbosity=2).run(suite)
     (ROOT/'verification_result.json').write_text(json.dumps({
-        'version':'v1.13.20','tests_run':result.testsRun,'successful':result.wasSuccessful(),
+        'version':'v1.13.21','tests_run':result.testsRun,'successful':result.wasSuccessful(),
         'errors':len(result.errors),'failures':len(result.failures),'skipped':len(result.skipped),
         'failed_names':[str(case) for case,_ in result.errors+result.failures],
         'seconds':round(time.monotonic()-started,3),
