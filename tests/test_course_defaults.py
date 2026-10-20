@@ -76,7 +76,7 @@ class CourseDefaultsTests(unittest.TestCase):
         calls=[n for n in ast.walk(purchase) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr=="submit"]
         self.assertEqual(len(calls),1)
         self.assertIn('operation=Operation(st,client,me,"purchase")',formal.read_text(encoding="utf-8"))
-        self.assertIn('"v1.13.19"',formal.read_text(encoding="utf-8"))
+        self.assertIn('"v1.13.20"',formal.read_text(encoding="utf-8"))
 
 class CourseDefaultsUITests(unittest.TestCase):
     def app(self,catalog=False,role="admin"):

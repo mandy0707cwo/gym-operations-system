@@ -1982,7 +1982,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.19"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.20"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
@@ -3854,9 +3854,10 @@ def financial_report_page(me):
         styler=frame.style.set_properties(subset=centered,**{"text-align":"center"})
         header_styles=[{"selector":f"th.col_heading.level0.col{frame.columns.get_loc(name)}","props":[("text-align","center")]} for name in centered]
         return styler.set_table_styles(header_styles,overwrite=False)
-    if st.session_state.get("financial_report_view")=="課程中止":
-        st.session_state["financial_report_view"]="會員報表"
-    report_labels=["會員報表","其他報表","每月報表","體驗項目","單次銷售","教練查詢"]
+    report_labels=["每月報表","體驗項目","單次銷售","教練查詢"]
+    # 舊分頁或不在白名單的狀態一律回到保留入口，不執行已移除的查詢。
+    if st.session_state.get("financial_report_view") not in report_labels:
+        st.session_state["financial_report_view"]=report_labels[0]
     report_tabs=st.tabs(report_labels,key="financial_report_view",on_change="rerun")
     report_view=next((label for label,tab in zip(report_labels,report_tabs) if tab.open),None)
     active_report=next((tab for tab in report_tabs if tab.open),None)

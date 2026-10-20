@@ -1,11 +1,14 @@
 {
-  "version": "v1.13.19",
-  "tests_run": 239,
-  "successful": true,
-  "errors": 0,
+  "version": "v1.13.20",
+  "tests_run": 244,
+  "successful": false,
+  "errors": 2,
   "failures": 0,
   "skipped": 3,
-  "failed_names": [],
-  "seconds": 249.703,
+  "failed_names": [
+    "test_unknown_atomic_reply_keeps_input_and_never_auto_retries (test_purchase_installment_ui.PurchaseUITests.test_unknown_atomic_reply_keeps_input_and_never_auto_retries)",
+    "test_all_removed_and_invalid_states_recover_before_widget (test_monthly_tabs_v1_13_20.MonthlyTabRemovalTests.test_all_removed_and_invalid_states_recover_before_widget) (stale='課程中止')"
+  ],
+  "seconds": 80643.375,
   "scope": "isolated fictitious AppTest; no production DB calls"
 }

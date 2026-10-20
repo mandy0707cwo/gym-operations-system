@@ -102,15 +102,13 @@ class FinancialScreenTests(unittest.TestCase):
         headers=[c.value for c in book.worksheets[0][1]]
         self.assertEqual(book.worksheets[0].cell(2,headers.index('餘額（未稅）')+1).value,0)
 
-    def test_member_report_retains_negative_and_matches_general(self):
+    def test_removed_member_report_state_returns_to_monthly_without_reading(self):
         app=self.app('financial',financial_report_view='會員報表')
-        app.date_input[0].set_value(date(2026,9,1));app.date_input[1].set_value(date(2026,9,30))
-        app.button[0].click().run();self.assertFalse(app.exception)
-        sheets=app.session_state['exports']
-        frame=sheets['預收餘額明細']
-        self.assertEqual(frame.iloc[0]['實際預收剩餘金額'],0)
-        self.assertEqual(frame.iloc[0]['累計銷課金額'],667)
-        self.assertEqual(sheets['成交預收彙總'].iloc[0]['成交總金額'],2000)
+        self.assertEqual(app.session_state['financial_report_view'],'每月報表')
+        self.assertEqual([tab.label for tab in app.tabs],['每月報表','體驗項目','單次銷售','教練查詢'])
+        self.assertEqual(app.session_state['reads'],[])
+        self.assertEqual(len(app.dataframe),0)
+        self.assertNotIn('exports',app.session_state)
 
     def test_monthly_net_termination_and_operation_revenue(self):
         app=self.app('financial',financial_report_view='每月報表')

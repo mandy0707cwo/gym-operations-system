@@ -144,7 +144,7 @@ class TypographyTests(unittest.TestCase):
         self.assertGreaterEqual(source.count("section_heading("),20)
         for duplicate in ["各項查詢","每月查詢","資料管理","帳號與權限管理","課程購買","登錄後續期款"]:
             self.assertNotIn('section_heading("'+duplicate+'")',source)
-        self.assertEqual((ROOT/"VERSION").read_text().strip(),"v1.13.19")
+        self.assertEqual((ROOT/"VERSION").read_text().strip(),"v1.13.20")
 
 if __name__=="__main__":
     unittest.main()

@@ -84,7 +84,7 @@ class TerminationRecordsTests(unittest.TestCase):
         self.assertNotIn("course_termination_report_page",ast.unparse(finance))
         labels=next(n.value for n in ast.walk(finance) if isinstance(n,ast.Assign)
                     and any(isinstance(target,ast.Name) and target.id=="report_labels" for target in n.targets))
-        self.assertEqual(ast.literal_eval(labels),["會員報表","其他報表","每月報表","體驗項目","單次銷售","教練查詢"])
+        self.assertEqual(ast.literal_eval(labels),["每月報表","體驗項目","單次銷售","教練查詢"])
         self.assertTrue(any(isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute)
                             and n.func.attr=="tabs" and n.args and isinstance(n.args[0],ast.Name)
                             and n.args[0].id=="report_labels" for n in ast.walk(finance)))
@@ -112,3 +112,4 @@ class TerminationRecordsTests(unittest.TestCase):
 
 if __name__=="__main__":
     unittest.main()
+

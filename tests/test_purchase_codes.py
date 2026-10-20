@@ -44,5 +44,5 @@ def test_usage_import_guards_old_ambiguous_codes_and_exports_uuid():
 def test_formal_snapshot_does_not_publish_paused_activity_pilot():
     source = (ROOT / 'app.py').read_text(encoding='utf-8')
     assert 'activity_pilot' not in source
-    assert '"v1.13.19"' in source
+    assert '"v1.13.20"' in source
     assert 'daily_sequences' not in source

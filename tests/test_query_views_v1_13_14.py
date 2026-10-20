@@ -129,7 +129,7 @@ class OperationQueryUITests(unittest.TestCase):
     def test_tab_order_hidden_tabs_no_data_and_no_duplicate_titles(self):
         app = self.app()
         self.assertEqual([t.label for t in app.tabs if t.label not in ("日期區間", "截止日期")],
-                         ["會員報表", "其他報表", "每月報表", "體驗項目", "單次銷售", "教練查詢"])
+                         ["每月報表", "體驗項目", "單次銷售", "教練查詢"])
         self.assertEqual(len(app.dataframe), 0)
         self.assertEqual(app.session_state["reads"], [])
         self.assertFalse(any("每月查詢" in m.value or "**體驗項目**" in m.value for m in app.markdown))
