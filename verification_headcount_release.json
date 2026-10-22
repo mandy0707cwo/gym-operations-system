@@ -1,0 +1,36 @@
+{
+  "version": "v1.13.28",
+  "successful": true,
+  "scope": "source boundary comparison, not a database rerun",
+  "database_modified": false,
+  "production_modified": false,
+  "previous_version": "v1.13.27",
+  "unchanged_protected_files": [
+    "finance_reporting.py",
+    "financial_calculations.py",
+    "financial_reconciliation.py",
+    "schedule_allowance_repository.py",
+    "schedule_demo_repository.py",
+    "schedule_leave_repository.py",
+    "schedule_repository.py",
+    "supabase/migrations/20261018091440_finance_center_v1_13_18.sql",
+    "supabase/migrations/20261018111949_purchase_usage_idempotency_v1_13_19.sql",
+    "supabase/migrations/20261020023026_usage_funds_guard_v1_13_21.sql",
+    "supabase/migrations/20261021083833_staff_scheduling_v1_13_22.sql",
+    "supabase/migrations/20261021091712_schedule_approved_visibility_v1_13_23.sql",
+    "supabase/migrations/20261021100055_schedule_allowance_v1_13_25.sql",
+    "supabase/migrations/20261021152424_schedule_leave_v1_13_26.sql",
+    "supabase/migrations/20261021160257_schedule_apply_v1_13_27.sql",
+    "usage_funds.py"
+  ],
+  "previous_database_evidence": {
+    "verification_schedule_database.json": {
+      "version": "v1.13.27",
+      "sha256": "f5b300cc77f3fe347a94a15f29b96d11b38aa1fc2e2364881b2a4194f85b3b1f"
+    },
+    "verification_schedule_security.json": {
+      "version": "v1.13.27",
+      "sha256": "7e86aa59435a83c840ac1bc734b263ccbb273e0cbe5f13781bebd3047bfc0550"
+    }
+  }
+}

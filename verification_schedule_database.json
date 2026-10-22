@@ -1,0 +1,13 @@
+{
+  "version": "v1.13.29",
+  "tests_run": 56,
+  "successful": true,
+  "errors": 0,
+  "failures": 0,
+  "skipped": 0,
+  "seconds": 73.672,
+  "scope": "isolated localhost PostgreSQL",
+  "production_modified": false,
+  "unchanged_existing_app_functions": 59,
+  "failed_names": []
+}

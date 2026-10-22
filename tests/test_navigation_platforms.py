@@ -71,10 +71,10 @@ class NavigationTests(unittest.TestCase):
 
     def test_sidebar_by_role_and_unknown_role(self):
         base=["每日執行登錄","客戶管理","購買及分期","教練查詢"]
-        self.assertEqual(sidebar_pages("coach"),base)
+        self.assertEqual(sidebar_pages("coach"),base+["排班管理"])
         self.assertEqual(sidebar_pages("shared_coach"),base)
-        self.assertEqual(sidebar_pages("manager"),base+["營運總覽"])
-        self.assertEqual(sidebar_pages("admin"),base+["營運總覽","財務平台","系統管理平台"])
+        self.assertEqual(sidebar_pages("manager"),base+["排班管理","營運總覽"])
+        self.assertEqual(sidebar_pages("admin"),base+["排班管理","營運總覽","財務平台","系統管理平台"])
         self.assertEqual(sidebar_pages("unknown"),[])
         self.assertEqual(sidebar_pages(None),[])
 

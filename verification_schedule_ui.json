@@ -1,0 +1,13 @@
+{
+  "version": "v1.13.29",
+  "tests_run": 103,
+  "successful": true,
+  "errors": 0,
+  "failures": 0,
+  "skipped": 2,
+  "seconds": 52.188,
+  "scope": "offline pure rules and AppTest",
+  "production_modified": false,
+  "unchanged_existing_app_functions": 59,
+  "failed_names": []
+}

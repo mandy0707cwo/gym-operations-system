@@ -1,0 +1,120 @@
+{
+  "tables": [
+    {
+      "rls": true,
+      "name": "staff_schedule_allowance_logs",
+      "delete": false,
+      "insert": false,
+      "update": false,
+      "service_read": true
+    },
+    {
+      "rls": true,
+      "name": "staff_schedule_allowances",
+      "delete": false,
+      "insert": false,
+      "update": false,
+      "service_read": true
+    },
+    {
+      "rls": true,
+      "name": "staff_schedule_days",
+      "delete": false,
+      "insert": false,
+      "update": false,
+      "service_read": true
+    },
+    {
+      "rls": true,
+      "name": "staff_schedule_leave_logs",
+      "delete": false,
+      "insert": false,
+      "update": false,
+      "service_read": true
+    },
+    {
+      "rls": true,
+      "name": "staff_schedule_leaves",
+      "delete": false,
+      "insert": false,
+      "update": false,
+      "service_read": true
+    },
+    {
+      "rls": true,
+      "name": "staff_schedule_logs",
+      "delete": false,
+      "insert": false,
+      "update": false,
+      "service_read": true
+    },
+    {
+      "rls": true,
+      "name": "staff_schedule_months",
+      "delete": false,
+      "insert": false,
+      "update": false,
+      "service_read": true
+    },
+    {
+      "rls": true,
+      "name": "staff_schedule_preferences",
+      "delete": false,
+      "insert": false,
+      "update": false,
+      "service_read": true
+    }
+  ],
+  "functions": [
+    {
+      "name": "staff_schedule_operation",
+      "definer": false,
+      "anon_execute": false,
+      "authenticated_execute": true
+    },
+    {
+      "name": "staff_schedule_command",
+      "definer": false,
+      "anon_execute": false,
+      "authenticated_execute": true
+    },
+    {
+      "name": "staff_schedule_allowance_save",
+      "definer": false,
+      "anon_execute": false,
+      "authenticated_execute": true
+    },
+    {
+      "name": "staff_schedule_snapshot",
+      "definer": false,
+      "anon_execute": false,
+      "authenticated_execute": true
+    },
+    {
+      "name": "staff_schedule_allowance_snapshot",
+      "definer": false,
+      "anon_execute": false,
+      "authenticated_execute": true
+    },
+    {
+      "name": "staff_schedule_leave_save",
+      "definer": false,
+      "anon_execute": false,
+      "authenticated_execute": true
+    },
+    {
+      "name": "staff_schedule_leave_snapshot",
+      "definer": false,
+      "anon_execute": false,
+      "authenticated_execute": true
+    }
+  ],
+  "receipt_read": false,
+  "receipt_insert": false,
+  "version": "v1.13.29",
+  "successful": true,
+  "scope": "localhost fictitious schema only",
+  "production_modified": false,
+  "manager_parity_guard": true,
+  "manager_parity_log_policy": true
+}

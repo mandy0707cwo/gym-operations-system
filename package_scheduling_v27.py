@@ -1,0 +1,27 @@
+"""完整v27來源白名單，驗證成功才建立新壓縮檔，不帶資料／秘密。"""
+from hashlib import sha256
+import json
+from pathlib import Path
+import runpy
+from zipfile import ZipFile,ZIP_DEFLATED
+ROOT=Path(__file__).resolve().parent
+FILES=sorted(set(runpy.run_path(str(ROOT/'package_scheduling_v26.py'))['FILES'])|{
+    'schedule_summary.py','tests/test_schedule_compact.py','tests/test_schedule_apply_database.py','tests/setup_apply_database.py',
+    'UPGRADE_v1.13.27.md','VERIFICATION_v1.13.27.md','RELEASE_STATUS_v1.13.27.md','package_scheduling_v27.py',
+    'supabase/migrations/20261021160257_schedule_apply_v1_13_27.sql'})
+if __name__=='__main__':
+    for name in ('verification_schedule_ui.json','verification_schedule_database.json','verification_schedule_security.json'):
+        result=json.loads((ROOT/name).read_text(encoding='utf-8'))
+        assert result['successful'] and result['version']=='v1.13.27',name
+    out=ROOT.parents[1]/'output/排班管理_20261022_v1.13.27';out.mkdir(exist_ok=True)
+    archive=out/'排班管理_v1.13.27_精簡介面測試版完整來源.zip'
+    contents={name:(ROOT/name).read_text(encoding='utf-8').encode() for name in FILES}
+    manifest={name:sha256(value).hexdigest() for name,value in contents.items()}
+    with ZipFile(archive,'x',ZIP_DEFLATED) as z:
+        for name,value in contents.items():z.writestr('gym_v1.13.27/'+name,value)
+        z.writestr('gym_v1.13.27/SOURCE_MANIFEST.json',json.dumps(manifest,ensure_ascii=False,indent=2))
+    with ZipFile(archive) as z:
+        assert z.testzip() is None
+        for name,digest in manifest.items():assert sha256(z.read('gym_v1.13.27/'+name)).hexdigest()==digest
+        assert not any(token in name.lower() for name in z.namelist() for token in ('.postgres_data','secrets.toml','private_source','.env','.test-temp'))
+    print(json.dumps({'files':len(FILES),'path':str(archive),'sha256':sha256(archive.read_bytes()).hexdigest()},ensure_ascii=False))

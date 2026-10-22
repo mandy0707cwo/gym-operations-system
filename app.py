@@ -10,6 +10,8 @@ from ui_text import section_heading
 from confirmed_queries import confirm_query, query_read
 from operation_requests import Operation
 from usage_funds import usage_funds
+from schedule_repository import ScheduleRepository
+from schedule_ui import render_schedule
 from navigation_platforms import (sidebar_pages, render_daily_execution,
     render_finance_platform, render_system_admin_platform)
 
@@ -249,6 +251,10 @@ def show_table(data, columns=None):
 
 def daily_page(me):
     render_daily_execution(me, usage_page, daily_operation_page)
+
+
+def scheduling_page(me):
+    render_schedule(me,ScheduleRepository(client,paged_rows),_excel_bytes)
 
 
 def finance_platform_page(me):
@@ -1980,6 +1986,14 @@ def _full_system_backup_bytes(admin):
         "project_members":"舊專案會員",
         "bonus_rules":"獎金規則",
         "course_terminations":"課程中止",
+        "staff_schedule_months":"排班月份",
+        "staff_schedule_days":"每日排班",
+        "staff_schedule_preferences":"排班預設",
+        "staff_schedule_logs":"排班異動",
+        "staff_schedule_allowances":"每月排休額度",
+        "staff_schedule_allowance_logs":"排休額度異動",
+        "staff_schedule_leaves":"其他請假紀錄",
+        "staff_schedule_leave_logs":"請假異動紀錄",
     }
     backup_frames={}
     table_data={}
@@ -1987,9 +2001,10 @@ def _full_system_backup_bytes(admin):
     errors=[]
     for table_name,sheet_name in table_sheets.items():
         try:
-            order_column="member_id" if table_name=="project_members" else "id"
-            table_rows=paged_rows(lambda table_name=table_name,order_column=order_column:
-                admin.table(table_name).select("*").order(order_column))
+            order_column="month_start" if table_name=="staff_schedule_allowances" else "member_id" if table_name=="project_members" else "coach_id" if table_name in ("staff_schedule_months","staff_schedule_days","staff_schedule_preferences") else "id"
+            secondary_column="work_date" if table_name=="staff_schedule_days" else "month_start" if table_name=="staff_schedule_months" else order_column
+            table_rows=paged_rows(lambda table_name=table_name,order_column=order_column,secondary_column=secondary_column:
+                admin.table(table_name).select("*").order(order_column).order(secondary_column))
             table_data[table_name]=table_rows
             backup_frames[sheet_name]=pd.DataFrame(table_rows)
             summary_rows.append({"資料表":table_name,"工作表":sheet_name,"資料筆數":len(table_rows),"備份狀態":"完成"})
@@ -2000,10 +2015,10 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.21"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.29"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
-        {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰及Streamlit Secrets"},
+        {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰、Streamlit Secrets及私有操作收據；完整還原須另有PostgreSQL資料庫備份"},
     ]),"資料筆數檢核":pd.DataFrame(summary_rows),**backup_frames,**financial_frames}
     return _excel_bytes(backup_frames)
 
@@ -4807,7 +4822,7 @@ try:
         st.warning("您沒有此功能的使用權限。")
     else:
         {"每日執行登錄":daily_page,"客戶管理":customer_admin_page,"購買及分期":purchase_page,
-         "教練查詢":coach_query_page,"營運總覽":dashboard_page,
+         "教練查詢":coach_query_page,"排班管理":scheduling_page,"營運總覽":dashboard_page,
          "財務平台":finance_platform_page,"系統管理平台":system_admin_platform_page}[page](me)
 except Exception as exc:
     st.error(f"讀取資料時發生錯誤：{exc}")

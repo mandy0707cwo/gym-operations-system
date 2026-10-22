@@ -12,6 +12,8 @@ def sidebar_pages(role):
     if role not in VALID_ROLES:
         return []
     pages = ["每日執行登錄", "客戶管理", "購買及分期", "教練查詢"]
+    if role in ("coach", "manager", "admin"):
+        pages.append("排班管理")
     if role in ("manager", "admin"):
         pages.append("營運總覽")
     if role == "admin":
