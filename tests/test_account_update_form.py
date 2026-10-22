@@ -228,10 +228,10 @@ class AccountUpdateFormTests(unittest.TestCase):
         self.assertEqual({n for n in before if before[n]!=after[n]},{"account_admin_page","_full_system_backup_bytes"})
         new_backup=next(n for n in new.body if isinstance(n,ast.FunctionDef) and n.name=="_full_system_backup_bytes")
         for n in ast.walk(new_backup):
-            if isinstance(n,ast.Constant) and n.value=="v1.13.30":n.value="v1.13.29"
+            if isinstance(n,ast.Constant) and n.value==(ROOT/"VERSION").read_text().strip():n.value="v1.13.29"
         self.assertEqual(before["_full_system_backup_bytes"],hashlib.sha256(ast.dump(new_backup,include_attributes=False).encode()).hexdigest())
         for name in ("README.md","CHANGELOG.md","SYSTEM_DOCUMENTATION.md"):
-            self.assertTrue((ROOT/name).read_text(encoding="utf-8").startswith("# v1.13.30"))
+            self.assertTrue((ROOT/name).read_text(encoding="utf-8").startswith("# "+(ROOT/"VERSION").read_text().strip()))
 
 
 if __name__=="__main__":

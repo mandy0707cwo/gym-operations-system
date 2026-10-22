@@ -139,8 +139,15 @@ def _render_schedule(me, repo, excel_bytes):
             st.info('本帳號沒有可編輯的教練班表。')
             return
         if role in REVIEWERS:
+            try:
+                usernames=repo.coach_usernames([x['id'] for x in choices])
+            except Exception as exc:
+                st.error(f'教練帳號讀取失敗，請重新載入後再審核：{exc}')
+                return
+            labels={x['id']:f'{str(usernames.get(x["id"]) or "").strip().upper()} {x["display_name"]}'.strip()
+                    for x in choices}
             target = st.selectbox('填寫／審核對象', [x['id'] for x in choices],
-                                  format_func=lambda v: next(x['display_name'] for x in choices if x['id'] == v),
+                                  format_func=lambda v: labels[v],
                                   key='schedule_target_'+me['id'])
         else:
             target = me['id']
@@ -190,8 +197,7 @@ def _render_schedule(me, repo, excel_bytes):
                     except Exception as exc:
                         st.error(f'草稿未確認：{exc}')
                     else:
-                        st.success(f'草稿已確認儲存：{result["saved_days"]}/{result["total_days"]}天，尚未送審。')
-                        st.caption('日期格內尚未按「儲存時段／備註」的輸入，不包含在此次確認中。')
+                        st.toast('草稿已確認儲存。')
                 if st.button('整月送審',type='primary'):
                     send('submit')
             if role=='coach' and state=='submitted':

@@ -6,8 +6,8 @@ from scheduling import ROLES,REVIEWERS,STATES,day_payload,fill_empty,first_day,d
 from schedule_allowance import normalize_allowance
 from schedule_leave import leave_payload,validate_leave,guard_schedule_leave,availability
 
-DEMO_COACHES=[{'id':'demo-a','display_name':'測試教練甲','active':True,'role':'coach'},
-              {'id':'demo-b','display_name':'測試教練乙','active':True,'role':'coach'}]
+DEMO_COACHES=[{'id':'demo-a','username':'demo001','display_name':'測試教練甲','active':True,'role':'coach'},
+              {'id':'demo-b','username':'demo002','display_name':'測試教練乙','active':True,'role':'coach'}]
 
 
 class DemoRepository:
@@ -36,6 +36,9 @@ class DemoRepository:
         self.check()
         if self.me['role']=='coach' and self.me['id']!=coach:raise ValueError('無權查看他人異動紀錄')
         return [deepcopy(x) for x in reversed(self.data['logs']) if x['month_start']==month and x['coach_id']==coach]
+    def coach_usernames(self,coach_ids):
+        self.check()
+        return {x['id']:x.get('username') or '' for x in DEMO_COACHES if x['id'] in coach_ids}
     def status(self,token,cancel=False):
         self.check();key=(self.me['id'],token)
         if key in self.data['receipts']:return deepcopy(self.data['receipts'][key])

@@ -1,0 +1,15 @@
+{
+  "version": "v1.13.31",
+  "base_commit": "fd0d7c2ae32c82a67bb84478a78470008017bd65",
+  "tests_run": 127,
+  "passed": 125,
+  "skipped": 2,
+  "errors": 0,
+  "failures": 0,
+  "successful": true,
+  "seconds": 75.547,
+  "scope": "offline AppTest, fictitious profiles and pure business rules",
+  "production_modified": false,
+  "schema_changed": false,
+  "failed_names": []
+}

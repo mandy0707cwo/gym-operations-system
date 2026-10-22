@@ -118,7 +118,9 @@ class SchedulingUITests(unittest.TestCase):
         self.batch(app)
         before=len(app.session_state['schedule_demo_store']['logs'])
         self.button(app,'儲存草稿').click().run();self.assertFalse(app.exception)
-        self.assertTrue(any('31/31天，尚未送審' in x.value for x in app.success))
+        self.assertFalse(any('草稿已確認儲存' in x.value for x in app.success))
+        self.assertTrue(any(x.value=='草稿已確認儲存。' for x in app.get('toast')))
+        self.assertFalse(any('日期格內尚未按' in x.value for x in app.caption))
         store=app.session_state['schedule_demo_store']
         self.assertEqual(len(store['logs']),before)
         self.assertEqual(store['months'][('demo-a','2026-10-01')]['state'],'draft')

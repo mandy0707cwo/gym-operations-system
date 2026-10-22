@@ -18,6 +18,13 @@ class ScheduleRepository:
         if not all(isinstance(result.get(key),list) for key in ('coaches','months','days','preferences')):
             raise ValueError('整月班表回覆不完整，請重新載入')
         return result
+    def coach_usernames(self,coach_ids):
+        """只讀取當前可選教練的帳號；沿用登入者連線及既有RLS，不以管理金鑰回退。"""
+        ids=list(dict.fromkeys(coach_ids))
+        if not ids:return {}
+        rows=self.paged_rows(lambda:self.client().table('profiles').select('id,username')
+            .in_('id',ids).order('id'))
+        return {x['id']:x.get('username') or '' for x in rows if x['id'] in ids}
     def logs(self,month,coach):
         return self.paged_rows(lambda:self.client().table('staff_schedule_logs').select('*')
             .eq('month_start',month).eq('coach_id',coach).order('created_at',desc=True).order('id'))
