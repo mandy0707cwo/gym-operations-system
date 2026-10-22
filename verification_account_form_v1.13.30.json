@@ -1,0 +1,15 @@
+{
+  "version": "v1.13.30",
+  "base_commit": "85dfd34dc736c7114cfb17f2174ac640e47c2747",
+  "tests_run": 119,
+  "passed": 117,
+  "skipped": 2,
+  "errors": 0,
+  "failures": 0,
+  "successful": true,
+  "seconds": 75.172,
+  "scope": "offline AppTest with fictitious accounts; pure rules; no production writes",
+  "production_modified": false,
+  "changed_financial_records": 0,
+  "failed_names": []
+}

@@ -1289,23 +1289,47 @@ def account_admin_page(me):
         table_rows=[{**x,"role":ROLE_LABELS.get(x["role"],x["role"])} for x in profiles]
         show_table(table_rows, ["username", "display_name", "role", "active", "created_at"])
         labels = {f'{x["display_name"]}｜{x.get("username") or "尚未轉換"}': x for x in profiles}
-        with st.form("account_update"):
-            selected_name = st.selectbox("選擇帳號", list(labels))
-            new_role_label = st.selectbox("權限", ["教練", "共用教練帳號", "主管", "系統管理員"])
-            new_active = st.selectbox("帳號狀態", ["啟用", "停用"])
-            reset_password = st.text_input("重設密碼（留空表示不變；至少 8 碼）", type="password")
-            update_status = st.form_submit_button("更新帳號")
+        # 帳號選擇必須在表單外，切換後才會即時重讀該帳號，而不是連同舊欄位一次送出。
+        account_by_id = {x["id"]: x for x in profiles}
+        selected_id = st.selectbox("選擇帳號", list(account_by_id), index=None,
+            format_func=lambda uid: f'{account_by_id[uid]["display_name"]}｜{account_by_id[uid].get("username") or "尚未轉換"}',
+            key="account_edit_target", placeholder="請選擇要修改的帳號")
+        target = account_by_id.get(selected_id)
+        update_status = False
+        if target is None:
+            st.info("請先選擇帳號，系統會帶入目前的權限與啟用狀態。")
+        elif target.get("role") not in ROLE_LABELS or not isinstance(target.get("active"), bool):
+            st.error("此帳號的權限或狀態資料無效，請先查核；不會套用預設值或更新帳號。")
+        else:
+            # 使用帳號ID及目前資料作為表單版本，避免切換帳號或重新載入時沿用舊欄位。
+            form_version = f'{target["id"]}_{target["role"]}_{target["active"]}_{target.get("username")}_{target.get("display_name")}_{st.session_state.get("account_edit_revision", 0)}'
+            with st.form(f"account_update_{form_version}", enter_to_submit=False):
+                c1, c2 = st.columns(2)
+                c1.text_input("目前登入帳號", value=target.get("username") or "尚未轉換", disabled=True)
+                c2.text_input("目前顯示姓名", value=target.get("display_name") or "", disabled=True)
+                role_options = list(ROLE_LABELS.values())
+                new_role_label = st.selectbox("權限", role_options,
+                    index=role_options.index(ROLE_LABELS[target["role"]]), key=f"account_edit_role_{form_version}")
+                new_active = st.selectbox("帳號狀態", ["啟用", "停用"],
+                    index=0 if target["active"] else 1, key=f"account_edit_active_{form_version}")
+                reset_password = st.text_input("重設密碼（留空表示不變；至少 8 碼）", type="password",
+                    key=f"account_edit_password_{form_version}")
+                st.caption("切換帳號會放棄尚未送出的修改；重設密碼不會帶到另一個帳號。")
+                update_status = st.form_submit_button("更新帳號")
         if update_status:
-            target = labels[selected_name]
-            if target["id"] == me["id"] and new_active == "停用":
+            role_values = {label: role for role, label in ROLE_LABELS.items()}
+            if new_role_label not in role_values or new_active not in ("啟用", "停用"):
+                st.error("權限或帳號狀態無效，未更新帳號。")
+            elif target["id"] == me["id"] and new_active == "停用":
                 st.error("不可停用目前登入的管理員帳號。")
             elif reset_password and len(reset_password) < 8:
                 st.error("重設密碼至少需要 8 碼。")
             else:
                 try:
-                    role_value={"教練":"coach","共用教練帳號":"shared_coach","主管":"manager","系統管理員":"admin"}[new_role_label]
+                    role_value=role_values[new_role_label]
                     admin.table("profiles").update({"role":role_value,"active":new_active=="啟用"}).eq("id",target["id"]).execute()
                     if reset_password: admin.auth.admin.update_user_by_id(target["id"], {"password":reset_password})
+                    st.session_state["account_edit_revision"] = st.session_state.get("account_edit_revision", 0) + 1
                     st.success("帳號與權限已更新。")
                     st.rerun()
                 except Exception as exc:
@@ -2015,7 +2039,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.29"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.30"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰、Streamlit Secrets及私有操作收據；完整還原須另有PostgreSQL資料庫備份"},
