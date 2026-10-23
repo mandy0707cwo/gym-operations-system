@@ -13,7 +13,7 @@ def leave_page(me,repo,month,data):
     reviewer=me['role'] in REVIEWERS
     title='請假登錄' if reviewer else '我的請假'
     if st.session_state.pop('_leave_reset_'+me['id'],False):
-        st.session_state.pop('leave_selection_'+me['id'],None)
+        st.session_state.pop('leave_selection_'+me['id']+'_v34',None)
     def stay():st.session_state['_schedule_force_tab_'+me['id']]=title
     def reset_confirmed():
         st.session_state['_leave_reset_'+me['id']]=True
@@ -53,11 +53,15 @@ def leave_page(me,repo,month,data):
         if not coaches:return
         target=st.selectbox('請假教練',[x['id'] for x in coaches],format_func=names.get,key='leave_coach_'+me['id'],on_change=stay)
         if target not in {x['id'] for x in coaches}:st.error('請假對象無效');return
-        options={'新增請假':None}
+        # ID仍為選擇值；畫面只顯示日期、時段及假別，不能以顯示文字當資料識別。
+        options={None:None}
+        labels={None:'新增請假'}
         for x in records:
             if x['coach_id']==target and x['state']=='active':
-                options[f'{x["work_date"]} {x["start_time"][:5]}–{x["end_time"][:5]} {LEAVE_TYPES[x["leave_kind"]]}（{x["id"]}）']=x
-        selected=st.selectbox('新增／修改紀錄',list(options),key='leave_selection_'+me['id'],on_change=stay)
+                options[x['id']]=x
+                labels[x['id']]=f'{x["work_date"]} {x["start_time"][:5]}–{x["end_time"][:5]} {LEAVE_TYPES[x["leave_kind"]]}'
+        selected=st.selectbox('新增／修改紀錄',list(options),format_func=labels.get,
+            key='leave_selection_'+me['id']+'_v34',on_change=stay)
         if selected not in options:st.error('請假紀錄無效');return
         old=options[selected];rev=old['revision'] if old else 0
         epoch=st.session_state.get('_leave_epoch_'+me['id'],0)

@@ -1,0 +1,20 @@
+{
+  "version": "v1.13.34",
+  "base_commit": "1ac301c2376f53a263ac8f06e8c84a17b2053738",
+  "verified_at_taipei": "2026-10-23T22:18:00.652267+08:00",
+  "production_modified": false,
+  "offline": {
+    "tests": 142,
+    "passed": 140,
+    "skipped": [
+      "test_daily_write_payloads_unchanged (test_navigation_platforms.NavigationTests.test_daily_write_payloads_unchanged): 未附歷史快照；此比較需在發布工作區完成。",
+      "test_formal_functions_outside_navigation_are_unchanged (test_navigation_platforms.NavigationTests.test_formal_functions_outside_navigation_are_unchanged): 未附歷史快照；此比較需在發布工作區完成。"
+    ],
+    "errors": 0,
+    "failures": 0,
+    "successful": true,
+    "seconds": 89.75,
+    "failed_names": []
+  },
+  "successful": true
+}

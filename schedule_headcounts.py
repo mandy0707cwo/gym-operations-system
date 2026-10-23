@@ -79,8 +79,9 @@ def headcounts(coaches,data,month,slots,window=None):
         if start is None:
             if source!='other':raise ValueError('核准班別缺少上班時段')
             group=summary_group(source)
-            item={'available':None,'partial':True,'coach':coach,'name':names.get(coach,months[coach]['coach_name']),
-                'shift':SHIFT_LABELS[source],'scheduled':'未填時段','remaining':'無法判斷','status':'待確認：未填上班時段'}
+            item={'available':False if row.get('special_full_off') else None,'partial':not row.get('special_full_off',False),'coach':coach,'name':names.get(coach,months[coach]['coach_name']),
+                'shift':SHIFT_LABELS[source],'scheduled':'未填時段','remaining':'無' if row.get('special_full_off') else '無法判斷',
+                'status':'整日特殊假別不上班' if row.get('special_full_off') else '待確認：未填上班時段'}
         else:
             a,b=minute(start),minute(end)
             if a>=b:raise ValueError('核准上班時段無效')
@@ -122,5 +123,9 @@ def headcount_details(result,selection):
     if not isinstance(selection,dict) or selection.get('group') not in GROUPS or selection.get('date') not in {x['date'] for x in result['headers']}:
         raise ValueError('請選擇本月有效的日期與班別')
     return [{'日期':date.fromisoformat(selection['date']),'教練':x['name'],'班別':x['shift'],
-             '原排上班時段':x['scheduled'],'扣除不在班後時段':x['remaining'],'狀況':x['status']}
+             '原排上班時段':x['scheduled'],'實際上班時段':x['remaining'],
+             '請假':('待確認：未填上班時段' if x['available'] is None else
+                     '特殊假別不上班' if x['status']=='整日特殊假別不上班' else
+                     '無請假' if x['remaining']==x['scheduled'] else
+                     '整段請假' if x['remaining']=='無' else '部分請假')}
             for x in sorted(result['staff'].get((selection['date'],selection['group']),[]),key=lambda x:(x['name'],x['coach']))]

@@ -29,7 +29,15 @@ class ScheduleRepository:
         return self.paged_rows(lambda:self.client().table('staff_schedule_logs').select('*')
             .eq('month_start',month).eq('coach_id',coach).order('created_at',desc=True).order('id'))
     def command(self,token,args):
-        return object_result(self.client().rpc('staff_schedule_command',dict(p_operation_id=token,**args)).execute())
+        rpc='staff_schedule_manager_confirm' if args.get('p_action')=='manager_confirm' else 'staff_schedule_command'
+        return object_result(self.client().rpc(rpc,dict(p_operation_id=token,**args)).execute())
+    def special_load(self,month):
+        result=object_result(self.client().rpc('staff_schedule_special_snapshot',{'p_month':month}).execute())
+        if type(result.get('revision')) is not int or not isinstance(result.get('days'),list):
+            raise ValueError('特殊假別回覆不完整，請確認v1.13.32資料庫升級')
+        return result
+    def special_save(self,token,args):
+        return object_result(self.client().rpc('staff_schedule_special_save',dict(p_operation_id=token,**args)).execute())
     def status(self,token,cancel=False):
         return object_result(self.client().rpc('staff_schedule_operation',{'p_operation_id':token,'p_cancel':cancel}).execute())
     def allowance_load(self,month):

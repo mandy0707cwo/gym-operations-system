@@ -14,6 +14,7 @@ def summary_frame(coaches,data,month,slots):
     columns=['教練']+[f'{d.day:02d} '+ '一二三四五六日'[d.weekday()] for d in dates_in_month(month)]
     frame=pd.DataFrame(approved_matrix(coaches,data,month,slots,compact=True),columns=columns)
     frame['教練']=frame['教練'].map(markdown_text)
+    for column in frame.columns[1:]:frame[column]=frame[column].map(markdown_text)
     frame.columns=pd.MultiIndex.from_tuples([('教練','')]+[(f'{d.day:02d}','週'+'一二三四五六日'[d.weekday()]) for d in dates_in_month(month)])
     return frame
 

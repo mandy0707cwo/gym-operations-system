@@ -55,7 +55,9 @@ def allowance_totals(record,days,month,coach):
         if first_day(d)!=first_day(month) or d in seen:raise ValueError('排班日期跨月或重複')
         seen.add(d);code=row['shift_code']
         if code not in SHIFT_LABELS:raise ValueError('排班含未知班別')
-        used+=normalized['deduct_units'].get(code,0)
+        units=row.get('special_deduct_units',normalized['deduct_units'].get(code,0))
+        if type(units) is not int or units not in (0,1,2):raise ValueError('特殊假別扣額度不正確')
+        used+=units
     return {'total_units':normalized['total_units'],'used_units':used,
             'remaining_units':normalized['total_units']-used,'unclassified_days':unknown}
 

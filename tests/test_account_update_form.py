@@ -227,6 +227,9 @@ class AccountUpdateFormTests(unittest.TestCase):
         self.assertEqual(set(before),set(after))
         self.assertEqual({n for n in before if before[n]!=after[n]},{"account_admin_page","_full_system_backup_bytes"})
         new_backup=next(n for n in new.body if isinstance(n,ast.FunctionDef) and n.name=="_full_system_backup_bytes")
+        from backup_contract_v32 import normalize_backup_source
+        # v32只新增兩個特殊假別備份來源及排序／範圍說明，不改財務計算。
+        new_backup=ast.parse(normalize_backup_source(ast.get_source_segment((ROOT/'app.py').read_text(encoding='utf-8'),new_backup))).body[0]
         for n in ast.walk(new_backup):
             if isinstance(n,ast.Constant) and n.value==(ROOT/"VERSION").read_text().strip():n.value="v1.13.29"
         self.assertEqual(before["_full_system_backup_bytes"],hashlib.sha256(ast.dump(new_backup,include_attributes=False).encode()).hexdigest())

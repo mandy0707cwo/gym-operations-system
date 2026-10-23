@@ -11,8 +11,7 @@ def encoded(value):return json.dumps(value,ensure_ascii=False).replace("'","''")
 
 class LeaveDatabaseTests(unittest.TestCase):
     def setUp(self):
-        n=int(sql("select count(*) from public.staff_schedule_months where month_start>=date '2200-01-01'")[0])
-        self.month=f'{2200+n//12:04d}-{n%12+1:02d}-01'
+        self.month=sql("select coalesce((max(month_start)+interval '1 month')::date,date '2200-01-01') from public.staff_schedule_months where month_start>=date '2200-01-01'")[0]
         self.day=sql(f"select min(d::date) from generate_series('{self.month}'::date,'{self.month}'::date+interval '6 days',interval '1 day') d where extract(isodow from d)<6")[0]
         self.off=sql(f"select min(d::date) from generate_series('{self.month}'::date,'{self.month}'::date+interval '6 days',interval '1 day') d where extract(isodow from d)=7")[0]
         self.command('default',{'base_shift':'A'},0)

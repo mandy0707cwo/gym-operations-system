@@ -3,6 +3,7 @@ from uuid import uuid4
 from copy import deepcopy
 from scheduling import dates_in_month,day_payload
 from schedule_demo_repository import DemoRepository,DEMO_COACHES
+from schedule_allowance import DEDUCT_UNITS
 
 
 def load_examples(state,month):
@@ -12,6 +13,9 @@ def load_examples(state,month):
         raise ValueError('工作階段已有排班資料，不覆蓋；請另開新的測試頁再載入範例。')
     temporary={'schedule_demo_store':deepcopy(repo.data)}
     repo=DemoRepository(temporary,admin)
+    if not repo.allowance_load(month):
+        repo.allowance_save(str(uuid4()),{'p_month':month,'p_expected_revision':0,
+            'p_payload':{'holidays':[],'deduct_units':dict(DEDUCT_UNITS),'note':'虛構範例額度，非正式假日日曆'}})
     working=[x for x in dates_in_month(month) if x.weekday()!=6]
     for i,person in enumerate(DEMO_COACHES):
         coach=DemoRepository(temporary,person);target=person['id'];rev=0

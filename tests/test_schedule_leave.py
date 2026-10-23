@@ -20,6 +20,10 @@ B={'id':'demo-b','display_name':'測試教練乙','role':'coach'}
 
 def seed(store):
     repo=DemoRepository(store,ADMIN)
+    # v35：一般回歸情境先以真正管理者操作核定額度；未核定阻擋另有專用測試。
+    if not repo.allowance_load(MONTH):
+        repo.allowance_save(str(uuid4()),{'p_month':MONTH,'p_expected_revision':0,
+            'p_payload':{'holidays':[],'deduct_units':dict(DEDUCT_UNITS),'note':'虛構測試核定'}})
     for me in (A,B):
         coach=DemoRepository(store,me)
         def cmd(action,payload,rev):return coach.command(str(uuid4()),{'p_coach_id':me['id'],'p_month':MONTH,'p_action':action,'p_expected_revision':rev,'p_payload':payload})
@@ -48,7 +52,7 @@ class LeaveRulesTests(unittest.TestCase):
         self.assertEqual(set(peer['availability'][0]),{'coach_id','work_date','start_time','end_time','minutes'})
         with self.assertRaisesRegex(ValueError,'僅主管'):DemoRepository(store,A).leave_save(str(uuid4()),args())
         before=deepcopy(repo.load(MONTH));self.assertEqual(before,repo.load(MONTH))
-        quota=repo.allowance_save(str(uuid4()),{'p_month':MONTH,'p_expected_revision':0,'p_payload':{'holidays':[],'deduct_units':DEDUCT_UNITS,'note':'測試'}})
+        quota=repo.allowance_save(str(uuid4()),{'p_month':MONTH,'p_expected_revision':repo.allowance_load(MONTH)['revision'],'p_payload':{'holidays':[],'deduct_units':DEDUCT_UNITS,'note':'測試'}})
         rows=allowance_overview(quota,repo.load(MONTH),MONTH)
         self.assertEqual(rows[0]['已排休（天）'],0)
     def test_overlap_off_hours_unapproved_and_changes_guard(self):
@@ -127,7 +131,11 @@ class LeaveUITests(unittest.TestCase):
         app.session_state['schedule_tab_'+actor]=label;app.run();self.assertFalse(app.exception)
     def button(self,app,label):return next(x for x in app.button if x.label==label)
     def test_quota_confirm_overview_and_preview_not_saved(self):
-        app=self.app();self.tab(app,'demo-admin','排休額度設定')
+        app=self.app()
+        # 本例專門模擬舊班表存在但尚未核定本月額度，不放寬一般教練操作的前置條件。
+        store=app.session_state['schedule_demo_store'];store['allowances'].pop(MONTH)
+        app.session_state['schedule_demo_store']=store
+        self.tab(app,'demo-admin','排休額度設定')
         self.assertTrue(any('尚未核定' in x.value for x in app.info))
         self.button(app,'試算額度（不儲存）').click().run()
         self.assertTrue(any('本次修改試算：5天' in x.value for x in app.info))
@@ -160,7 +168,9 @@ class LeaveUITests(unittest.TestCase):
         self.assertEqual(app.dataframe[0].value['假別'][0],'病假')
         self.choose(app,'測試身分','測試主管');self.tab(app,'demo-manager','請假登錄')
         options=next(x for x in app.selectbox if x.label=='新增／修改紀錄').options
-        self.choose(app,'新增／修改紀錄',options[1])
+        leave_id=next(iter(app.session_state['schedule_demo_store']['leaves']))
+        self.assertNotIn(leave_id,' '.join(options))
+        self.choose(app,'新增／修改紀錄',leave_id)
         next(x for x in app.text_input if x.label=='登錄／修改原因').set_value('作廢測試')
         app.checkbox[0].check();self.button(app,'作廢所選請假').click().run();self.assertFalse(app.exception)
         self.assertEqual(next(iter(app.session_state['schedule_demo_store']['leaves'].values()))['state'],'void')

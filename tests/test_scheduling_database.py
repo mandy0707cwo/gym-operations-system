@@ -45,11 +45,13 @@ class SchedulingDatabaseTests(unittest.TestCase):
     def test_review_lock_withdraw_return_and_reason(self):
         self.fill();self.send('submit')
         with self.assertRaisesRegex(RuntimeError,'不可修改'):self.send('fill')
-        self.send('withdraw');self.send('submit');self.send('approve',who=ADMIN)
+        with self.assertRaisesRegex(RuntimeError,'只有主管'):self.send('withdraw')
+        self.send('approve',who=ADMIN)
         with self.assertRaises(RuntimeError):self.send('withdraw')
         with self.assertRaisesRegex(RuntimeError,'原因'):self.send('return',who=ADMIN)
         self.send('return',{'reason':'測試退回'},who=ADMIN)
-        self.send('save',{'work_date':self.month,'shift_code':'full_off'})
+        with self.assertRaisesRegex(RuntimeError,'只有主管'):self.send('save',{'work_date':self.month,'shift_code':'full_off'})
+        self.send('save',{'work_date':self.month,'shift_code':'full_off','reason':'主管更正'},who=ADMIN)
         self.assertTrue(int(actor(f"select count(*) from public.staff_schedule_logs where month_start='{self.month}'"))>0)
     def test_other_coach_cannot_write_or_review_or_read_other_logs(self):
         self.fill()
@@ -106,20 +108,22 @@ class SchedulingDatabaseTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'權限|停用'):actor('select * from public.staff_schedule_days')
                 with self.assertRaisesRegex(RuntimeError,'權限|停用'):actor('select * from public.staff_schedule_logs')
             finally:sql(f"update public.profiles set active=true,role='coach' where id='{COACH}'")
-    def test_manager_correction_requires_reason_and_preserves_audit(self):
+    def test_manager_correction_uses_note_without_separate_reason_and_preserves_audit(self):
         self.fill();self.send('submit')
         sql(f"update public.profiles set role='manager' where id='{ADMIN}'")
         try:
             self.send('approve',who=ADMIN)
-            with self.assertRaisesRegex(RuntimeError,'原因'):self.send('save',{'work_date':self.month,'shift_code':'public_off'},who=ADMIN)
-            self.send('save',{'work_date':self.month,'shift_code':'public_off','reason':'主管更正'},who=ADMIN)
+            self.send('save',{'work_date':self.month,'shift_code':'public_off','note':'主管更正備註'},who=ADMIN)
+            self.assertEqual(sql(f"select note from public.staff_schedule_days where coach_id='{COACH}' and work_date='{self.month}'")[0],'主管更正備註')
+            self.assertEqual(sql(f"select reason from public.staff_schedule_logs where coach_id='{COACH}' and month_start='{self.month}' and action='save' order by created_at desc limit 1")[0],'主管更正備註')
             self.assertEqual(sql(f"select state from public.staff_schedule_months where coach_id='{COACH}' and month_start='{self.month}'")[0],'approved')
         finally:sql(f"update public.profiles set role='admin' where id='{ADMIN}'")
 
     def test_valid_custom_half_day_other_and_all_off_types(self):
         for seq,code in enumerate(('C','half_off','other','full_off','weekend','regular_off','public_off'),1):
             payload={'work_date':self.month[:8]+f'{seq:02d}','shift_code':code,'start_time':'10:00','end_time':'14:30','note':'測試說明'}
-            self.send('save',payload)
+            if code=='public_off':self.send('save',dict(payload,reason='主管設定公休'),who=ADMIN)
+            else:self.send('save',payload)
         rows=sql(f"select count(*) from public.staff_schedule_days where coach_id='{COACH}' and month_start='{self.month}'")
         self.assertEqual(rows[0],'7')
         self.assertEqual(sql(f"select count(*) from public.staff_schedule_days where coach_id='{COACH}' and month_start='{self.month}' and start_time is null")[0],'4')

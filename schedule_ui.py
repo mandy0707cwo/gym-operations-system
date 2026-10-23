@@ -10,6 +10,9 @@ from schedule_allowance_ui import allowance_banner,allowance_settings
 from schedule_leave_ui import leave_page
 from schedule_summary import summary_frame,colored_summary_frame,custom_time_rows,unavailable_rows
 from schedule_headcount_ui import render_headcounts
+from schedule_special import active_specials,special_projection,combined_slots
+from schedule_draft import CoachDraft
+from schedule_allowance import days_text
 
 
 def render_schedule(me, repo, excel_bytes=None):
@@ -41,6 +44,10 @@ def _render_schedule(me, repo, excel_bytes):
     pending = PendingSchedule(st.session_state, repo, me['id'])
     if pending.data:
         st.warning('上一筆排班操作尚未確認，請先查核、重試或取消。')
+        original_args=pending.data['args']
+        def clear_confirmed_preview():
+            if original_args.get('p_action') in ('draft','draft_submit'):
+                st.session_state.pop(f'_coach_draft_{me["id"]}_{original_args["p_month"]}',None)
         with st.expander('原操作內容'):
             st.code(serializable(pending.data['args']), language='json')
         try:
@@ -48,10 +55,12 @@ def _render_schedule(me, repo, excel_bytes):
                 if st.button('查核原排班操作'):
                     result = pending.resolve()
                     st.info('查核結果：'+result['state'])
+                    if result['state']=='completed':clear_confirmed_preview()
                     if result['state'] != 'not_found':
                         st.rerun()
                 if st.button('原碼重試排班操作'):
                     pending.send(pending.data['args'])
+                    clear_confirmed_preview()
                     st.rerun()
                 if st.button('取消未確認排班操作'):
                     pending.resolve(cancel=True)
@@ -61,7 +70,10 @@ def _render_schedule(me, repo, excel_bytes):
         if pending.data:
             return
     try:
-        data = repo.load(month)
+        raw_data = repo.load(month)
+        special_snapshot=repo.special_load(month)
+        specials=active_specials(special_snapshot,month)
+        data=special_projection(raw_data,specials)
     except Exception as exc:
         st.error(f'班表讀取失敗，未顯示空白假資料：{exc}')
         return
@@ -75,12 +87,14 @@ def _render_schedule(me, repo, excel_bytes):
         st.info('目前沒有有效教練。')
         return
     months = {x['coach_id']: x for x in data['months']}
-    days = {(x['coach_id'], x['work_date'][:10]): x for x in data['days']}
+    days = {(x['coach_id'], x['work_date'][:10]): x for x in raw_data['days']}
     prefs = {x['coach_id']: x['base_shift'] for x in data['preferences']}
     role = me['role']
     editor_title = '排班審核' if role in REVIEWERS else '我的排班'
     leave_title='請假登錄' if role in REVIEWERS else '我的請假'
     tab_labels=[editor_title,'已核准班表']+(['排休額度設定'] if role in REVIEWERS else [])+[leave_title]
+    tab_key='schedule_tab_'+me['id']
+    if st.session_state.get(tab_key) not in (None,*tab_labels):st.session_state.pop(tab_key,None)
     forced=st.session_state.pop('_schedule_force_tab_'+me['id'],None)
     if forced in tab_labels:st.session_state['schedule_tab_'+me['id']]=forced
     tabs = st.tabs(tab_labels,
@@ -102,18 +116,14 @@ def _render_schedule(me, repo, excel_bytes):
                 key='schedule_summary_view_'+me['id'],on_change=stay_on_approved)
             if view not in ('班別人數','教練明細'):
                 st.info('請選擇班別人數或教練明細。');return
-            try:slots=repo.leave_load(month)['availability']
+            try:slots=combined_slots(raw_data,repo.leave_load(month)['availability'],specials)
             except Exception as exc:
                 st.error(f'請假時段讀取失敗，暫不顯示可能缺漏的共同班表：{exc}');return
             names={x['id']:x['display_name'] for x in coaches}
-            if view=='班別人數':render_headcounts(me,coaches,approved,month,slots)
+            if view=='班別人數':render_headcounts(me,coaches,approved_data(special_projection(raw_data,specials,for_headcount=True)),month,slots)
             else:
-                st.caption('每列一位教練、每欄一天；日期在上、星期在下。可水平捲動查看整月。')
                 frame=colored_summary_frame(coaches,approved,month,slots)
                 st.table(frame,hide_index=True,width=1000,height=min(500,max(160,90+len(frame)*40)))
-                st.caption('藍色底＝例假，依當天已核准班別顯示，不是只看星期日。')
-            st.caption('A＝09:00–18:00；B＝12:00–21:00。空白不代表休假；排班不等於實際出勤或執行時數。')
-            st.caption(('＊＝另有不在班時段。' if view=='教練明細' else '＊＝半日休、其他或部分不在班。')+'展開下方查看完整時間；不公開假別、原因。班表退回後暫不列入總表。')
             with st.expander('查看上班與不在班時段'):
                 custom=custom_time_rows(coaches,approved)
                 if custom:
@@ -157,29 +167,54 @@ def _render_schedule(me, repo, excel_bytes):
         name = next(x['display_name'] for x in choices if x['id'] == target)
         record = months.get(target, {'state': 'draft', 'revision': 0})
         state, revision = record['state'], record['revision']
-        st.caption(f'{name}｜{STATES[state]}｜點日期直接更改班別')
-        allowance_banner(me,repo,month,target,data['days'])
+        editable = can_edit(role, me['id'], target, state,record.get('coach_locked'))
+        draft=CoachDraft(st.session_state,me['id'],month,revision) if role=='coach' else None
+        view_days=data['days']
+        if draft:
+            view_days=special_projection({'days':draft.merged(raw_data['days'])},specials)['days']
+        quota=allowance_banner(me,repo,month,target,view_days)
+        quota_ok=quota is not None
+        totals=draft.totals(quota,raw_data['days'],specials) if draft and quota_ok else None
+        over=bool(totals and totals['remaining_units']<0)
+        if role=='coach':
+            if not quota_ok:
+                st.warning('本月排休額度尚未核定，暫不能預排、儲存草稿或送出。')
+            if draft.conflict:
+                st.error('班表已由其他操作更新，本頁預排未覆蓋後端；請放棄本頁預排後重新載入。')
+            if over:st.error(f'已超出排休額度{days_text(-totals["remaining_units"])}天，請調整後再儲存草稿或送出。')
+            editable=editable and quota_ok and not draft.conflict
+            if draft.dirty:
+                st.caption('本頁有尚未儲存的預排，離開或重新整理可能遺失。按「儲存草稿」才正式保存；確認送出後鎖定。')
+                if st.button('放棄本頁未儲存預排'):
+                    draft.clear();st.rerun()
+            if editable:
+                days.update({(target,x['work_date']):x for x in draft.merged(raw_data['days'])})
+        hint=('等待核定排休額度' if role=='coach' and not quota_ok else
+              '本頁預排版本已過期，請重新載入' if draft and draft.conflict else
+              '點日期更改班別' if editable else '本月已鎖定，修改請洽主管或管理者')
+        st.caption(f'{name}｜{STATES[state]}｜{hint}')
         if record.get('review_reason'):
             st.info('審核說明：'+record['review_reason'])
-        if role=='coach' and state=='submitted':
-            st.info('已送審，等待主管或系統管理員審核。核准後才會顯示於「已核准班表」；需修改可先撤回。')
-        elif role=='coach' and state=='approved':
-            st.info('班表已核准並公開於「已核准班表」。若需更改，請主管或系統管理員先退回。')
-        editable = can_edit(role, me['id'], target, state)
-        reason = st.text_input('主管／管理員異動原因', key=f'schedule_reason_{me["id"]}_{month}_{target}',
-                               max_chars=1000) if role in REVIEWERS else ''
-
+        if role=='coach' and record.get('coach_locked'):
+            st.info('本月已確認儲存，只有主管及管理者可以修改；不提供教練撤回或退回解鎖。核准後會顯示於「已核准班表」。')
         def send(action, payload=None):
             if action in ('save', 'fill', 'default','apply') and not editable:
                 st.error('目前班表不可修改。')
                 return
-            if role in REVIEWERS and action in ('save', 'fill', 'default','apply', 'return') and not reason.strip():
-                st.error('主管或管理員異動須填寫原因。')
-                return
+            if draft and action in ('save','apply'):
+                try:draft.stage(action,payload or {},raw_data['days'])
+                except ValueError as exc:st.error(str(exc));return
+                st.rerun()
+            if draft and action in ('draft','draft_submit') and (not editable or over):
+                st.error('額度未核定、班表已鎖定／更新或已超額，不能儲存或送出。');return
+            # 單日班別與備註一次送出，不另要求全頁異動原因。
+            values = dict(payload or {})
+            values['reason'] = values.get('note', '') if action == 'save' else ''
             args = {'p_coach_id': target, 'p_month': month, 'p_expected_revision': revision,
-                    'p_action': action, 'p_payload': dict(payload or {}, reason=reason)}
+                    'p_action': action, 'p_payload': values}
             try:
                 pending.send(args)
+                if draft and action in ('draft','draft_submit'):draft.clear()
                 st.session_state['_schedule_flash'] = True
                 st.rerun()
             except Exception as exc:
@@ -189,25 +224,19 @@ def _render_schedule(me, repo, excel_bytes):
 
         # 提前顯示，避免小視窗必須捲到月曆最下方才能儲存或送審。
         with st.container(horizontal=True):
-            if role=='coach' and state in ('draft','returned'):
-                if st.button('儲存草稿',help='日排班會即時儲存；此鍵重新讀取並確認已儲存的日期，不送審。自訂時段／備註須先按日期格內的儲存。'):
-                    try:
-                        result=confirm_saved_draft(repo,month,target,revision,
-                            [x for x in data['days'] if x['coach_id']==target])
-                    except Exception as exc:
-                        st.error(f'草稿未確認：{exc}')
-                    else:
-                        st.toast('草稿已確認儲存。')
-                if st.button('整月送審',type='primary'):
-                    send('submit')
-            if role=='coach' and state=='submitted':
-                if st.button('撤回待審班表'):
-                    send('withdraw')
+            if role=='coach' and can_edit(role,me['id'],target,state,record.get('coach_locked')):
+                if st.button('儲存草稿',disabled=not editable or over,
+                    help='可以先儲存尚未排完整月的班表；不送審、不鎖定。超額或尚未核定額度不能儲存。'):
+                    send('draft',draft.payload())
+                ack=st.checkbox('已核對整月班表，確認後由主管及管理者修改',key=f'schedule_confirm_{me["id"]}_{month}_{revision}_{draft.data["epoch"]}')
+                if st.button('確認送出',type='primary',disabled=not ack or not editable or over,
+                    help='須填滿整月且未超額。預排與送審一次完成；送出後整月鎖定，不得撤回。自訂時段需先加入預排。'):
+                    send('draft_submit',draft.payload())
             if role in REVIEWERS:
                 if st.button('核准班表',disabled=state!='submitted'):
                     send('approve')
-                if st.button('退回修改',disabled=state not in ('submitted','approved') or not reason.strip()):
-                    send('return')
+                if state in ('draft','returned') and st.button('代填完成並核准'):
+                    send('manager_confirm')
 
         with st.container(horizontal=True, vertical_alignment='bottom'):
             base = st.selectbox('預設班別', ['A', 'B'], index=['A', 'B'].index(prefs[target]) if target in prefs else None,
@@ -218,7 +247,7 @@ def _render_schedule(me, repo, excel_bytes):
                 send('apply', {'base_shift': base})
         with st.sidebar.expander('班別與操作說明'):
             st.caption('A班09:00–18:00；B班12:00–21:00。套用只補空白，不覆蓋手動修改。週日預設例假，可自行更改。*表示尚未儲存的週日預設。格內簡稱：休＝整日休、半＝半日休、例＝例假、公＝公休、他＝其他。既有週末僅保留歷史顯示，不提供新選擇。')
-            st.caption('A／B及整日休假選好即儲存；C、半日休須填時段，其他須填說明後儲存。本版不跨日，不計薪資或實際執行時數；送審後不能直接改，無跨月鎖。')
+            st.caption('教練須待額度核定後預排；選班別只暫留本頁，C／半日休須加入預排。按儲存草稿才保存，確認送出後鎖定；超額不能儲存或送出。主管及管理者仍可直接更正。')
         header = st.container(horizontal=True, gap='xsmall')
         for label in ['一', '二', '三', '四', '五', '六', '日']:
             header.container(width=80).caption('週'+label)
@@ -231,35 +260,42 @@ def _render_schedule(me, repo, excel_bytes):
                         continue
                     saved = days.get((target, d.isoformat()))
                     current = display_day(d, saved)
+                    special=specials.get(d.isoformat())
                     code = current.get('shift_code')
+                    day_editable=editable and (role in REVIEWERS or (not special and code!='public_off'))
                     label = SHIFT_LABELS.get(code, '未填')
                     short = {'A':'A','B':'B','C':'C','full_off':'休','half_off':'半',
                              'weekend':'週','regular_off':'例','public_off':'公','other':'他'}.get(code,'未')
                     if current.get('preview') and code:
                         label += '＊'
                         short += '*'
-                    prefix = f'schedule_day_{me["id"]}_{target}_{d.isoformat()}_{revision}'
+                    if special:label=special['label'];short='特'
+                    prefix = f'schedule_day_{me["id"]}_{target}_{d.isoformat()}_{revision}'+(f'_preview_{draft.data["epoch"]}' if draft else '')
                     # 格內表單只有便宜的顯示運算；開關選單不額外載入資料。
                     with st.popover(f'{d.day} {short}', key=prefix, width='stretch', wrap=False,
                                     help=f'{d.isoformat()}｜{label}'):
                         st.caption(f'{name}｜{d.isoformat()}')
+                        if special:
+                            st.info('統一特殊假別：'+special['label']+('（整日）' if not special.get('start_time') else f' {special["start_time"][:5]}–{special["end_time"][:5]}'))
+                            st.caption('此為舊版統一設定，原班別仍保留；本版不再提供新增特殊假別設定。')
                         shift_key = prefix+'_shift'
 
                         def mark_choice(key=shift_key):
                             st.session_state['_schedule_quick_choice'] = (key, st.session_state[key])
 
                         if saved and code=='weekend':st.caption('既有週末紀錄保留；若要修改，請改選其他班別。')
-                        shift = st.selectbox('班別', EDITABLE_SHIFTS,
-                                             index=EDITABLE_SHIFTS.index(code) if saved and code in EDITABLE_SHIFTS else None,
+                        options=tuple(x for x in EDITABLE_SHIFTS if role in REVIEWERS or x!='public_off')
+                        shift = st.selectbox('班別', options,
+                                             index=options.index(code) if saved and code in options else None,
                                              placeholder='請選擇班別', format_func=SHIFT_LABELS.get,
-                                             key=shift_key, disabled=not editable, on_change=mark_choice)
+                                             key=shift_key, disabled=not day_editable, on_change=mark_choice)
                         if shift is not None and shift not in EDITABLE_SHIFTS:
                             st.error('班別無效。')
                             continue
                         event = st.session_state.get('_schedule_quick_choice')
                         if event and event[0] == shift_key:
                             st.session_state.pop('_schedule_quick_choice')
-                            if editable and shift in (*FIXED, 'full_off', 'weekend', 'regular_off', 'public_off'):
+                            if role not in REVIEWERS and day_editable and shift in (*FIXED, 'full_off', 'weekend', 'regular_off', 'public_off'):
                                 send('save', day_payload(d, shift, note=current.get('note', '')))
                         if shift is None:
                             continue
@@ -272,14 +308,14 @@ def _render_schedule(me, repo, excel_bytes):
                             if custom:
                                 pair = st.columns(2)
                                 start = pair[0].time_input('上班時間', value=time.fromisoformat(shown_start) if shown_start else None,
-                                                           step=60, disabled=not editable)
+                                                           step=60, disabled=not day_editable)
                                 end = pair[1].time_input('下班時間', value=time.fromisoformat(shown_end) if shown_end else None,
-                                                         step=60, disabled=not editable)
+                                                         step=60, disabled=not day_editable)
                             else:
                                 start = end = None
                             note = st.text_input('備註／其他班別說明', value=current.get('note', ''),
-                                                 max_chars=1000, disabled=not editable)
-                            if st.form_submit_button('儲存時段／備註', disabled=not editable):
+                                                 max_chars=1000, disabled=not day_editable,key=prefix+'_note_'+shift)
+                            if st.form_submit_button('儲存修改' if role in REVIEWERS else '加入預排', disabled=not day_editable,key=prefix+'_save_'+shift):
                                 try:
                                     payload = day_payload(d, shift, start, end, note)
                                 except ValueError as exc:

@@ -56,8 +56,8 @@ def display_day(d,saved):
     return {'work_date':d.isoformat(),'shift_code':None,'preview':True}
 
 
-def can_edit(role,actor,target,state):
-    return role in REVIEWERS or (role=='coach' and actor==target and state in ('draft','returned'))
+def can_edit(role,actor,target,state,finalized_at=None):
+    return role in REVIEWERS or (role=='coach' and actor==target and state in ('draft','returned') and not finalized_at)
 
 
 def approved_data(data):
@@ -79,7 +79,7 @@ def approved_matrix(coaches,data,month,unavailable=(),compact=False):
             saved=days.get((coach,d.isoformat()))
             label=''
             if saved:
-                code=saved['shift_code'];label=SHIFT_LABELS[code]
+                code=saved['shift_code'];label=saved.get('special_label') or SHIFT_LABELS[code]
                 if not compact and code not in FIXED and saved.get('start_time'):
                     label+=' '+str(saved['start_time'])[:5]+'–'+str(saved['end_time'])[:5]
             marked=False
@@ -102,7 +102,7 @@ def export_rows(coaches,months,days):
         return "'"+text if text.lstrip().startswith(('=','+','-','@')) else text
     return [{'日期':date.fromisoformat(x['work_date'][:10]),
              '教練':safe(names.get(x['coach_id'],status.get(x['coach_id'],{}).get('coach_name','未知'))),
-             '班別':SHIFT_LABELS[x['shift_code']],'上班時段':str(x.get('start_time') or '')[:5],
+             '班別':safe(x.get('special_label') or SHIFT_LABELS[x['shift_code']]),'上班時段':str(x.get('start_time') or '')[:5],
              '下班時段':str(x.get('end_time') or '')[:5],
              '審核狀態':STATES[status[x['coach_id']]['state']],'備註':safe(x.get('note'))}
             for x in sorted(days,key=lambda r:(r['work_date'],r['coach_id']))]

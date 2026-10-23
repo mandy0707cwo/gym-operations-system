@@ -100,7 +100,7 @@ class AllowanceUITests(unittest.TestCase):
         self.choose(app,'測試身分','測試教練甲')
         text='\n'.join(x.value for x in app.markdown)
         self.assertIn('本月可排休 **5天**',text);self.assertIn('剩餘 **5天**',text)
-        key='schedule_day_demo-a_demo-a_2026-10-01_0_shift'
+        key=next(x.key for x in app.selectbox if x.label=='班別' and '2026-10-01_' in x.key)
         app.selectbox(key=key).set_value('full_off').run()
         self.assertIn('已排休 **1天**','\n'.join(x.value for x in app.markdown))
         # 週末已從新排班選單移除；歷史紀錄仍保留原來不扣額度的規則。

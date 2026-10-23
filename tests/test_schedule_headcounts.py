@@ -45,7 +45,9 @@ class HeadcountRulesTests(unittest.TestCase):
         self.assertEqual(cell(headcounts(c,d,MONTH,leaves,(13*60,16*60)))['text'],'0/2＊')
         self.assertEqual(cell(headcounts(c,d,MONTH,leaves,(9*60,10*60)))['text'],'2/2')
         details=headcount_details(result,{'group':'A','date':'2026-10-01'})
-        self.assertEqual(details[0]['扣除不在班後時段'],'09:00–13:00、16:00–18:00')
+        self.assertEqual(details[0]['實際上班時段'],'09:00–13:00、16:00–18:00')
+        self.assertEqual(details[0]['請假'],'部分請假')
+        self.assertNotIn('狀況',details[0]);self.assertNotIn('扣除不在班後時段',details[0])
         self.assertEqual(len(details),2)  # 同名依coach_id區分，不合併。
         self.assertNotIn('私密',str(details));self.assertNotIn('sick',str(details))
     def test_adjacent_overlapping_and_duplicate_leave_union(self):
@@ -97,7 +99,7 @@ class HeadcountRulesTests(unittest.TestCase):
         result=headcounts(c,d,MONTH,[],(540,600))
         self.assertEqual(cell(result,'C')['text'],'—/1＊')
         self.assertIsNone(result['staff'][('2026-10-01','C')][0]['available'])
-        self.assertIn('待確認',headcount_details(result,{'group':'C','date':'2026-10-01'})[0]['狀況'])
+        self.assertIn('待確認',headcount_details(result,{'group':'C','date':'2026-10-01'})[0]['請假'])
     def test_half_day_group_not_changed_by_leave_or_query_and_full_absence_zero(self):
         c,d=fixture();row=next(x for x in d['days'] if x['coach_id']=='e' and x['work_date']=='2026-10-01')
         row.update(day_payload('2026-10-01','half_off','17:00','21:00'))
@@ -105,7 +107,8 @@ class HeadcountRulesTests(unittest.TestCase):
         self.assertEqual(cell(result,'B')['text'],'1/2＊')
         details=headcount_details(result,{'group':'B','date':'2026-10-01'})
         half=next(x for x in details if x['班別']=='半日休')
-        self.assertEqual(half['扣除不在班後時段'],'無')
+        self.assertEqual(half['實際上班時段'],'無')
+        self.assertEqual(half['請假'],'整段請假')
     def test_only_approved_complete_valid_data_and_selection(self):
         c,d=fixture();before=deepcopy(d)
         result=headcounts(c,d,MONTH,[]);self.assertEqual(d,before)
@@ -141,7 +144,7 @@ class HeadcountUITests(unittest.TestCase):
             self.assertFalse(any(x.label=='人數查詢方式' for x in app.selectbox))
             app.session_state['headcount_demo-a_2026-10-01_query']=(780,960)
             app.session_state['_schedule_force_tab_demo-a']='已核准班表'
-            app.run();self.assertTrue(any('整月班別人數' in x.value for x in app.caption))
+            app.run();self.assertTrue(any('※上班人數／原排。' in x.value for x in app.caption))
         with patch('schedule_headcount_ui.count_grid',return_value={'group':'A','date':'2026-10-01','context':"2026-10-01|whole-month-v29"}):
             app.session_state['_schedule_force_tab_demo-a']='已核准班表'
             app.run();self.assertFalse(app.exception)

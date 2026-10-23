@@ -1,0 +1,81 @@
+{
+  "version": "v1.13.36",
+  "base_commit": "1ac301c2376f53a263ac8f06e8c84a17b2053738",
+  "verified_at_taipei": "2026-10-23T23:20:08.084591+08:00",
+  "production_modified": false,
+  "database": {
+    "tests": 11,
+    "passed": 11,
+    "skipped": [],
+    "errors": 0,
+    "failures": 0,
+    "successful": true,
+    "seconds": 12.687,
+    "failed_names": []
+  },
+  "security": {
+    "tables": [
+      {
+        "rls": true,
+        "name": "staff_schedule_special_months",
+        "delete": false,
+        "insert": false,
+        "update": false,
+        "backup_read": true
+      },
+      {
+        "rls": true,
+        "name": "staff_schedule_special_days",
+        "delete": false,
+        "insert": false,
+        "update": false,
+        "backup_read": true
+      }
+    ],
+    "functions": [
+      {
+        "name": "staff_schedule_manager_confirm",
+        "definer": false,
+        "anon_execute": false,
+        "auth_execute": true
+      },
+      {
+        "name": "staff_schedule_special_save",
+        "definer": false,
+        "anon_execute": false,
+        "auth_execute": true
+      },
+      {
+        "name": "staff_schedule_special_snapshot",
+        "definer": false,
+        "anon_execute": false,
+        "auth_execute": true
+      }
+    ],
+    "business_counts": {
+      "usages": 0,
+      "payments": 0,
+      "purchases": 0
+    },
+    "private_log_read": false,
+    "quota_guard": {
+      "definer": false,
+      "anon_execute": false,
+      "auth_execute": false
+    }
+  },
+  "offline": {
+    "tests": 139,
+    "passed": 137,
+    "skipped": [
+      "test_daily_write_payloads_unchanged (test_navigation_platforms.NavigationTests.test_daily_write_payloads_unchanged): 未附歷史快照；此比較需在發布工作區完成。",
+      "test_formal_functions_outside_navigation_are_unchanged (test_navigation_platforms.NavigationTests.test_formal_functions_outside_navigation_are_unchanged): 未附歷史快照；此比較需在發布工作區完成。"
+    ],
+    "errors": 0,
+    "failures": 0,
+    "successful": true,
+    "seconds": 82.093,
+    "failed_names": []
+  },
+  "successful": true
+}

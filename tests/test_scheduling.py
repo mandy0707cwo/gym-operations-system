@@ -60,7 +60,10 @@ class SchedulingRulesTests(unittest.TestCase):
 
 
 class DemoWorkflowTests(unittest.TestCase):
-    def setUp(self):self.store={};self.repo=DemoRepository(self.store,COACH)
+    def setUp(self):
+        self.store={};self.repo=DemoRepository(self.store,COACH)
+        from test_schedule_quota_draft import publish
+        publish(self.store)
     def test_other_coach_draft_visibility_and_approved_matrix(self):
         other=DemoRepository(self.store,{'id':'demo-b','role':'coach','display_name':'乙'})
         admin=DemoRepository(self.store,ADMIN)
@@ -97,7 +100,8 @@ class DemoWorkflowTests(unittest.TestCase):
         self.send('approve',repo=admin)
         with self.assertRaises(ValueError):self.send('withdraw')
         self.send('return',{'reason':'請調整'},repo=admin)
-        self.send('save',day_payload('2026-10-01','full_off'))
+        with self.assertRaises(ValueError):self.send('save',day_payload('2026-10-01','full_off'))
+        self.send('save',dict(day_payload('2026-10-01','full_off'),reason='主管代修'),repo=admin)
         self.assertEqual(len(self.repo.logs('2026-10-01','demo-a')),8)
     def test_bad_submit_is_atomic(self):
         before=deepcopy(self.store)

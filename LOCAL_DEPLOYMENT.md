@@ -1,3 +1,11 @@
+# v1.13.35 排休額度與草稿獨立測試
+
+本版本目錄執行 `python -m streamlit run schedule_demo.py --server.address 127.0.0.1 --server.port 8517 --server.headless true`。先切換測試主管／管理員，在排休額度設定勾選確認並核定，再切換教練。未按儲存草稿的預排不寫入後端，重新整理可能遺失；此頁僅虛構資料，正式升級須依UPGRADE_v1.13.35.md執行SQL。
+
+# v1.13.33 排班獨立測試（歷史）
+
+在本版本目錄執行 `python -m streamlit run schedule_demo.py --server.address 127.0.0.1 --server.port 8515 --server.headless true`，再開啟 http://127.0.0.1:8515/ 。使用測試身分切換主管／管理員／教練，只使用虛構記憶體資料；重新整理可能清空，不讀取正式憑證。正式部署須另依UPGRADE_v1.13.33.md升級，不能將本機展示當成正式保存。
+
 # 秀傳運醫營運系統－16GB Windows 本機落地
 
 ## 適用規格

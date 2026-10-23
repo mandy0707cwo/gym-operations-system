@@ -2018,6 +2018,8 @@ def _full_system_backup_bytes(admin):
         "staff_schedule_allowance_logs":"排休額度異動",
         "staff_schedule_leaves":"其他請假紀錄",
         "staff_schedule_leave_logs":"請假異動紀錄",
+        "staff_schedule_special_months":"特殊假別月份",
+        "staff_schedule_special_days":"統一特殊假別",
     }
     backup_frames={}
     table_data={}
@@ -2025,7 +2027,7 @@ def _full_system_backup_bytes(admin):
     errors=[]
     for table_name,sheet_name in table_sheets.items():
         try:
-            order_column="month_start" if table_name=="staff_schedule_allowances" else "member_id" if table_name=="project_members" else "coach_id" if table_name in ("staff_schedule_months","staff_schedule_days","staff_schedule_preferences") else "id"
+            order_column="month_start" if table_name in ("staff_schedule_allowances","staff_schedule_special_months") else "work_date" if table_name=="staff_schedule_special_days" else "member_id" if table_name=="project_members" else "coach_id" if table_name in ("staff_schedule_months","staff_schedule_days","staff_schedule_preferences") else "id"
             secondary_column="work_date" if table_name=="staff_schedule_days" else "month_start" if table_name=="staff_schedule_months" else order_column
             table_rows=paged_rows(lambda table_name=table_name,order_column=order_column,secondary_column=secondary_column:
                 admin.table(table_name).select("*").order(order_column).order(secondary_column))
@@ -2039,10 +2041,10 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.31"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.36"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
-        {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰、Streamlit Secrets及私有操作收據；完整還原須另有PostgreSQL資料庫備份"},
+        {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰、Streamlit Secrets及私有schema紀錄（操作收據及特殊假別稽核）；完整還原須另有PostgreSQL資料庫備份"},
     ]),"資料筆數檢核":pd.DataFrame(summary_rows),**backup_frames,**financial_frames}
     return _excel_bytes(backup_frames)
 

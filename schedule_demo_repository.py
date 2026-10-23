@@ -5,6 +5,9 @@ from uuid import uuid4
 from scheduling import ROLES,REVIEWERS,STATES,day_payload,fill_empty,first_day,dates_in_month
 from schedule_allowance import normalize_allowance
 from schedule_leave import leave_payload,validate_leave,guard_schedule_leave,availability
+from schedule_special import normalize_special
+from schedule_special import active_specials
+from schedule_draft import validate_quota
 
 DEMO_COACHES=[{'id':'demo-a','username':'demo001','display_name':'測試教練甲','active':True,'role':'coach'},
               {'id':'demo-b','username':'demo002','display_name':'測試教練乙','active':True,'role':'coach'}]
@@ -18,6 +21,8 @@ class DemoRepository:
         state['schedule_demo_store'].setdefault('allowance_logs',[])
         state['schedule_demo_store'].setdefault('leaves',{})
         state['schedule_demo_store'].setdefault('leave_logs',[])
+        state['schedule_demo_store'].setdefault('specials',{})
+        state['schedule_demo_store'].setdefault('special_logs',[])
     @property
     def data(self):return self.state['schedule_demo_store']
     def check(self):
@@ -47,6 +52,35 @@ class DemoRepository:
     def allowance_load(self,month):
         self.check()
         return deepcopy(self.data['allowances'].get(month))
+    def special_load(self,month):
+        self.check()
+        return deepcopy(self.data['specials'].get(month,{'revision':0,'days':[]}))
+    def special_save(self,token,args):
+        self.check()
+        if self.me['role'] not in REVIEWERS:raise ValueError('僅主管及管理者可設定特殊假別')
+        key=(self.me['id'],token);marker=dict(args,type='special');receipt=self.data['receipts'].get(key)
+        if receipt:
+            if receipt['state']=='cancelled':raise ValueError('操作已取消')
+            if receipt['args']!=marker:raise ValueError('操作識別碼內容不同')
+            return deepcopy(receipt['result'])
+        month=args['p_month'];action=args['p_action'];payload=args['p_payload']
+        if action not in ('save','void'):raise ValueError('特殊假別動作無效')
+        normalized=normalize_special(month,payload)
+        store=deepcopy(self.data);record=deepcopy(store['specials'].get(month,{'revision':0,'days':[]}))
+        if record['revision']!=args['p_expected_revision']:raise ValueError('特殊假別已更新，請重新載入')
+        before=deepcopy(record);by_date={x['work_date']:x for x in record['days']}
+        selected=[d.isoformat() for d in dates_in_month(month) if normalized['date_from']<=d.isoformat()<=normalized['date_to']]
+        if action=='void' and not any(by_date.get(d,{}).get('state')=='active' for d in selected):raise ValueError('所選日期沒有有效特殊假別')
+        for d in selected:
+            if action=='save':by_date[d]=dict(work_date=d,month_start=month,state='active',**{k:normalized[k] for k in ('kind','label','start_time','end_time','deduct_units')})
+            elif d in by_date:by_date[d]['state']='void'
+        record.update(revision=record['revision']+1,days=sorted(by_date.values(),key=lambda x:x['work_date']))
+        result={'month_start':month,'revision':record['revision'],'state':'confirmed','action':action}
+        store['specials'][month]=record
+        store['special_logs'].append({'actor_id':self.me['id'],'reason':normalized['reason'],'before_value':before,'after_value':deepcopy(record)})
+        store['receipts'][key]={'state':'completed','args':marker,'result':deepcopy(result)}
+        self.state['schedule_demo_store']=store
+        return result
     def allowance_save(self,token,args):
         self.check()
         if self.me['role'] not in REVIEWERS:raise ValueError('僅主管或系統管理員可確認排休額度')
@@ -126,10 +160,35 @@ class DemoRepository:
         record=store['months'].setdefault((coach,month),{'coach_id':coach,'month_start':month,
             'coach_name':next(c['display_name'] for c in DEMO_COACHES if c['id']==coach),'state':'draft','revision':0})
         if record['revision']!=args['p_expected_revision']:raise ValueError('班表已更新，請重新載入')
-        before=deepcopy(record);before_data=None;after_data=None;reason=str(payload.get('reason') or '').strip()
-        if action in ('save','fill','default','apply'):
+        before=deepcopy(record);before_data=None;after_data=None;reason=str(payload.get('reason') or payload.get('note') or '').strip()
+        if len(reason)>1000:raise ValueError('說明不可超過1000字')
+        if role=='coach' and record.get('coach_locked'):raise ValueError('本月已確認儲存，只有主管及管理者可修改')
+        if action in ('draft','draft_submit'):
+            if role!='coach' or record.get('coach_locked') or record['state'] not in ('draft','returned'):
+                raise ValueError('僅教練可儲存自己的未鎖定草稿')
+            values=payload.get('days')
+            if not isinstance(values,list) or len(values)>31:raise ValueError('預排日期須為最多31筆清單')
+            if any(not isinstance(x,dict) for x in values):raise ValueError('預排日期內容須為物件')
+            if len({x.get('work_date') for x in values})!=len(values):raise ValueError('預排日期重複')
+            before_data=[];after_data=[]
+            for x in values:
+                value=day_payload(x['work_date'],x['shift_code'],x.get('start_time'),x.get('end_time'),x.get('note'))
+                if first_day(value['work_date']).isoformat()!=month:raise ValueError('日期不在目前月份')
+                old=store['days'].get((coach,value['work_date']))
+                if value['shift_code'] in ('public_off','weekend') or old and old['shift_code']=='public_off':raise ValueError('此班別須由主管或管理者設定')
+                guard_schedule_leave(dict(value,coach_id=coach),list(store['leaves'].values()))
+                before_data.append(deepcopy(old));after_data.append(value)
+                store['days'][(coach,value['work_date'])]=dict(value,coach_id=coach,month_start=month)
+            if 'base_shift' in payload:
+                if payload['base_shift'] not in ('A','B'):raise ValueError('預設班別無效')
+                store['preferences'][coach]=payload['base_shift']
+            if action=='draft_submit':
+                if len([1 for c,d in store['days'] if c==coach and d[:7]==month[:7]])!=len(dates_in_month(month)):
+                    raise ValueError('整月尚有未填日期')
+                record.update(state='submitted',coach_locked=True,review_reason='',
+                    finalized_at=datetime.now(timezone.utc).isoformat(),finalized_by=self.me['id'])
+        elif action in ('save','fill','default','apply'):
             if role=='coach' and record['state'] not in ('draft','returned'):raise ValueError('送審或核准後不可修改')
-            if role in REVIEWERS and not reason:raise ValueError('主管或管理員更正須填寫原因')
             if action=='default':
                 base=payload.get('base_shift')
                 if base not in ('A','B'):raise ValueError('請選擇A班或B班')
@@ -149,6 +208,9 @@ class DemoRepository:
                 for v in after_data:store['days'][(coach,v['work_date'])]=dict(v,coach_id=coach,month_start=month)
                 if action=='apply':after_data={'base_shift':base,'added_days':after_data}
             else:
+                old=store['days'].get((coach,str(payload.get('work_date'))),{})
+                if role=='coach' and (payload.get('shift_code')=='public_off' or old.get('shift_code')=='public_off'):
+                    raise ValueError('公休須由主管及管理者設定')
                 v=day_payload(payload['work_date'],payload['shift_code'],payload.get('start_time'),payload.get('end_time'),payload.get('note'))
                 if first_day(v['work_date']).isoformat()!=month:raise ValueError('日期不在目前月份')
                 before_data=store['days'].get((coach,v['work_date']));after_data=v
@@ -158,7 +220,15 @@ class DemoRepository:
             if role!='coach' or record['state'] not in ('draft','returned'):raise ValueError('僅本人可送審草稿或退回班表')
             if len([1 for c,d in store['days'] if c==coach and d[:7]==month[:7]])!=len(dates_in_month(month)):
                 raise ValueError('整月尚有未填日期')
-            record.update(state='submitted',review_reason='')
+            record.update(state='submitted',review_reason='',coach_locked=True,
+                finalized_at=datetime.now(timezone.utc).isoformat(),finalized_by=self.me['id'])
+        elif action=='manager_confirm':
+            if role not in REVIEWERS:raise ValueError('僅主管及管理者可代填完成並核准')
+            if len([1 for c,d in store['days'] if c==coach and d[:7]==month[:7]])!=len(dates_in_month(month)):
+                raise ValueError('整月尚有未填日期')
+            if not record.get('coach_locked'):
+                record.update(finalized_at=datetime.now(timezone.utc).isoformat(),finalized_by=self.me['id'])
+            record.update(state='approved',coach_locked=True,review_reason=reason)
         elif action=='withdraw':
             if role!='coach' or record['state']!='submitted':raise ValueError('只能撤回自己的待審班表')
             record['state']='draft'
@@ -168,6 +238,10 @@ class DemoRepository:
             if action=='return' and (record['state'] not in ('submitted','approved') or not reason):raise ValueError('退回須填寫原因')
             record.update(state='approved' if action=='approve' else 'returned',review_reason=reason)
         else:raise ValueError('不支援的排班操作')
+        if role=='coach' and action in ('save','fill','default','apply','draft','draft_submit','submit'):
+            rows=[v for (c,d),v in store['days'].items() if c==coach and d[:7]==month[:7]]
+            validate_quota(store['allowances'].get(month),rows,month,coach,
+                active_specials(store['specials'].get(month,{'days':[]}),month))
         record['revision']+=1
         result={k:record[k] for k in ('coach_id','month_start','state','revision')};result['action']=action
         store['logs'].append({'id':str(uuid4()),'coach_id':coach,'month_start':month,'action':action,

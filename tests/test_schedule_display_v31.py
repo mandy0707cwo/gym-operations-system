@@ -97,10 +97,11 @@ class ScheduleDisplayV31Tests(unittest.TestCase):
 
     def test_non_admin_account_fix_and_finance_functions_unchanged(self):
         if not (ROOT/'.git').exists():self.skipTest('來源ZIP沒有Git目錄；完整邊界核對已在來源工作目錄執行')
-        old=ast.parse(subprocess.check_output(['git','show','HEAD:app.py'],cwd=ROOT).decode('utf-8'))
-        new=ast.parse((ROOT/'app.py').read_text(encoding='utf-8'))
+        old=ast.parse(subprocess.check_output(['git','show','1ac301c2376f53a263ac8f06e8c84a17b2053738:app.py'],cwd=ROOT).decode('utf-8'))
+        from backup_contract_v32 import normalize_backup_source
+        new=ast.parse(normalize_backup_source((ROOT/'app.py').read_text(encoding='utf-8')))
         for node in ast.walk(new):
-            if isinstance(node,ast.Constant) and node.value=='v1.13.31':node.value='v1.13.30'
+            if isinstance(node,ast.Constant) and node.value==(ROOT/'VERSION').read_text().strip():node.value='v1.13.31'
         self.assertEqual(ast.dump(old,include_attributes=False),ast.dump(new,include_attributes=False))
 
 

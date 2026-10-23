@@ -14,20 +14,21 @@ def allowance_banner(me,repo,month,coach,days):
         totals=allowance_totals(record,days,month,coach)
     except Exception as exc:
         st.error(f'排休額度讀取失敗，未以0天代替：{exc}')
-        return
+        return None
     if totals is None:
-        st.caption('本月排休額度尚未設定，請系統管理員核對並確認。')
-        return
+        st.caption('本月排休額度尚未設定，請主管或系統管理員核對並確認。')
+        return None
     st.markdown(f'本月可排休 **{days_text(totals["total_units"])}天**　｜　已排休 **{days_text(totals["used_units"])}天**　｜　剩餘 **{days_text(totals["remaining_units"])}天**')
-    st.caption(f'來源：星期六{record["saturday_days"]}天＋國定假日／補假{record["holiday_days"]}天；例假不扣額度。已由{record["confirmed_name"]}確認。')
+    st.caption(f'本月可休：星期六{record["saturday_days"]}天＋國定假日／補假{record["holiday_days"]}天；')
     if totals['remaining_units']<0:
-        st.warning('目前已超出本月排休額度；此版本只提醒，不自動禁止送審，請與主管確認。')
+        st.warning('目前已超出本月排休額度；教練不能儲存草稿或送出，請調整排休。')
     with st.expander('查看排休額度明細'):
         if record['holidays']:
             st.dataframe(pd.DataFrame([{'假日名稱':x['name'],'原假日':date.fromisoformat(x['original_date']),
                 '計入日期':date.fromisoformat(x['observed_date'])} for x in record['holidays']]),hide_index=True)
         else:st.caption('本月已確認無額外國定假日／補假額度。')
         if record.get('note'):st.write(record['note'])
+    return record
 
 
 def allowance_settings(me,repo,month,data):
