@@ -77,7 +77,7 @@ def test_financial_backup_contains_all_report_groups_and_balances():
         "財務-已儲值專案", "財務-未儲值專案", "財務-體驗項目報表", "財務-單堂銷售報表",
         "財務-醫生轉介", "財務-課程屬性", "財務-銷課明細", "財務-課程中止",
         "財務-教練時數", "財務-教練營收", "財務-教練談單獎金", "財務-談單獎金總計",
-        "財務-教練結單獎金", "財務-結單獎金總計",
+        "財務-教練結單獎金", "財務-結單獎金總計", "財務-談單待確認", "財務-結單待確認",
     }
     assert required == set(frames)
     truncated_names = [name[:31] for name in frames]
@@ -391,7 +391,7 @@ def test_general_queries_are_admin_only_and_submit_gated():
 
 def test_general_query_columns_and_accounting_sources():
     source = APP_PATH.read_text(encoding="utf-8")
-    assert 'columns=["日期","購買_ID","會員","教練","購買課程","銷課金額（含稅）","銷課金額（未稅）","購買堂數","銷課堂次","時數"]' in source
+    assert 'columns=["日期","購買_ID","會員","教練","購買課程","銷課金額（含稅）","銷課金額（未稅）","購買堂數","銷課堂次","時數","補單"]' in source
     assert '"銷課金額（未稅）":usage_net_amount(usage)' in source
     assert 'columns=["成交日期","購買_ID","會員","教練","課程名稱","堂數"' in source
     assert '"成交金額（未稅）":_tax_display_amount(gross,"未稅")' in source

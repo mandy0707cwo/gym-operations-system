@@ -1806,6 +1806,7 @@ def _excel_bytes(sheet_frames,number_formats=None,fit_display_width=False):
 
 def _financial_backup_frames(table_data):
     from termination_reporting import effective_terminations, termination_events, termination_sign, termination_label
+    from monthly_report_layout import cross_month_makeup_hours, bonus_summary
     """依現有財務報表規則，產生截至今日、不套用畫面篩選的完整財務工作表。"""
     today=str(date.today())
     profiles=table_data.get("profiles",[])
@@ -1821,6 +1822,8 @@ def _financial_backup_frames(table_data):
     term_events=termination_events(raw_terminations,table_data.get("course_termination_reversals",[]),today)
     member_name={x.get("id"):x.get("member_name") or "" for x in members}
     coach_name={x.get("id"):x.get("display_name") or x.get("username") or "" for x in profiles if x.get("role")=="coach"}
+    backup_coaches=[x for x in profiles if x.get('id') in coach_name]
+    coach_account={x['id']:str(x.get('username') or '') for x in backup_coaches}
     purchase_map={x.get("id"):x for x in purchases}
     project_map={x.get("id"):x for x in projects}
     purchase_codes=_build_purchase_code_map(purchases)
@@ -1931,11 +1934,12 @@ def _financial_backup_frames(table_data):
         magnetic_hours=(sum(float(x.get("hours") or 0) for x in coach_trials if is_magnetic_wave_operation(x))
             +sum(float(x.get("hours") or 0) for x in coach_singles if is_magnetic_wave_operation(x))
             +sum(float(purchase_map.get(x.get("purchase_id"),{}).get("session_hours") or 1) for x in execution_usages if is_magnetic_wave_purchase(purchase_map.get(x.get("purchase_id"),{}),course_type_map)))
-        coach_hours.append({"報表月份":report_month,"教練":name,"體驗時數":trial_hours,"單堂時數":single_hours,"活動時數":event_hours,"專案時數":project_hours,
-            "銷課時數":normal_hours,"可計執行時數":trial_hours+single_hours+event_hours+project_hours+normal_hours,"動磁波時數":magnetic_hours})
+        coach_hours.append({"報表月份":report_month,"帳號":coach_account.get(coach_id,''),"教練":name,"體驗時數":trial_hours,"單堂時數":single_hours,"活動時數":event_hours,"專案時數":project_hours,
+            "銷課時數":normal_hours,"可計執行時數":trial_hours+single_hours+event_hours+project_hours+normal_hours,
+            "補單":cross_month_makeup_hours(coach_usages,purchase_map),"動磁波時數":magnetic_hours})
         trial_rev=sum(event_net(x,"amount") for x in month_trials if x.get("coach_id")==coach_id); single_rev=sum(event_net(x,"amount") for x in month_singles if x.get("coach_id")==coach_id)
         project_rev=sum(event_net(x,"line_amount") for x in month_projects if x.get("coach_id")==coach_id); usage_rev=sum(usage_net_amount(x) for x in coach_usages)
-        coach_revenues.append({"報表月份":report_month,"教練":name,"體驗項目金額（未稅）":round(trial_rev),"單堂銷售金額（未稅）":round(single_rev),"專案（未稅）":round(project_rev),"銷課（未稅）":round(usage_rev),"金額總計（未稅）":round(trial_rev+single_rev+project_rev+usage_rev)})
+        coach_revenues.append({"報表月份":report_month,"帳號":coach_account.get(coach_id,''),"教練":name,"體驗項目金額（未稅）":round(trial_rev),"單堂銷售金額（未稅）":round(single_rev),"專案（未稅）":round(project_rev),"銷課（未稅）":round(usage_rev),"金額總計（未稅）":round(trial_rev+single_rev+project_rev+usage_rev)})
 
     bonus_rules=sorted([x for x in table_data.get("bonus_rules",[]) if x.get("active")],key=lambda x:str(x.get("effective_from") or ""),reverse=True)
     talk_bonus_rows=[]
@@ -1945,14 +1949,12 @@ def _financial_backup_frames(table_data):
         rule=_bonus_rule_for_date(bonus_rules,p.get("purchase_date")); eligible,reason=_bonus_eligibility(rule,p,"talk")
         untaxed=_tax_display_amount(p.get("total_amount"),"未稅"); rate=Decimal(str(rule.get("talk_rate") or 0)) if rule else Decimal("0")
         bonus=int((Decimal(untaxed)*rate).quantize(Decimal("1"),rounding=ROUND_HALF_UP)) if eligible else 0
-        talk_bonus_rows.append({"成交日期":p.get("purchase_date"),"購買_ID":purchase_codes.get(p.get("id"),""),"會員名稱":member_name.get(p.get("member_id"),""),
+        talk_bonus_rows.append({"_coach_id":coach_id,"_eligible":eligible if rule else None,
+            "成交日期":p.get("purchase_date"),"購買_ID":purchase_codes.get(p.get("id"),""),"會員名稱":member_name.get(p.get("member_id"),""),
             "教練":coach_name.get(coach_id,""),"購買類型":"首次購買" if p.get("purchase_kind")=="first" else "續約" if p.get("purchase_kind")=="renewal" else p.get("purchase_kind") or "",
             "醫生轉介":p.get("referral") or "","成交未稅金額":untaxed,"談單率":float(rate)*100,"談單獎金":bonus,
             "適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
-    talk_summary=[]
-    for name in sorted(coach_name.values()):
-        eligible_rows=[x for x in talk_bonus_rows if x["教練"]==name and x["計算狀態"]=="已計算"]
-        talk_summary.append({"教練":name,"符合規則成交未稅金額總計":sum(x["成交未稅金額"] for x in eligible_rows),"談單獎金總計":sum(x["談單獎金"] for x in eligible_rows)})
+    talk_summary,talk_pending=bonus_summary(backup_coaches,talk_bonus_rows,"成交未稅金額","談單獎金","成交日期")
 
     completed_usage={}
     for x in usages:
@@ -1970,13 +1972,11 @@ def _financial_backup_frames(table_data):
         untaxed=_tax_display_amount(p.get("total_amount"),"未稅"); rate=Decimal(str(rule.get("completion_rate") or 0)) if rule else Decimal("0")
         bonus=int((Decimal(untaxed)*rate).quantize(Decimal("1"),rounding=ROUND_HALF_UP)) if eligible else 0
         untaxed*=termination_sign(source); bonus*=termination_sign(source)
-        completion_rows.append({"課程完成日期":completed_date,"購買_ID":purchase_codes.get(pid,""),"會員名稱":member_name.get(p.get("member_id"),""),"教練":coach_name.get(coach_id,""),
+        completion_rows.append({"_coach_id":coach_id,"_eligible":eligible if rule else None,
+            "課程完成日期":completed_date,"購買_ID":purchase_codes.get(pid,""),"會員名稱":member_name.get(p.get("member_id"),""),"教練":coach_name.get(coach_id,""),
             "課程名稱":p.get("course_name") or "","課程結束成交未稅金額":untaxed,"結單率":float(rate)*100,"結單獎金":bonus,
             "適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
-    completion_summary=[]
-    for name in sorted(coach_name.values()):
-        eligible_rows=[x for x in completion_rows if x["教練"]==name and x["計算狀態"]=="已計算"]
-        completion_summary.append({"教練":name,"符合規則課程結束成交未稅金額總計":sum(x["課程結束成交未稅金額"] for x in eligible_rows),"結單獎金總計":sum(x["結單獎金"] for x in eligible_rows)})
+    completion_summary,completion_pending=bonus_summary(backup_coaches,completion_rows,"課程結束成交未稅金額","結單獎金","課程完成日期")
 
     visible=lambda rows_list:[{k:v for k,v in x.items() if not str(k).startswith("_")} for x in rows_list]
     return {
@@ -1988,8 +1988,9 @@ def _financial_backup_frames(table_data):
         "財務-醫生轉介":pd.DataFrame(referral_rows),"財務-課程屬性":pd.DataFrame(course_type_rows),
         "財務-銷課明細":pd.DataFrame(usage_rows),"財務-課程中止":pd.DataFrame(termination_rows),
         "財務-教練時數":pd.DataFrame(coach_hours),"財務-教練營收":pd.DataFrame(coach_revenues),
-        "財務-教練談單獎金":pd.DataFrame(talk_bonus_rows),"財務-談單獎金總計":pd.DataFrame(talk_summary),
-        "財務-教練結單獎金":pd.DataFrame(completion_rows),"財務-結單獎金總計":pd.DataFrame(completion_summary),
+        "財務-教練談單獎金":pd.DataFrame(visible(talk_bonus_rows)),"財務-談單獎金總計":talk_summary,
+        "財務-教練結單獎金":pd.DataFrame(visible(completion_rows)),"財務-結單獎金總計":completion_summary,
+        "財務-談單待確認":talk_pending,"財務-結單待確認":completion_pending,
     }
 
 def _full_system_backup_bytes(admin):
@@ -2048,7 +2049,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.37"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.38"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰、Streamlit Secrets及私有schema紀錄（操作收據及特殊假別稽核）；完整還原須另有PostgreSQL資料庫備份"},
@@ -3625,7 +3626,7 @@ def general_queries_page(me):
             if purchase_keyword in str(code).casefold() or purchase_keyword in str(pid).casefold()] if purchase_keyword else []
         def usage_query_builder():
             query=(client().table("session_usages")
-                .select("id,purchase_id,usage_date,coach_id,session_seq,deducted_amount,deducted_net_amount,created_at")
+                .select("id,purchase_id,usage_date,coach_id,session_seq,deducted_amount,deducted_net_amount,created_at,is_makeup")
                 .order("usage_date",desc=True).order("created_at",desc=True).order("id",desc=True))
             if start is not None: query=query.gte("usage_date",str(start))
             if end is not None: query=query.lte("usage_date",str(end))
@@ -3646,8 +3647,9 @@ def general_queries_page(me):
                 "會員":member_name,"教練":coach_name_map.get(usage.get("coach_id"),"未知教練"),
                 "購買課程":purchase.get("course_name") or "","銷課金額（含稅）":float(usage.get("deducted_amount") or 0),
                 "銷課金額（未稅）":usage_net_amount(usage),"購買堂數":int(purchase.get("total_sessions") or 0),
-                "銷課堂次":int(usage.get("session_seq") or 0),"時數":float(purchase.get("session_hours") or 1)})
-        frame=pd.DataFrame(result,columns=["日期","購買_ID","會員","教練","購買課程","銷課金額（含稅）","銷課金額（未稅）","購買堂數","銷課堂次","時數"])
+                "銷課堂次":int(usage.get("session_seq") or 0),"時數":float(purchase.get("session_hours") or 1),
+                "補單":"是" if usage.get("is_makeup") else "否"})
+        frame=pd.DataFrame(result,columns=["日期","購買_ID","會員","教練","購買課程","銷課金額（含稅）","銷課金額（未稅）","購買堂數","銷課堂次","時數","補單"])
         c1,c2=st.columns(2)
         c1.metric("銷課金額總計（未稅）",f'$ {sum(x["銷課金額（未稅）"] for x in result):,.0f}',border=True)
         c2.metric("銷課金額總計（含稅）",f'$ {sum(x["銷課金額（含稅）"] for x in result):,.0f}',border=True)
@@ -3927,6 +3929,7 @@ def general_queries_page(me):
                     if query_data.ready: render_balance_results(cutoff,keyword,"含稅",f"{cutoff}_{keyword or '全部'}")
 
 def financial_report_page(me):
+    from monthly_report_layout import cross_month_makeup_hours, bonus_summary
     from termination_reporting import effective_terminations, termination_sign, termination_label
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
@@ -4627,7 +4630,11 @@ def financial_report_page(me):
                 st.stop()
             st.markdown(f"- 報表期間：{month_start} 至 {month_end}")
 
-            monthly_coaches=coach_options(); monthly_coach_name={v:k for k,v in monthly_coaches.items()}
+            monthly_coach_records=query_read(query_data,"monthly_coach_accounts_v38",lambda: paged_rows(lambda: client().table("profiles")
+                .select("id,username,display_name,role,active").eq("active",True).eq("role","coach").order("display_name").order("id")))
+            # 以唯一帳號ID對應，不以可能重複的教練姓名作為分組鍵。
+            monthly_coach_name={x["id"]:x.get("display_name") or x.get("username") or "未知" for x in monthly_coach_records}
+            monthly_coach_account={x["id"]:str(x.get("username") or "") for x in monthly_coach_records}
             monthly_usages=query_read(query_data,"financial_report_page:4750",lambda: paged_rows(lambda: client().table("session_usages").select("id,purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount,deducted_net_amount")
                 .gte("usage_date",str(month_start)).lte("usage_date",str(month_end)).order("usage_date").order("id")))
             try:
@@ -4688,7 +4695,7 @@ def financial_report_page(me):
                     "中止原因":item.get("reason") or ""})
             monthly_termination_df=pd.DataFrame(monthly_termination_rows,columns=["日期","購買_ID","會員名稱","課程名稱","中止類型","退費前剩餘金額（未稅）","逾期入帳金額（未稅）","退費手續費（未稅）","實際退費金額（未稅）","中止原因"])
 
-            coach_ids=list(monthly_coaches.values())
+            coach_ids=list(monthly_coach_name)
             coach_hour_rows=[]; coach_revenue_rows=[]
             for coach_id in coach_ids:
                 coach_trials=[x for x in monthly_trial if x.get("coach_id")==coach_id]
@@ -4705,17 +4712,18 @@ def financial_report_page(me):
                     +sum(float(x.get("hours") or 0) for x in coach_singles if is_magnetic_wave_operation(x))
                     +sum(float(monthly_purchase_map.get(x["purchase_id"],{}).get("session_hours") or 1) for x in execution_usages
                         if is_magnetic_wave_purchase(monthly_purchase_map.get(x["purchase_id"],{}),monthly_course_type)))
-                coach_hour_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"體驗時數":trial_hours,"單堂時數":single_hours,
+                coach_hour_rows.append({"帳號":monthly_coach_account.get(coach_id,""),"教練":monthly_coach_name.get(coach_id,"未知"),"體驗時數":trial_hours,"單堂時數":single_hours,
                     "活動時數":event_hours,"專案時數":project_hours,"銷課時數":usage_hours,
-                    "可計執行時數":trial_hours+single_hours+event_hours+project_hours+usage_hours,"動磁波時數":magnetic_wave_hours})
+                    "可計執行時數":trial_hours+single_hours+event_hours+project_hours+usage_hours,
+                    "補單":cross_month_makeup_hours(coach_usages,monthly_purchase_map),"動磁波時數":magnetic_wave_hours})
                 trial_revenue=sum(event_net(x,"amount") for x in coach_trials)
                 single_revenue=sum(event_net(x,"amount") for x in coach_singles)
                 project_revenue=sum(event_net(x,"line_amount") for x in monthly_projects if x.get("coach_id")==coach_id)
                 usage_revenue=sum(usage_net_amount(x) for x in monthly_usages if x.get("coach_id")==coach_id)
-                coach_revenue_rows.append({"教練":monthly_coach_name.get(coach_id,"未知"),"體驗項目金額（未稅）":round(trial_revenue),"單堂銷售金額（未稅）":round(single_revenue),
+                coach_revenue_rows.append({"帳號":monthly_coach_account.get(coach_id,""),"教練":monthly_coach_name.get(coach_id,"未知"),"體驗項目金額（未稅）":round(trial_revenue),"單堂銷售金額（未稅）":round(single_revenue),
                     "專案（未稅）":round(project_revenue),"銷課（未稅）":round(usage_revenue),"金額總計（未稅）":round(trial_revenue+single_revenue+project_revenue+usage_revenue)})
-            monthly_hours_df=pd.DataFrame(coach_hour_rows,columns=["教練","體驗時數","單堂時數","活動時數","專案時數","銷課時數","可計執行時數","動磁波時數"])
-            monthly_revenue_df=pd.DataFrame(coach_revenue_rows,columns=["教練","體驗項目金額（未稅）","單堂銷售金額（未稅）","專案（未稅）","銷課（未稅）","金額總計（未稅）"])
+            monthly_hours_df=pd.DataFrame(coach_hour_rows,columns=["帳號","教練","體驗時數","單堂時數","活動時數","專案時數","銷課時數","可計執行時數","補單","動磁波時數"])
+            monthly_revenue_df=pd.DataFrame(coach_revenue_rows,columns=["帳號","教練","體驗項目金額（未稅）","單堂銷售金額（未稅）","專案（未稅）","銷課（未稅）","金額總計（未稅）"])
 
             try:
                 bonus_rules=query_read(query_data,"financial_report_page:4840",lambda: rows(client().table("bonus_rules").select("*").eq("active",True).order("effective_from",desc=True)))
@@ -4739,22 +4747,16 @@ def financial_report_page(me):
                 untaxed_amount=_tax_display_amount(purchase.get("total_amount"),"未稅")
                 rate=Decimal(str(rule.get("talk_rate") or 0)) if rule else Decimal("0")
                 bonus=int((Decimal(untaxed_amount)*rate).quantize(Decimal("1"),rounding=ROUND_HALF_UP)) if eligible else 0
-                talk_bonus_rows.append({"成交日期":purchase["purchase_date"],"購買_ID":bonus_purchase_code_map.get(purchase["id"],""),
+                talk_bonus_rows.append({"_coach_id":coach_id,"_eligible":eligible if rule else None,
+                    "成交日期":purchase["purchase_date"],"購買_ID":bonus_purchase_code_map.get(purchase["id"],""),
                     "會員名稱":monthly_member_name.get(purchase.get("member_id"),"未知"),"教練":monthly_coach_name.get(coach_id,"未知"),
                     "購買類型":"首次購買" if purchase.get("purchase_kind")=="first" else "續約" if purchase.get("purchase_kind")=="renewal" else purchase.get("purchase_kind") or "",
                     "醫生轉介":purchase.get("referral") or "","成交未稅金額":untaxed_amount,"談單率":float(rate)*100,
                     "談單獎金":bonus,"適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
             talk_bonus_columns=["成交日期","購買_ID","會員名稱","教練","購買類型","醫生轉介","成交未稅金額","談單率","談單獎金","適用規則","計算狀態"]
             monthly_talk_bonus_df=pd.DataFrame(talk_bonus_rows,columns=talk_bonus_columns)
-            talk_bonus_summary_rows=[]
-            for coach_id in coach_ids:
-                coach_name=monthly_coach_name.get(coach_id,"未知")
-                eligible_rows=[x for x in talk_bonus_rows if x["教練"]==coach_name and x["計算狀態"]=="已計算"]
-                talk_bonus_summary_rows.append({"教練":coach_name,
-                    "符合規則成交未稅金額總計":sum(x["成交未稅金額"] for x in eligible_rows),
-                    "談單獎金總計":sum(x["談單獎金"] for x in eligible_rows)})
-            monthly_talk_bonus_summary_df=pd.DataFrame(talk_bonus_summary_rows,
-                columns=["教練","符合規則成交未稅金額總計","談單獎金總計"])
+            monthly_talk_bonus_summary_df,talk_pending_df=bonus_summary(
+                monthly_coach_records,talk_bonus_rows,"成交未稅金額","談單獎金","成交日期")
 
             completed_purchase_usage={}
             for usage in monthly_usages:
@@ -4772,7 +4774,8 @@ def financial_report_page(me):
                 completed_amount=_tax_display_amount(purchase.get("total_amount"),"未稅")
                 rate=Decimal(str(rule.get("completion_rate") or 0)) if rule else Decimal("0")
                 bonus=int((Decimal(completed_amount)*rate).quantize(Decimal("1"),rounding=ROUND_HALF_UP)) if eligible else 0
-                completion_bonus_rows.append({"課程完成日期":usage["usage_date"],"購買_ID":bonus_purchase_code_map.get(purchase_id,""),
+                completion_bonus_rows.append({"_coach_id":coach_id,"_eligible":eligible if rule else None,
+                    "課程完成日期":usage["usage_date"],"購買_ID":bonus_purchase_code_map.get(purchase_id,""),
                     "會員名稱":monthly_member_name.get(purchase.get("member_id"),"未知"),"教練":monthly_coach_name.get(coach_id,"未知"),
                     "課程名稱":purchase.get("course_name") or "","購買類型":"首次購買" if purchase.get("purchase_kind")=="first" else "續約" if purchase.get("purchase_kind")=="renewal" else purchase.get("purchase_kind") or "",
                     "醫生轉介":purchase.get("referral") or "","課程結束成交未稅金額":completed_amount,"結單率":float(rate)*100,
@@ -4789,22 +4792,16 @@ def financial_report_page(me):
                 rate=Decimal(str(rule.get("completion_rate") or 0)) if rule else Decimal("0")
                 bonus=int((Decimal(completed_amount)*rate).quantize(Decimal("1"),rounding=ROUND_HALF_UP)) if eligible else 0
                 completed_amount*=termination_sign(termination); bonus*=termination_sign(termination)
-                completion_bonus_rows.append({"課程完成日期":termination["termination_date"],"購買_ID":bonus_purchase_code_map.get(termination["purchase_id"],""),
+                completion_bonus_rows.append({"_coach_id":coach_id,"_eligible":eligible if rule else None,
+                    "課程完成日期":termination["termination_date"],"購買_ID":bonus_purchase_code_map.get(termination["purchase_id"],""),
                     "會員名稱":monthly_member_name.get(purchase.get("member_id"),"未知"),"教練":monthly_coach_name.get(coach_id,"未知"),
                     "課程名稱":purchase.get("course_name") or "","購買類型":"首次購買" if purchase.get("purchase_kind")=="first" else "續約" if purchase.get("purchase_kind")=="renewal" else purchase.get("purchase_kind") or "",
                     "醫生轉介":purchase.get("referral") or "","課程結束成交未稅金額":completed_amount,"結單率":float(rate)*100,
                     "結單獎金":bonus,"適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
             completion_bonus_columns=["課程完成日期","購買_ID","會員名稱","教練","課程名稱","購買類型","醫生轉介","課程結束成交未稅金額","結單率","結單獎金","適用規則","計算狀態"]
             monthly_completion_bonus_df=pd.DataFrame(completion_bonus_rows,columns=completion_bonus_columns)
-            completion_bonus_summary_rows=[]
-            for coach_id in coach_ids:
-                coach_name=monthly_coach_name.get(coach_id,"未知")
-                eligible_rows=[x for x in completion_bonus_rows if x["教練"]==coach_name and x["計算狀態"]=="已計算"]
-                completion_bonus_summary_rows.append({"教練":coach_name,
-                    "符合規則課程結束成交未稅金額總計":sum(x["課程結束成交未稅金額"] for x in eligible_rows),
-                    "結單獎金總計":sum(x["結單獎金"] for x in eligible_rows)})
-            monthly_completion_bonus_summary_df=pd.DataFrame(completion_bonus_summary_rows,
-                columns=["教練","符合規則課程結束成交未稅金額總計","結單獎金總計"])
+            monthly_completion_bonus_summary_df,completion_pending_df=bonus_summary(
+                monthly_coach_records,completion_bonus_rows,"課程結束成交未稅金額","結單獎金","課程完成日期")
 
             monthly_sales_total=int(monthly_sales_df["銷課金額"].sum()) if not monthly_sales_df.empty else 0
             monthly_project_total=int(monthly_stored_project_df["扣款金額（未稅）"].sum()) if not monthly_stored_project_df.empty else 0
@@ -4816,6 +4813,8 @@ def financial_report_page(me):
                 "逾期入帳總額（未稅）":expired_total,"每月預收銷課合併計（未稅）":monthly_combined_total}])
             monthly_tabs=st.tabs(["每月預收銷課合併計","每月教練時數","每月教練營收","每月教練談單獎金","每月教練結單獎金"])
             monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額","扣款金額（未稅）","體驗項目金額（未稅）","單堂銷售金額（未稅）","專案（未稅）","銷課（未稅）","金額總計（未稅）","成交未稅金額","談單獎金","課程結束成交未稅金額","結單獎金","符合規則成交未稅金額總計","談單獎金總計","符合規則課程結束成交未稅金額總計","結單獎金總計","退費前剩餘金額（未稅）","逾期入帳金額（未稅）","退費手續費（未稅）","實際退費金額（未稅）"]}
+            monthly_money_config.update({name:st.column_config.NumberColumn(format="$ %.0f")
+                for name in ["不計成交金額","可計成交金額","獎金合計","待確認成交金額（未稅）"]})
             monthly_bonus_config={**monthly_money_config,"談單率":st.column_config.NumberColumn(format="%.2f%%"),"結單率":st.column_config.NumberColumn(format="%.2f%%")}
             with monthly_tabs[0]:
                 st.metric("每月預收銷課合併計（未稅）",f"$ {monthly_combined_total:,.0f}")
@@ -4835,6 +4834,7 @@ def financial_report_page(me):
                     st.dataframe(monthly_termination_df,hide_index=True,width="stretch",column_config=monthly_money_config)
             with monthly_tabs[1]:
                 st.caption("※可計執行時數不含動磁波；動磁波時數包含體驗、單堂銷售及課程銷課。")
+                st.caption("※補單欄為跨月補單時數（小時），依銷課入帳期間列示，不加回可計執行時數；同月補單沿既有規則計入。")
                 st.dataframe(monthly_hours_df,hide_index=True,width="stretch")
             with monthly_tabs[2]:
                 st.caption("※體驗項目及單堂銷售的輸入金額為含稅，報表以金額 ÷ 1.05 換算未稅。")
@@ -4843,16 +4843,25 @@ def financial_report_page(me):
                 if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
                 st.dataframe(monthly_talk_bonus_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
                 section_heading("各教練談單獎金總計")
+                st.caption("金額為未稅，依上方獎金明細彙總；只合計已有適用規則的資料，不代表實際收款或已發獎金。")
                 st.dataframe(monthly_talk_bonus_summary_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
+                if not talk_pending_df.empty:
+                    st.warning(f"談單獎金有 {len(talk_pending_df)} 筆缺少適用規則，另列待確認，未列入可計／不計金額或獎金合計。")
+                    st.dataframe(talk_pending_df,hide_index=True,width="stretch",column_config=monthly_money_config)
             with monthly_tabs[4]:
                 if bonus_rule_error: st.error("尚未建立獎金規則資料表，請先執行 migration_bonus_rules_v1_8_0.sql。")
                 st.dataframe(monthly_completion_bonus_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
                 section_heading("各教練結單獎金總計")
+                st.caption("金額為未稅，依上方獎金明細彙總；只合計已有適用規則的資料，保留撤銷沖回負數。")
                 st.dataframe(monthly_completion_bonus_summary_df,hide_index=True,width="stretch",column_config=monthly_bonus_config)
+                if not completion_pending_df.empty:
+                    st.warning(f"結單獎金有 {len(completion_pending_df)} 筆缺少適用規則，另列待確認，未列入可計／不計金額或獎金合計。")
+                    st.dataframe(completion_pending_df,hide_index=True,width="stretch",column_config=monthly_money_config)
             monthly_export=_excel_bytes({"合併計":monthly_combined_df,"每月銷課":monthly_sales_df,"每月專案銷課":monthly_stored_project_df,
                 "每月課程中止":monthly_termination_df,"每月教練時數":monthly_hours_df,"每月教練營收":monthly_revenue_df,
                 "每月教練談單獎金":monthly_talk_bonus_df,"談單獎金總計":monthly_talk_bonus_summary_df,
-                "每月教練結單獎金":monthly_completion_bonus_df,"結單獎金總計":monthly_completion_bonus_summary_df})
+                "每月教練結單獎金":monthly_completion_bonus_df,"結單獎金總計":monthly_completion_bonus_summary_df,
+                "談單待確認":talk_pending_df,"結單待確認":completion_pending_df})
             st.download_button("匯出每月報表",monthly_export,file_name=f"每月報表_{month_start}_{month_end}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch",on_click="ignore")
 

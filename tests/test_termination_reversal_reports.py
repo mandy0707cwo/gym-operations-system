@@ -54,4 +54,4 @@ class ReversalScreenTests(unittest.TestCase):
             self.assertFalse(app.exception)
             frame=app.session_state['exports']['每月教練結單獎金']
             self.assertEqual(frame['結單獎金'].sum(),expected)
-            self.assertEqual(app.session_state['exports']['結單獎金總計']['結單獎金總計'].sum(),expected)
+            self.assertEqual(app.session_state['exports']['結單獎金總計']['獎金合計'].sum(),expected)
