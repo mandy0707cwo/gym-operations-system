@@ -1805,6 +1805,7 @@ def _excel_bytes(sheet_frames,number_formats=None,fit_display_width=False):
     return output.getvalue()
 
 def _financial_backup_frames(table_data):
+    from termination_reporting import effective_terminations, termination_events, termination_sign, termination_label
     """依現有財務報表規則，產生截至今日、不套用畫面篩選的完整財務工作表。"""
     today=str(date.today())
     profiles=table_data.get("profiles",[])
@@ -1815,7 +1816,9 @@ def _financial_backup_frames(table_data):
     projects=table_data.get("projects",[])
     project_entries=[x for x in table_data.get("project_entries",[]) if str(x.get("entry_date") or "")<=today]
     deposits=[x for x in table_data.get("project_deposits",[]) if str(x.get("deposit_date") or "")<=today]
-    terminations=[x for x in table_data.get("course_terminations",[]) if str(x.get("termination_date") or "")<=today]
+    raw_terminations=table_data.get("course_terminations",[])
+    terminations=effective_terminations(raw_terminations,today)
+    term_events=termination_events(raw_terminations,table_data.get("course_termination_reversals",[]),today)
     member_name={x.get("id"):x.get("member_name") or "" for x in members}
     coach_name={x.get("id"):x.get("display_name") or x.get("username") or "" for x in profiles if x.get("role")=="coach"}
     purchase_map={x.get("id"):x for x in purchases}
@@ -1890,10 +1893,10 @@ def _financial_backup_frames(table_data):
     course_type_rows=[{"課程屬性":k,"實際預收金額（未稅）":v["received"],"銷課未稅金額":round(v["usage"])} for k,v in sorted(course_type_totals.items())]
 
     termination_rows=[]
-    for x in sorted(terminations,key=lambda r:str(r.get("termination_date") or ""),reverse=True):
+    for x in sorted(term_events,key=lambda r:str(r.get("termination_date") or ""),reverse=True):
         p=purchase_map.get(x.get("purchase_id"),{}); expired=x.get("termination_type")=="expired"
         termination_rows.append({"日期":x.get("termination_date"),"購買_ID":purchase_codes.get(x.get("purchase_id"),""),"會員名稱":member_name.get(p.get("member_id"),""),
-            "教練":coach_name.get(p.get("coach_id"),""),"課程名稱":p.get("course_name") or "","中止類型":"逾期中止" if expired else "退費中止",
+            "教練":coach_name.get(p.get("coach_id"),""),"課程名稱":p.get("course_name") or "","中止類型":termination_label(x),
             "退費前剩餘金額（未稅）":termination_money(x,"remaining_amount","未稅"),"逾期入帳金額（未稅）":termination_money(x,"recognized_amount","未稅") if expired else 0,
             "退費手續費（未稅）":termination_money(x,"fee_amount","未稅") if not expired else 0,"實際退費金額（未稅）":termination_money(x,"refund_amount","未稅") if not expired else 0,
             "中止原因":x.get("reason") or "","備註":x.get("note") or ""})
@@ -1957,13 +1960,16 @@ def _financial_backup_frames(table_data):
         if total_sessions and int(x.get("session_seq") or 0)==total_sessions: completed_usage[x.get("purchase_id")]=x
     completion_rows=[]
     completion_sources=[(pid,x,purchase_map.get(pid,{}),x.get("coach_id"),x.get("usage_date")) for pid,x in completed_usage.items()]
-    completion_sources += [(x.get("purchase_id"),x,purchase_map.get(x.get("purchase_id"),{}),x.get("completion_bonus_coach_id"),x.get("termination_date")) for x in terminations
+    completion_sources += [(x.get("purchase_id"),x,purchase_map.get(x.get("purchase_id"),{}),x.get("completion_bonus_coach_id"),x.get("termination_date")) for x in term_events
         if x.get("termination_type")=="expired" and x.get("completion_bonus_eligible")]
     for pid,source,p,coach_id,completed_date in completion_sources:
         if coach_id not in coach_name: continue
-        rule=_bonus_rule_for_date(bonus_rules,completed_date); eligible,reason=_bonus_eligibility(rule,p,"completion")
+        p=source.get('purchase_snapshot') or p
+        rule_rows=([source['bonus_rule_snapshot']] if source.get('bonus_rule_snapshot') else []) if source.get('snapshot_available') else bonus_rules
+        rule=_bonus_rule_for_date(rule_rows,source.get('original_termination_date') or completed_date); eligible,reason=_bonus_eligibility(rule,p,"completion")
         untaxed=_tax_display_amount(p.get("total_amount"),"未稅"); rate=Decimal(str(rule.get("completion_rate") or 0)) if rule else Decimal("0")
         bonus=int((Decimal(untaxed)*rate).quantize(Decimal("1"),rounding=ROUND_HALF_UP)) if eligible else 0
+        untaxed*=termination_sign(source); bonus*=termination_sign(source)
         completion_rows.append({"課程完成日期":completed_date,"購買_ID":purchase_codes.get(pid,""),"會員名稱":member_name.get(p.get("member_id"),""),"教練":coach_name.get(coach_id,""),
             "課程名稱":p.get("course_name") or "","課程結束成交未稅金額":untaxed,"結單率":float(rate)*100,"結單獎金":bonus,
             "適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
@@ -2010,6 +2016,7 @@ def _full_system_backup_bytes(admin):
         "project_members":"舊專案會員",
         "bonus_rules":"獎金規則",
         "course_terminations":"課程中止",
+        "course_termination_reversals":"中止撤銷紀錄",
         "staff_schedule_months":"排班月份",
         "staff_schedule_days":"每日排班",
         "staff_schedule_preferences":"排班預設",
@@ -2041,7 +2048,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.36"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.37"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰、Streamlit Secrets及私有schema紀錄（操作收據及特殊假別稽核）；完整還原須另有PostgreSQL資料庫備份"},
@@ -3418,6 +3425,7 @@ def _build_purchase_code_map(purchases):
 
 def _course_termination_history_frame(terminations, purchase_map, member_name_map, purchase_code_map, tax_mode):
     """中止記錄畫面與 Excel 共用；沿用既有報表稅額換算，不更改資料庫金額。"""
+    from termination_reporting import reversal_date
     history_rows=[]
     for item in terminations:
         purchase=purchase_map.get(item["purchase_id"],{})
@@ -3434,8 +3442,11 @@ def _course_termination_history_frame(terminations, purchase_map, member_name_ma
             "實際退費":float(item["refund_amount"]) if tax_mode=="含稅" else termination_money(item,"refund_amount",tax_mode),
             "結單計算":"計算" if item["completion_bonus_eligible"] else "不計算",
             "中止原因":item.get("reason") or "",
+            "中止狀態":"已撤銷" if item.get('reversed_at') else "有效中止",
+            "撤銷日期":reversal_date(item) or "",
+            "撤銷原因":item.get('_reversal_reason') or "",
         })
-    return pd.DataFrame(history_rows,columns=["中止日期","購買_id","會員","課程","中止類型","剩餘堂數","餘額","逾期入帳","退費手續費","實際退費","結單計算","中止原因"])
+    return pd.DataFrame(history_rows,columns=["中止日期","購買_id","會員","課程","中止類型","剩餘堂數","餘額","逾期入帳","退費手續費","實際退費","結單計算","中止原因","中止狀態","撤銷日期","撤銷原因"])
 
 
 def course_termination_report_page(me):
@@ -3443,6 +3454,9 @@ def course_termination_report_page(me):
         st.warning("課程中止僅限系統管理員使用。")
         return
     _entry_success("termination")
+    from termination_reversal_ui import render_reversal_controls
+    if '_termination_reversal_success' in st.session_state:
+        st.success(st.session_state.pop('_termination_reversal_success'))
     revision=st.session_state.get("termination_form_revision",0)
     st.caption("逾期餘額轉列入帳；退費金額為剩餘金額扣除選擇性 20% 手續費。兩者均不計入銷課及執行時數。")
     members=paged_rows(lambda: client().table("members").select("id,member_name").order("id"))
@@ -3472,8 +3486,13 @@ def course_termination_report_page(me):
                 history_purchases=paged_rows(lambda: client().table("purchases").select("id,member_id,course_name")
                     .in_("id",history_purchase_ids).order("id")) if history_purchase_ids else []
                 history_purchase_map={x["id"]:x for x in history_purchases}
+                ids=[x['id'] for x in terminations]
+                reversals=paged_rows(lambda: client().table('course_termination_reversals').select('termination_id,reason')
+                    .in_('termination_id',ids).order('id')) if ids else []
+                reversal_reasons={x['termination_id']:x['reason'] for x in reversals}
+                terminations=[dict(x,_reversal_reason=reversal_reasons.get(x['id'],'')) for x in terminations]
                 history_df=_course_termination_history_frame(terminations,history_purchase_map,member_name_map,purchase_code_map,tax_mode)
-                st.caption(f"金額皆為{tax_mode}；餘額為中止前剩餘金額。未稅依保存的實收、銷課及中止拆分計算。")
+                st.caption(f"金額皆為{tax_mode}；本表保留原中止金額，已撤銷不代表仍有效。沖回列在撤銷日期的每月報表。")
                 money_config={x:st.column_config.NumberColumn(format="$ %.0f")
                     for x in ["餘額","逾期入帳","退費手續費","實際退費"]}
                 st.dataframe(history_df,hide_index=True,width="stretch",column_config=money_config)
@@ -3481,6 +3500,7 @@ def course_termination_report_page(me):
                     number_formats={x:'#,##0;(#,##0)' for x in ["餘額","逾期入帳","退費手續費","實際退費"]})
                 st.download_button(f"匯出中止記錄({tax_mode})",export,file_name=f"中止記錄_{tax_mode}_{start}_{end}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch")
+                render_reversal_controls(me,terminations,history_purchase_map,member_name_map,purchase_code_map,client())
         return
 
     coaches=coach_options()
@@ -3560,6 +3580,7 @@ def course_termination_report_page(me):
 
 def general_queries_page(me):
     """系統管理員專用的跨模組財務與營運查詢。"""
+    from termination_reporting import effective_terminations
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
         return
@@ -3651,9 +3672,10 @@ def general_queries_page(me):
         usages=(query_read(query_data,"general_queries_page:3802",lambda: paged_rows(lambda: client().table("session_usages").select("id,purchase_id,usage_date,created_at")
             .in_("purchase_id",ids).lte("usage_date",str(cutoff)).order("usage_date").order("id"))) if ids else [])
         try:
-            terminations=(query_read(query_data,"general_queries_page:3805",lambda: paged_rows(lambda: client().table("course_terminations").select('id,purchase_id,termination_date,termination_type,created_at,remaining_amount,recognized_amount,fee_amount,refund_amount,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version')
+            terminations=(query_read(query_data,"general_queries_page:3805",lambda: paged_rows(lambda: client().table("course_terminations").select('id,purchase_id,termination_date,termination_type,created_at,remaining_amount,recognized_amount,fee_amount,refund_amount,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version,reversed_at')
                 .in_("purchase_id",ids).lte("termination_date",str(cutoff)).order("termination_date").order("id"))) if ids else [])
         except Exception as exc: raise ValueError("中止資料讀取失敗，停止計算，避免誤列餘額。") from exc
+        terminations=effective_terminations(terminations,cutoff)
         paid={}; paid_net={}; paid_terms={}; used={}; last_used={}
         for item in _allocate_payment_net_amounts(purchases,payments):
             pid=item["purchase_id"]; paid[pid]=paid.get(pid,0)+float(item.get("amount") or 0)
@@ -3758,9 +3780,10 @@ def general_queries_page(me):
             .in_("purchase_id",ids).lte("usage_date",str(cutoff)).order("usage_date").order("id"))) if ids else [])
         try:
             terminations=(query_read(query_data,"general_queries_page:3911",lambda: paged_rows(lambda: client().table("course_terminations")
-                .select('id,purchase_id,termination_date,termination_type,recognized_amount,fee_amount,refund_amount,created_at,remaining_amount,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version')
+                .select('id,purchase_id,termination_date,termination_type,recognized_amount,fee_amount,refund_amount,created_at,remaining_amount,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version,reversed_at')
                 .in_("purchase_id",ids).lte("termination_date",str(cutoff)).order("termination_date").order("id"))) if ids else [])
         except Exception as exc: raise ValueError("中止資料讀取失敗，停止計算，避免誤列餘額。") from exc
+        terminations=effective_terminations(terminations,cutoff)
         payment_by={}; usage_by={}; termination_by={}
         for x in _allocate_payment_net_amounts(purchases,payments): payment_by.setdefault(x["purchase_id"],[]).append(x)
         for x in usages: usage_by.setdefault(x["purchase_id"],[]).append(x)
@@ -3904,6 +3927,7 @@ def general_queries_page(me):
                     if query_data.ready: render_balance_results(cutoff,keyword,"含稅",f"{cutoff}_{keyword or '全部'}")
 
 def financial_report_page(me):
+    from termination_reporting import effective_terminations, termination_sign, termination_label
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
         return
@@ -3989,7 +4013,8 @@ def financial_report_page(me):
             completed_ids=[x["id"] for x in purchases if x.get("status")=="completed"]
             terminated_ids=[x["id"] for x in purchases if x.get("status") in ("expired","cancelled")]
             completion_usages=query_read(query_data,"financial_report_page:4132",lambda: paged_rows(lambda: client().table("session_usages").select("purchase_id,usage_date").in_("purchase_id",completed_ids).order("usage_date",desc=True).order("id"))) if completed_ids else []
-            termination_records=query_read(query_data,"financial_report_page:4133",lambda: paged_rows(lambda: client().table("course_terminations").select('purchase_id,termination_date,remaining_amount,recognized_amount,fee_amount,refund_amount,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version').in_("purchase_id",terminated_ids).order("termination_date",desc=True).order("id"))) if terminated_ids else []
+            termination_records=query_read(query_data,"financial_report_page:4133",lambda: paged_rows(lambda: client().table("course_terminations").select('purchase_id,termination_date,remaining_amount,recognized_amount,fee_amount,refund_amount,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version,reversed_at').in_("purchase_id",terminated_ids).order("termination_date",desc=True).order("id"))) if terminated_ids else []
+            termination_records=effective_terminations(termination_records,date.today())
             course_end_date_map={}
             for usage in completion_usages:
                 course_end_date_map.setdefault(usage["purchase_id"],usage.get("usage_date"))
@@ -4063,6 +4088,7 @@ def financial_report_page(me):
                 outstanding_used_net_map[usage["purchase_id"]]=outstanding_used_net_map.get(usage["purchase_id"],0)+usage_net_amount(usage)
                 outstanding_used_sessions_map[usage["purchase_id"]]=outstanding_used_sessions_map.get(usage["purchase_id"],0)+1
             outstanding_terms=query_read(query_data,'finance_center_outstanding_terms',lambda: paged_rows(lambda: client().table('course_terminations').select('*').in_('purchase_id',outstanding_ids).lte('termination_date',str(date.today())).order('id'))) if outstanding_ids else []
+            outstanding_terms=effective_terminations(outstanding_terms,date.today())
             outstanding_term_map={x['purchase_id']:x for x in outstanding_terms}
             outstanding_rows=[]
             for purchase in outstanding_purchases:
@@ -4367,8 +4393,9 @@ def financial_report_page(me):
                             .select("id,purchase_id,deducted_amount,deducted_net_amount,usage_date,actual_usage_date,created_at").in_("purchase_id",historical_ids)
                             .lte("usage_date",str(historical_cutoff)).order("usage_date").order("created_at").order("id"))) if historical_ids else [])
                         historical_terminations=(query_read(query_data,"financial_report_page:4511",lambda: paged_rows(lambda: client().table("course_terminations")
-                            .select('id,purchase_id,termination_type,termination_date,created_at,remaining_amount,recognized_amount,fee_amount,refund_amount,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version').in_("purchase_id",historical_ids)
+                            .select('id,purchase_id,termination_type,termination_date,created_at,remaining_amount,recognized_amount,fee_amount,refund_amount,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version,reversed_at').in_("purchase_id",historical_ids)
                             .lte("termination_date",str(historical_cutoff)).order("termination_date").order("created_at").order("id"))) if historical_ids else [])
+                        historical_terminations=effective_terminations(historical_terminations,historical_cutoff)
                         historical_paid_map={}; historical_paid_net_map={}; historical_usage_map={}; historical_termination_map={}
                         for payment in _allocate_payment_net_amounts(historical_purchases,historical_payments):
                             historical_paid_map[payment["purchase_id"]]=historical_paid_map.get(payment["purchase_id"],0)+float(payment.get("amount") or 0)
@@ -4604,7 +4631,7 @@ def financial_report_page(me):
             monthly_usages=query_read(query_data,"financial_report_page:4750",lambda: paged_rows(lambda: client().table("session_usages").select("id,purchase_id,usage_date,actual_usage_date,is_makeup,coach_id,session_seq,deducted_amount,deducted_net_amount")
                 .gte("usage_date",str(month_start)).lte("usage_date",str(month_end)).order("usage_date").order("id")))
             try:
-                monthly_terminations=query_read(query_data,"financial_report_page:4753",lambda: paged_rows(lambda: client().table("course_terminations").select('purchase_id,termination_date,termination_type,remaining_amount,fee_amount,refund_amount,recognized_amount,completion_bonus_eligible,completion_bonus_coach_id,reason,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version')
+                monthly_terminations=query_read(query_data,"financial_report_page:4753",lambda: paged_rows(lambda: client().table("course_termination_events").select('id,purchase_id,termination_date,termination_type,remaining_amount,fee_amount,refund_amount,recognized_amount,completion_bonus_eligible,completion_bonus_coach_id,reason,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version,is_reversal,original_termination_date,purchase_snapshot,bonus_rule_snapshot,snapshot_available')
                     .gte("termination_date",str(month_start)).lte("termination_date",str(month_end)).order("termination_date").order("id")))
             except Exception as exc:
                 raise ValueError('中止資料讀取失敗，停止月報計算，避免漏列逾期入帳或退款。') from exc
@@ -4653,7 +4680,7 @@ def financial_report_page(me):
                 is_expired=item.get("termination_type")=="expired"
                 monthly_termination_rows.append({"日期":item["termination_date"],"購買_ID":bonus_purchase_code_map.get(item["purchase_id"],""),
                     "會員名稱":monthly_member_name.get(purchase.get("member_id"),"未知"),"課程名稱":purchase.get("course_name") or "",
-                    "中止類型":"逾期中止" if is_expired else "退費中止",
+                    "中止類型":termination_label(item),
                     "退費前剩餘金額（未稅）":termination_money(item,"remaining_amount","未稅"),
                     "逾期入帳金額（未稅）":termination_money(item,"recognized_amount","未稅") if is_expired else 0,
                     "退費手續費（未稅）":termination_money(item,"fee_amount","未稅") if not is_expired else 0,
@@ -4751,15 +4778,17 @@ def financial_report_page(me):
                     "醫生轉介":purchase.get("referral") or "","課程結束成交未稅金額":completed_amount,"結單率":float(rate)*100,
                     "結單獎金":bonus,"適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
             for termination in monthly_terminations:
-                purchase=monthly_purchase_map.get(termination["purchase_id"],{})
+                purchase=termination.get('purchase_snapshot') or monthly_purchase_map.get(termination["purchase_id"],{})
                 coach_id=termination.get("completion_bonus_coach_id")
                 if termination.get("termination_type")!="expired" or not termination.get("completion_bonus_eligible") or coach_id not in coach_ids:
                     continue
-                rule=_bonus_rule_for_date(bonus_rules,termination["termination_date"])
+                rule_rows=([termination['bonus_rule_snapshot']] if termination.get('bonus_rule_snapshot') else []) if termination.get('snapshot_available') else bonus_rules
+                rule=_bonus_rule_for_date(rule_rows,termination.get('original_termination_date') or termination['termination_date'])
                 eligible,reason=_bonus_eligibility(rule,purchase,"completion")
                 completed_amount=_tax_display_amount(purchase.get("total_amount"),"未稅")
                 rate=Decimal(str(rule.get("completion_rate") or 0)) if rule else Decimal("0")
                 bonus=int((Decimal(completed_amount)*rate).quantize(Decimal("1"),rounding=ROUND_HALF_UP)) if eligible else 0
+                completed_amount*=termination_sign(termination); bonus*=termination_sign(termination)
                 completion_bonus_rows.append({"課程完成日期":termination["termination_date"],"購買_ID":bonus_purchase_code_map.get(termination["purchase_id"],""),
                     "會員名稱":monthly_member_name.get(purchase.get("member_id"),"未知"),"教練":monthly_coach_name.get(coach_id,"未知"),
                     "課程名稱":purchase.get("course_name") or "","購買類型":"首次購買" if purchase.get("purchase_kind")=="first" else "續約" if purchase.get("purchase_kind")=="renewal" else purchase.get("purchase_kind") or "",

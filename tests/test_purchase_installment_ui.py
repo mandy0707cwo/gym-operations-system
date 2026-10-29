@@ -427,7 +427,7 @@ class PurchaseUITests(unittest.TestCase):
         app.session_state["selected_termination_main"]="中止記錄"
         app.run();self.clean(app)
         self.assertEqual([x.label for x in app.tabs],["課程購買","登錄後續期款","課程中止","新增中止","中止記錄","含稅","未稅"])
-        expected=["中止日期","購買_id","會員","課程","中止類型","剩餘堂數","餘額","逾期入帳","退費手續費","實際退費","結單計算","中止原因"]
+        expected=["中止日期","購買_id","會員","課程","中止類型","剩餘堂數","餘額","逾期入帳","退費手續費","實際退費","結單計算","中止原因","中止狀態","撤銷日期","撤銷原因"]
         self.assertEqual(list(app.dataframe[0].value.columns),expected)
         self.assertEqual(list(app.dataframe[0].value.iloc[0][["餘額","逾期入帳","退費手續費","實際退費"]]),[8400,0,1680,6720])
         self.assertNotIn("purchase_balances",app.session_state["reads"])

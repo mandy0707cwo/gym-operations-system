@@ -1,4 +1,5 @@
 import ast
+import unittest
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
@@ -6,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 from openpyxl import load_workbook
+from finance_reporting import display_money,payment_allocations,usage_net,termination_money,ledger_balance,event_net_total,event_net
 
 
 APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
@@ -43,6 +45,7 @@ def load_functions():
         "Decimal": Decimal,
         "ROUND_HALF_UP": ROUND_HALF_UP,
         "BytesIO": BytesIO,
+        **{name:globals()[name] for name in ('display_money','payment_allocations','usage_net','termination_money','ledger_balance','event_net_total','event_net')},
     }
     exec(compile(module, str(APP_PATH), "exec"), namespace)
     return namespace
@@ -57,9 +60,9 @@ def sample_tables():
             "session_hours": 1, "total_amount": 2100, "purchase_date": "2026-08-01", "created_at": "2026-08-01T01:00:00",
             "expiry_date": "2027-08-01", "status": "active", "payment_plan": "full", "installment_count": 1,
             "purchase_kind": "first", "referral": ""}],
-        "purchase_payments": [{"purchase_id": "p1", "amount": 2100, "paid_date": "2026-08-01", "installment_no": 1}],
+        "purchase_payments": [{"id":"pay1","purchase_id": "p1", "amount": 2100, "net_amount":2000, "paid_date": "2026-08-01", "installment_no": 1}],
         "session_usages": [{"id": "u1", "purchase_id": "p1", "coach_id": "c1", "usage_date": "2026-08-02", "session_seq": 1,
-            "deducted_amount": 1050, "note": ""}],
+            "deducted_amount": 1050, "deducted_net_amount":1000, "note": ""}],
         "projects": [], "project_entries": [], "project_deposits": [], "course_terminations": [],
         "trial_items": [{"coach_id": "c1", "course_type": "體驗", "hours": 1, "amount": 500, "entry_date": "2026-08-02"}],
         "single_sales": [], "event_supports": [], "bonus_rules": [],
@@ -83,7 +86,7 @@ def test_financial_backup_contains_all_report_groups_and_balances():
     assert balance["實際預收金額"] == 2100
     assert balance["累計銷課金額"] == 1050
     assert balance["實際預收剩餘金額"] == 1050
-    assert frames["財務-體驗項目報表"].iloc[0]["未稅金額"] == 500
+    assert frames["財務-體驗項目報表"].iloc[0]["未稅金額"] == 476
     coach_revenue = frames["財務-教練營收"].iloc[0]
     assert coach_revenue["體驗項目金額（未稅）"] == 476
     assert coach_revenue["金額總計（未稅）"] == 1476
@@ -156,8 +159,8 @@ def test_coach_query_is_a_sidebar_page_not_a_usage_tab():
 
 def test_daily_operation_reports_show_complete_details():
     source = APP_PATH.read_text(encoding="utf-8")
-    assert 'columns=["日期","教練","體驗會員姓名","體驗項目","內容","課程屬性","時數","金額","備註"]' in source
-    assert 'columns=["日期","教練","單堂銷售會員姓名","銷售內容","課程屬性","時數","金額","備註"]' in source
+    assert 'columns=["日期","教練","體驗會員姓名","體驗項目","內容","課程屬性","時數","金額（未稅）","備註"]' in source
+    assert 'columns=["日期","教練","單堂銷售會員姓名","銷售內容","課程屬性","時數","金額（未稅）","備註"]' in source
     assert '"體驗項目明細":daily_trial_detail_df' in source
     assert '"單堂銷售明細":daily_single_detail_df' in source
 
@@ -271,7 +274,9 @@ def test_usage_detail_query_displays_deducted_amount_after_actual_date():
 def test_usage_net_amount_prefers_persisted_accounting_value():
     usage_net = load_functions()["usage_net_amount"]
     assert usage_net({"deducted_amount": 1690, "deducted_net_amount": 1609}) == 1609
-    assert usage_net({"deducted_amount": 1690}) == 1610
+    from financial_calculations import FinancialDataError
+    with unittest.TestCase().assertRaises(FinancialDataError):
+        usage_net({"deducted_amount":1690})
 
 
 def test_usage_net_amount_migration_allocates_rounding_difference():
@@ -304,7 +309,7 @@ def test_final_session_rounding_example_matches_accounting_total():
 
 def test_monthly_project_usage_report_columns_and_category():
     source = APP_PATH.read_text(encoding="utf-8")
-    assert 'select("entry_date,project_id,project_catalog_id,project_name,person_name,coach_id,item_name,item_hours,quantity,line_amount")' in source
+    assert "select('entry_date,project_id,project_catalog_id,project_name,person_name,coach_id,item_name,item_hours,quantity,line_amount,net_amount,calculation_rule_version')" in source
     assert 'monthly_project_report_category={x["id"]:str(x.get("course_type") or "未分類")' in source
     assert '"教練":monthly_coach_name.get(x.get("coach_id"),"未知")' in source
     assert '"報表分類":monthly_project_report_category.get(x.get("project_catalog_id"),"未分類")' in source
@@ -326,7 +331,10 @@ def test_member_prepaid_summary_resolves_course_end_date():
     assert 'completed_ids=[x["id"] for x in purchases if x.get("status")=="completed"]' in source
     assert 'terminated_ids=[x["id"] for x in purchases if x.get("status") in ("expired","cancelled")]' in source
     assert 'table("session_usages").select("purchase_id,usage_date")' in source
-    assert 'table("course_terminations").select("purchase_id,termination_date")' in source
+    selections=[node.args[0].value for node in ast.walk(ast.parse(source))
+                if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and node.func.attr=='select'
+                and node.args and isinstance(node.args[0],ast.Constant) and isinstance(node.args[0].value,str)]
+    assert any(x.startswith('purchase_id,termination_date,') and 'reversed_at' in x.split(',') for x in selections)
 
 
 def test_monthly_sales_uses_complete_paginated_sources():

@@ -58,11 +58,14 @@ import streamlit as st
 from ui_text import section_heading
 from confirmed_queries import confirm_query,query_read
 from finance_reporting import display_money,payment_allocations,usage_net,termination_money,ledger_balance,event_net_total,event_net
+from termination_reporting import termination_events
 st.session_state.setdefault("reads",[])
 class Query:
  def __init__(self,name):
   self.name=name
   self.records=deepcopy(st.session_state.get("tables",{}).get(name,[]))
+  if name=='course_termination_events' and name not in st.session_state.get('tables',{}):
+   self.records=termination_events(st.session_state.get('tables',{}).get('course_terminations',[]),st.session_state.get('tables',{}).get('course_termination_reversals',[]),'9999-12-31')
  def select(self,*a): return self
  def order(self,*a,**k): return self
  def eq(self,field,value):

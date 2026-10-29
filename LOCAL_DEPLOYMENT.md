@@ -1,3 +1,9 @@
+# v1.13.37 中止撤銷驗證
+
+一般環境先安裝 requirements.txt，再執行 `python verify_termination_reversal_v37.py --regression`。畫面測試只有虛構資料。`--database` 僅用固定 127.0.0.1:55439/termination_v37 假資料庫，未建立本機測試庫時不能宣稱資料庫測試通過；不可改成正式連線。
+
+正式部署不能只更新 app.py，須依 UPGRADE_v1.13.37.md 先備份及升級SQL。使用者密碼與金鑰不放程式、檔案包或聊天。
+
 # v1.13.35 排休額度與草稿獨立測試
 
 本版本目錄執行 `python -m streamlit run schedule_demo.py --server.address 127.0.0.1 --server.port 8517 --server.headless true`。先切換測試主管／管理員，在排休額度設定勾選確認並核定，再切換教練。未按儲存草稿的預排不寫入後端，重新整理可能遺失；此頁僅虛構資料，正式升級須依UPGRADE_v1.13.35.md執行SQL。

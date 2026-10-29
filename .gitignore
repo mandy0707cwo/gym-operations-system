@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.test-temp*/
+supabase/.temp/
+.streamlit/secrets.toml
+private_backup/
