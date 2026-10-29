@@ -1,11 +1,30 @@
 """月報與完整備份共用欄位／彙總；不重算稅額或獎金率。"""
 from datetime import date
 from decimal import Decimal
+import re
 import pandas as pd
 from financial_calculations import decimal_value
 
 BONUS_COLUMNS=['帳號','教練','不計成交金額','可計成交金額','獎金合計']
 PENDING_COLUMNS=['帳號','教練','購買_ID','日期','待確認成交金額（未稅）','原因']
+
+
+def sort_account_rows(frame):
+    """報表依帳號自然升冪；空帳號置後，同帳號穩定保留原明細順序。"""
+    if '帳號' not in frame.columns or frame.empty:
+        return frame.copy()
+
+    def account_key(value):
+        text='' if pd.isna(value) else str(value).strip().casefold()
+        parts=tuple((1,int(part)) if part.isascii() and part.isdigit() else (0,part)
+                    for part in re.split(r'([0-9]+)',text))
+        return (not bool(text),parts)
+
+    # 完整備份有多個月份：先月份，再以同一規則排帳號，不跨月混排。
+    accounts=frame['帳號'].tolist()
+    months=frame['報表月份'].fillna('').astype(str).tolist() if '報表月份' in frame.columns else ['']*len(frame)
+    order=sorted(range(len(frame)),key=lambda i:(months[i],account_key(accounts[i])))
+    return frame.iloc[order].reset_index(drop=True)
 
 
 def cross_month_makeup_hours(usages,purchases):
@@ -68,4 +87,4 @@ def bonus_summary(coaches,details,amount_field,bonus_field,date_field):
         summary.append({'帳號':str(person.get('username') or ''),
             '教練':person.get('display_name') or person.get('username') or '未知',
             '不計成交金額':total['excluded'],'可計成交金額':total['eligible'],'獎金合計':total['bonus']})
-    return pd.DataFrame(summary,columns=BONUS_COLUMNS),pd.DataFrame(pending,columns=PENDING_COLUMNS)
+    return sort_account_rows(pd.DataFrame(summary,columns=BONUS_COLUMNS)),sort_account_rows(pd.DataFrame(pending,columns=PENDING_COLUMNS))

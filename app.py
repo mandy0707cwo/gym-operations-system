@@ -1806,7 +1806,7 @@ def _excel_bytes(sheet_frames,number_formats=None,fit_display_width=False):
 
 def _financial_backup_frames(table_data):
     from termination_reporting import effective_terminations, termination_events, termination_sign, termination_label
-    from monthly_report_layout import cross_month_makeup_hours, bonus_summary
+    from monthly_report_layout import cross_month_makeup_hours, bonus_summary, sort_account_rows
     """依現有財務報表規則，產生截至今日、不套用畫面篩選的完整財務工作表。"""
     today=str(date.today())
     profiles=table_data.get("profiles",[])
@@ -1987,7 +1987,7 @@ def _financial_backup_frames(table_data):
         "財務-體驗項目報表":operation_summary(trials),"財務-單堂銷售報表":operation_summary(singles),
         "財務-醫生轉介":pd.DataFrame(referral_rows),"財務-課程屬性":pd.DataFrame(course_type_rows),
         "財務-銷課明細":pd.DataFrame(usage_rows),"財務-課程中止":pd.DataFrame(termination_rows),
-        "財務-教練時數":pd.DataFrame(coach_hours),"財務-教練營收":pd.DataFrame(coach_revenues),
+        "財務-教練時數":sort_account_rows(pd.DataFrame(coach_hours)),"財務-教練營收":sort_account_rows(pd.DataFrame(coach_revenues)),
         "財務-教練談單獎金":pd.DataFrame(visible(talk_bonus_rows)),"財務-談單獎金總計":talk_summary,
         "財務-教練結單獎金":pd.DataFrame(visible(completion_rows)),"財務-結單獎金總計":completion_summary,
         "財務-談單待確認":talk_pending,"財務-結單待確認":completion_pending,
@@ -2049,7 +2049,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.38"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.39"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰、Streamlit Secrets及私有schema紀錄（操作收據及特殊假別稽核）；完整還原須另有PostgreSQL資料庫備份"},
@@ -3929,7 +3929,7 @@ def general_queries_page(me):
                     if query_data.ready: render_balance_results(cutoff,keyword,"含稅",f"{cutoff}_{keyword or '全部'}")
 
 def financial_report_page(me):
-    from monthly_report_layout import cross_month_makeup_hours, bonus_summary
+    from monthly_report_layout import cross_month_makeup_hours, bonus_summary, sort_account_rows
     from termination_reporting import effective_terminations, termination_sign, termination_label
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
@@ -4722,8 +4722,8 @@ def financial_report_page(me):
                 usage_revenue=sum(usage_net_amount(x) for x in monthly_usages if x.get("coach_id")==coach_id)
                 coach_revenue_rows.append({"帳號":monthly_coach_account.get(coach_id,""),"教練":monthly_coach_name.get(coach_id,"未知"),"體驗項目金額（未稅）":round(trial_revenue),"單堂銷售金額（未稅）":round(single_revenue),
                     "專案（未稅）":round(project_revenue),"銷課（未稅）":round(usage_revenue),"金額總計（未稅）":round(trial_revenue+single_revenue+project_revenue+usage_revenue)})
-            monthly_hours_df=pd.DataFrame(coach_hour_rows,columns=["帳號","教練","體驗時數","單堂時數","活動時數","專案時數","銷課時數","可計執行時數","補單","動磁波時數"])
-            monthly_revenue_df=pd.DataFrame(coach_revenue_rows,columns=["帳號","教練","體驗項目金額（未稅）","單堂銷售金額（未稅）","專案（未稅）","銷課（未稅）","金額總計（未稅）"])
+            monthly_hours_df=sort_account_rows(pd.DataFrame(coach_hour_rows,columns=["帳號","教練","體驗時數","單堂時數","活動時數","專案時數","銷課時數","可計執行時數","補單","動磁波時數"]))
+            monthly_revenue_df=sort_account_rows(pd.DataFrame(coach_revenue_rows,columns=["帳號","教練","體驗項目金額（未稅）","單堂銷售金額（未稅）","專案（未稅）","銷課（未稅）","金額總計（未稅）"]))
 
             try:
                 bonus_rules=query_read(query_data,"financial_report_page:4840",lambda: rows(client().table("bonus_rules").select("*").eq("active",True).order("effective_from",desc=True)))
