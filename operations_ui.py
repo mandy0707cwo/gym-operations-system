@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from confirmed_queries import confirm_query
-from operations_metrics import (ANNUAL_ROWS, OperationsMetrics, Period, annual_totals,
+from operations_metrics import (ANNUAL_ROWS, OperationsMetrics, annual_totals,
                                 calendar_period, change_rate, comparison_periods, display_value)
 from operations_repository import load_sources
 
@@ -80,26 +80,29 @@ def _annual(me, connection_factory, today):
 
 
 def _comparison(me, connection_factory, today):
-    kind = st.segmented_control('統計期間', ['月', '季', '年', '自訂'], default='月', required=True,
+    # 升級前可能保留季／自訂的選擇；建立元件前先回到有效選項。
+    if st.session_state.get('operations_period_kind') not in (None, '月', '年'):
+        st.session_state['operations_period_kind'] = '月'
+    kind = st.segmented_control('統計期間', ['月', '年'], default='月', required=True,
                                 key='operations_period_kind')
     with st.form('operations_comparison_form', border=False):
-        if kind == '自訂':
-            left, right = st.columns(2)
-            start = left.date_input('開始日期', value=today.replace(day=1), key='operations_custom_start')
-            end = right.date_input('結束日期', value=today, key='operations_custom_end')
-            year = month = quarter = None
-        else:
+        if kind == '月':
             left, right = st.columns(2)
             year = int(left.number_input('年度', min_value=1901, max_value=9998, value=today.year, step=1,
                                           key='operations_comparison_year'))
             month = right.selectbox('月份', list(range(1, 13)), index=today.month - 1,
-                                     format_func=lambda value: f'{value:02d}月', key='operations_month') if kind == '月' else 1
-            quarter = right.selectbox('季度', [1, 2, 3, 4], index=(today.month - 1) // 3,
-                                       format_func=lambda value: f'第{value}季', key='operations_quarter') if kind == '季' else 1
+                                     format_func=lambda value: f'{value:02d}月', key='operations_month')
+        else:
+            year = int(st.number_input('年度', min_value=1901, max_value=9998, value=today.year, step=1,
+                                        key='operations_comparison_year'))
+            month = 1
         submitted = st.form_submit_button('查詢', type='primary')
     try:
-        selected = Period(start, end) if kind == '自訂' else calendar_period(kind, year, month, quarter)
-        periods = comparison_periods(kind, selected, today)
+        selected = calendar_period(kind, year, month)
+        current_period, previous_period, last_year_period = comparison_periods(kind, selected, today)
+        targets = ([('比較上月份', previous_period), ('比較去年同月份', last_year_period)]
+                   if kind == '月' else [('較去年同期', last_year_period)])
+        periods = [current_period, *(period for _, period in targets)]
     except (ValueError, OverflowError) as exc:
         st.warning(str(exc))
         return
@@ -110,21 +113,23 @@ def _comparison(me, connection_factory, today):
     if engine is None:
         return
     try:
-        current, previous, last_year = [engine.totals(period) for period in periods]
+        current = engine.totals(current_period)
+        comparisons = [(title, engine.totals(period)) for title, period in targets]
     except Exception as exc:
         st.error(f'資料尚待查核，未顯示部分合計：{exc}')
         return
-    st.caption(f'本期：{periods[0].label}｜上期：{periods[1].label}｜去年同期：{periods[2].label}')
-    if periods[0].end < selected.end:
+    st.caption('｜'.join([f'本期：{current_period.label}',
+                         *(f'{title}：{period.label}' for title, period in targets)]))
+    if current_period.end < selected.end:
         st.caption('本期尚未結束，統計至今日；比較期同步取相同日曆進度。')
-    st.caption('金額為未稅整元。自訂區間的上期為緊接之前、相同天數的區間；基期為0時不計增減率。')
+    st.caption('金額為未稅整元；基期為0時不計增減率。')
     for label, field, value_kind in [('成交金額', 'sales_net', 'money'), ('銷課金額', 'usage_net', 'money'),
                                      ('銷課堂數', 'usage_sessions', 'count'), ('體驗人次', 'trial_visits', 'count')]:
         with st.container(border=True):
             st.markdown(label + ('（未稅）' if value_kind == 'money' else ''))
-            left, middle, right = st.columns(3)
-            left.metric('本期', display_value(current[field], value_kind))
-            for column, title, baseline in [(middle, '較上期', previous), (right, '較去年同期', last_year)]:
+            columns = st.columns(1 + len(comparisons))
+            columns[0].metric('本期', display_value(current[field], value_kind))
+            for column, (title, baseline) in zip(columns[1:], comparisons):
                 change = change_rate(current[field], baseline[field])
                 column.metric(title, '無基準' if change is None else f'{change:+.1%}')
                 column.caption('比較期：' + display_value(baseline[field], value_kind))

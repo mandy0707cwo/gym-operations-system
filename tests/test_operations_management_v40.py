@@ -285,11 +285,11 @@ class UITests(unittest.TestCase):
     def test_all_comparison_modes_and_zero_baselines(self):
         app = self.app(operations_view='同期對比')
         self.assertEqual(app.session_state['connections'], 0)
-        for kind in ['月', '季', '年', '自訂']:
+        for kind in ['月', '年']:
             app.segmented_control(key='operations_period_kind').set_value(kind).run()
             app.button[0].click().run()
             self.assertFalse(app.exception)
-            self.assertEqual(len(app.metric), 12)
+            self.assertEqual(len(app.metric), 12 if kind == '月' else 8)
             self.assertEqual(app.metric[1].value, '無基準')
             self.assertTrue(any('本期：' in item.value for item in app.caption))
 
