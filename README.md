@@ -1,3 +1,23 @@
+# v1.13.42 營運管理受控統計
+
+新增年度總表、同期對比、兩張獨立未稅金額圖，及有效主管／管理員共用的課程完成統計RPC。一般教練、共用教練、停用或匿名不能使用新RPC，主管不取得中止與退款明細。
+
+正式升級需先執行UPGRADE_v1.13.42.md所列新migration，不能只更新畫面。驗證：`python verify_operations_release_v42.py`；加`--database`時只連固定本機假資料庫127.0.0.1:55442/operations_v42。不提供正式憑證給測試程式。本機展示仍是operations_demo.py，全為虛構資料；正式入口為app.py。
+
+# v1.13.41 年度成交／銷課圖分開
+
+年度表下方改為兩張上下獨立圖表，各自顯示每月成交金額及銷課金額（未稅整元）。計算、同期對比、來源及權限均不變，未發布線上。
+
+驗證：`python verify_operations_charts_v41.py`。本機假資料入口仍為operations_demo.py，詳見UPGRADE_v1.13.41.md。
+
+# v1.13.40 營運管理本機候選版
+
+新增年度總表及月／季／年／自訂同期對比；金額未稅整元，體驗成交與續約依使用者確認口徑。本版尚未發布，不變更資料庫。主管與系統管理員可使用。
+
+- 驗證：`python verify_operations_management_v40.py`，全程虛構資料，不連正式資料庫。
+- 本機假資料頁：安裝本專案requirements.txt後，執行`python -m streamlit run operations_demo.py --server.address 127.0.0.1 --server.port 8518`。只測版面與篩選，不是正式資料。
+- 正式入口仍為app.py；不得把假資料入口當正式服務。部署、回復與驗收見UPGRADE_v1.13.40.md。
+
 # v1.13.39 每月查詢帳號排序
 
 所有每月查詢中有帳號欄位的表格，預設由小到大排序；畫面、Excel及完整備份同步。執行 `python verify_monthly_account_order_v39.py` 可用虛構資料驗證排序及既有財務回歸，不連正式資料庫。排序不改交易、計算規則或帳號內容，不需新migration。發布與復原見UPGRADE_v1.13.39.md。

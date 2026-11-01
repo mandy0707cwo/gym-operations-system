@@ -1099,6 +1099,12 @@ def completed_purchase_ids(usages,purchase_map):
         and int(usage.get("session_seq") or 0)==int(purchase_map[usage["purchase_id"]].get("total_sessions") or 0)}
 
 def dashboard_page(me):
+    from operations_ui import render_operations_overview
+    render_operations_overview(me, client)
+
+
+def legacy_dashboard_page(me):
+    """保留原版來源供回復參考；新營運管理不呼叫、不混用舊指標。"""
     st.header("營運總覽")
     if me["role"] not in ("manager","admin"): st.warning("此頁僅限主管與系統管理員使用。") ; return
     coaches=coach_options(); c1,c2,c3=st.columns(3)
@@ -2049,7 +2055,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.39"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.42"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰、Streamlit Secrets及私有schema紀錄（操作收據及特殊假別稽核）；完整還原須另有PostgreSQL資料庫備份"},
