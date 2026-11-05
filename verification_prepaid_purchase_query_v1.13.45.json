@@ -1,0 +1,15 @@
+{
+  "version": "v1.13.45",
+  "verified_at_taipei": "2026-11-05T23:26:38.472782+08:00",
+  "production_modified": false,
+  "offline": {
+    "tests": 215,
+    "passed": 215,
+    "errors": 0,
+    "failures": 0,
+    "skipped": [],
+    "failed_names": [],
+    "successful": true
+  },
+  "successful": true
+}

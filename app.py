@@ -2059,7 +2059,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.44"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.45"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰、Streamlit Secrets及私有schema紀錄（操作收據及特殊假別稽核）；完整還原須另有PostgreSQL資料庫備份"},
@@ -3732,7 +3732,7 @@ def general_queries_page(me):
                 ["成交金額（含稅）","成交金額（未稅）","已收金額（含稅）","已收金額（未稅）"]}})
             download_frame("成交總表",frame,f"成交總表_{key}.xlsx")
 
-    def render_prepaid_results(*,start=None,end=None,member_keyword="",installment_filter="全部",key):
+    def render_prepaid_results(*,start=None,end=None,member_keyword="",installment_filter="全部",purchase_keyword="",key):
         def payment_query_builder():
             query=(client().table("purchase_payments").select('id,purchase_id,installment_no,amount,paid_date,payment_kind,created_at,net_amount,calculation_rule_version')
                 .order("paid_date",desc=True).order("created_at",desc=True).order("id",desc=True))
@@ -3743,6 +3743,7 @@ def general_queries_page(me):
         purchases=(query_read(query_data,"general_queries_page:3859",lambda: paged_rows(lambda: client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,payment_plan,installment_count,purchase_date,created_at")
             .in_("id",ids).order("id"))) if ids else [])
         purchase_map={x["id"]:x for x in purchases}; names=member_maps(); codes=purchase_codes(); keyword=member_keyword.casefold(); result=[]
+        purchase_key=purchase_keyword.strip().casefold()
         status_cutoff=end or date.today()
         status_payments=(query_read(query_data,"general_queries_page:3863",lambda: paged_rows(lambda: client().table("purchase_payments")
             .select('id,purchase_id,amount,paid_date,created_at,net_amount,calculation_rule_version').in_("purchase_id",ids).lte("paid_date",str(status_cutoff))
@@ -3756,6 +3757,10 @@ def general_queries_page(me):
         for payment in payments:
             purchase=purchase_map.get(payment["purchase_id"])
             if not purchase: continue
+            purchase_id=payment["purchase_id"]
+            if purchase_key and not (purchase_key in str(codes.get(purchase_id,purchase_id)).casefold()
+                                     or purchase_key in str(purchase_id).casefold()):
+                continue
             member_name=names.get(purchase.get("member_id"),"")
             if keyword and keyword not in member_name.casefold(): continue
             if payment.get("payment_kind")=="supplement": payment_term="補繳款"
@@ -3916,10 +3921,14 @@ def general_queries_page(me):
             if member_tab.open:
                 with member_tab:
                     with st.form("general_prepaid_member_form",border=False):
-                        c1,c2=st.columns(2); keyword=c1.text_input("會員",placeholder="輸入完整或部分會員名稱",key="gpi_member").strip(); payment_status=c2.selectbox("分期狀態",["全部","付清","未付清"],key="gpi_status")
+                        c1,c2,c3=st.columns(3)
+                        keyword=c1.text_input("會員",placeholder="輸入完整或部分會員名稱",key="gpi_member").strip()
+                        purchase_keyword=c2.text_input("購買_ID",placeholder="例如 20260414-003，可輸入部分編號",key="gpi_purchase_id").strip()
+                        payment_status=c3.selectbox("分期狀態",["全部","付清","未付清"],key="gpi_status")
                         submitted=st.form_submit_button("查詢",type="primary",width="stretch")
-                    query_data=confirm_query(st,me,"general_prepaid_member",(keyword,payment_status,str(date.today())),submitted)
-                    if query_data.ready: render_prepaid_results(member_keyword=keyword,installment_filter=payment_status,key=f"會員_{keyword or '全部'}_{payment_status}")
+                    query_data=confirm_query(st,me,"general_prepaid_member",(keyword,payment_status,purchase_keyword,str(date.today())),submitted)
+                    if query_data.ready: render_prepaid_results(member_keyword=keyword,installment_filter=payment_status,
+                        purchase_keyword=purchase_keyword,key=f"會員_{keyword or '全部'}_{payment_status}_購買_{purchase_keyword or '全部'}")
 
     if balance_tab.open:
         with balance_tab:
