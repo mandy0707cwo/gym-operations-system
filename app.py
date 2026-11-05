@@ -644,6 +644,8 @@ def installment_payment_entry(me):
         st.info("目前沒有可登錄後續期款的未付清課程。")
 
 def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
+    from finance_report_order import report_frame as finance_frame, sort_report_dates
+    make_frame=finance_frame if enable_export else pd.DataFrame
     export_sheets={}
     coaches=coach_options()
     operational_ids=set(coaches.values())
@@ -715,6 +717,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
         if course_end_filter!="全部": filtered_balances=[x for x in filtered_balances if course_status_label(x)==course_end_filter]
         from course_query_views import course_overview_frame, show_course_overview
         member_course_df=course_overview_frame(filtered_balances,purchase_map,payment_map,purchase_code_map,course_status_label)
+        if enable_export: member_course_df=sort_report_dates(member_course_df)
         export_sheets["會員課程查詢"]=member_course_df
         if not member_course_df.empty:
             show_course_overview(member_course_df)
@@ -722,8 +725,8 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             st.info("目前沒有可查詢的課程資料。")
 
     if query_view=="執行時數":
-        usage_detail_display=pd.DataFrame(columns=["日期","實際銷課日期","補單","教練","會員名稱","課程名稱","銷課時數","動磁波時數","銷課金額"])
-        daily_hours_df=pd.DataFrame(columns=["日期","教練","體驗項目時數","單堂銷售時數","專案時數","活動支援時數（扣除後÷2）","每日營運時數合計"])
+        usage_detail_display=make_frame(columns=["日期","實際銷課日期","補單","教練","會員名稱","課程名稱","銷課時數","動磁波時數","銷課金額"])
+        daily_hours_df=make_frame(columns=["日期","教練","體驗項目時數","單堂銷售時數","專案時數","活動支援時數（扣除後÷2）","每日營運時數合計"])
         with st.form(f'usage_stats_filter_form_{"export" if enable_export else "usage"}',border=False):
             c1,c2,c3=st.columns(3)
             query_start=c1.date_input("開始日期",date.today().replace(day=1),key="usage_query_start")
@@ -794,11 +797,11 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
             execution_tabs=st.tabs(["銷課時數","每日營運時數"])
             with execution_tabs[0]:
                 if usage_detail:
-                    usage_detail_display=pd.DataFrame(usage_detail,columns=["日期","實際銷課日期","補單","教練","會員名稱","課程名稱","銷課時數","動磁波時數","銷課金額"])
-                    usage_detail_display=pd.concat([usage_detail_display,pd.DataFrame([{
+                    usage_detail_display=make_frame(usage_detail,columns=["日期","實際銷課日期","補單","教練","會員名稱","課程名稱","銷課時數","動磁波時數","銷課金額"])
+                    usage_detail_display=pd.concat([usage_detail_display,make_frame([{
                         "日期":"合計","實際銷課日期":"","補單":"","教練":"","會員名稱":"","課程名稱":"","銷課時數":total_usage_hours,
                         "動磁波時數":total_magnetic_wave_hours,"銷課金額":total_amount}])],ignore_index=True)
-                    st.dataframe(usage_detail_display,hide_index=True,use_container_width=True,
+                    st.dataframe(usage_detail_display,hide_index=True,width="stretch",
                         column_config={"銷課時數":st.column_config.NumberColumn(format="%.2f 小時"),
                             "動磁波時數":st.column_config.NumberColumn(format="%.2f 小時"),"銷課金額":st.column_config.NumberColumn(format="$ %.0f")})
                 else: st.info("查詢期間沒有銷課時數資料。")
@@ -815,9 +818,9 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
                         "單堂銷售時數":single_total,"專案時數":project_total,"活動支援時數（扣除後÷2）":event_total,
                         "每日營運時數合計":trial_total+single_total+project_total+event_total})
                 if daily_rows:
-                    daily_hours_df=pd.DataFrame(daily_rows)
+                    daily_hours_df=make_frame(daily_rows)
                     daily_hour_columns={name:st.column_config.NumberColumn(format="%.2f 小時") for name in ["體驗項目時數","單堂銷售時數","專案時數","活動支援時數（扣除後÷2）","每日營運時數合計"]}
-                    st.dataframe(daily_hours_df,hide_index=True,use_container_width=True,column_config=daily_hour_columns)
+                    st.dataframe(daily_hours_df,hide_index=True,width="stretch",column_config=daily_hour_columns)
                 else: st.info("查詢期間沒有每日營運時數資料。")
         export_sheets["執行時數_銷課"]=usage_detail_display
         export_sheets["執行時數_每日營運"]=daily_hours_df
@@ -837,10 +840,10 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
                     "有效期限":x["expiry_date"],"即將到期":"是" if today<=expiry_date<=deadline else "否",
                     "過期":"是" if expiry_date<today else "否"})
             expiry_columns=["購買_ID","教練","會員名稱","課程名稱","有效期限","即將到期","過期"]
-            expiry_df=pd.DataFrame(expiry_rows,columns=expiry_columns)
+            expiry_df=make_frame(expiry_rows,columns=expiry_columns)
             st.dataframe(expiry_df,hide_index=True,width="stretch")
         else:
-            expiry_df=pd.DataFrame(columns=["購買_ID","教練","會員名稱","課程名稱","有效期限","即將到期","過期"])
+            expiry_df=make_frame(columns=["購買_ID","教練","會員名稱","課程名稱","有效期限","即將到期","過期"])
             st.info("目前沒有即將到期或過期的課程資料。")
         export_sheets["即將到期過期"]=expiry_df
 
@@ -857,10 +860,10 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
                 "堂數":f'{int(x.get("used_sessions") or 0)}／{int(x.get("total_sessions") or 0)}',
                 "有效期限":x["expiry_date"],
             } for x in low_balances]
-            low_balance_df=pd.DataFrame(low_rows,columns=["購買_ID","教練","會員名稱","課程名稱","堂數","有效期限"])
+            low_balance_df=make_frame(low_rows,columns=["購買_ID","教練","會員名稱","課程名稱","堂數","有效期限"])
             st.dataframe(low_balance_df,hide_index=True,width="stretch")
         else:
-            low_balance_df=pd.DataFrame(columns=["購買_ID","教練","會員名稱","課程名稱","堂數","有效期限"])
+            low_balance_df=make_frame(columns=["購買_ID","教練","會員名稱","課程名稱","堂數","有效期限"])
             st.info("目前沒有剩餘三堂（含）以下的有效課程。")
         export_sheets["剩餘三堂"]=low_balance_df
 
@@ -910,7 +913,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
         if enable_export:
             usage_detail_columns.extend(["銷課金額（含稅）","銷課金額（未稅）"])
         usage_detail_columns.extend(["補單","堂數","有效期限"])
-        usage_history_df=pd.DataFrame(usage_detail_rows,columns=usage_detail_columns)
+        usage_history_df=make_frame(usage_detail_rows,columns=usage_detail_columns)
         export_sheets["銷課明細查詢"]=usage_history_df
         if usage_detail_rows:
             usage_detail_config={name:st.column_config.NumberColumn(format="$ %.0f")
@@ -929,7 +932,7 @@ def usage_query_tabs(me, enable_export=False, purchase_code_map=None):
     if enable_export:
         coach_query_export=_excel_bytes(export_sheets)
         st.download_button("下載教練查詢報表",coach_query_export,file_name=f"教練查詢報表_{date.today()}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True,on_click="ignore")
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",width="stretch",on_click="ignore")
 
 def usage_page(me):
     coaches=coach_options(); allowed=coaches if me["role"] in ("shared_coach","manager","admin") else {me["display_name"]:me["id"]}
@@ -1811,6 +1814,7 @@ def _excel_bytes(sheet_frames,number_formats=None,fit_display_width=False):
     return output.getvalue()
 
 def _financial_backup_frames(table_data):
+    from finance_report_order import report_frame as finance_frame, sort_report_dates
     from termination_reporting import effective_terminations, termination_events, termination_sign, termination_label
     from monthly_report_layout import cross_month_makeup_hours, bonus_summary, sort_account_rows
     """依現有財務報表規則，產生截至今日、不套用畫面篩選的完整財務工作表。"""
@@ -1880,7 +1884,7 @@ def _financial_backup_frames(table_data):
         for x in records:
             course_type=str(x.get("course_type") or "未分類").strip() or "未分類"
             totals[course_type]=totals.get(course_type,0)+event_net(x,"amount")
-        return pd.DataFrame([{"課程屬性":k,"未稅金額":round(v)} for k,v in sorted(totals.items())],columns=["課程屬性","未稅金額"])
+        return finance_frame([{"課程屬性":k,"未稅金額":round(v)} for k,v in sorted(totals.items())],columns=["課程屬性","未稅金額"])
 
     referral_groups={}
     for p in purchases:
@@ -1986,17 +1990,17 @@ def _financial_backup_frames(table_data):
 
     visible=lambda rows_list:[{k:v for k,v in x.items() if not str(k).startswith("_")} for x in rows_list]
     return {
-        "財務-成交預收總表":pd.DataFrame(prepaid_rows),"財務-預收餘額明細":pd.DataFrame(outstanding_rows),
-        "財務-專案儲值狀況":pd.DataFrame(funding_rows),"財務-專案儲值明細":pd.DataFrame(deposit_rows),
-        "財務-已儲值專案":pd.DataFrame(visible([x for x in project_usage_rows if x.get("_type")=="stored"])),
-        "財務-未儲值專案":pd.DataFrame(visible([x for x in project_usage_rows if x.get("_type")=="unfunded"])),
+        "財務-成交預收總表":finance_frame(prepaid_rows),"財務-預收餘額明細":finance_frame(outstanding_rows),
+        "財務-專案儲值狀況":finance_frame(funding_rows),"財務-專案儲值明細":finance_frame(deposit_rows),
+        "財務-已儲值專案":finance_frame(visible([x for x in project_usage_rows if x.get("_type")=="stored"])),
+        "財務-未儲值專案":finance_frame(visible([x for x in project_usage_rows if x.get("_type")=="unfunded"])),
         "財務-體驗項目報表":operation_summary(trials),"財務-單堂銷售報表":operation_summary(singles),
-        "財務-醫生轉介":pd.DataFrame(referral_rows),"財務-課程屬性":pd.DataFrame(course_type_rows),
-        "財務-銷課明細":pd.DataFrame(usage_rows),"財務-課程中止":pd.DataFrame(termination_rows),
-        "財務-教練時數":sort_account_rows(pd.DataFrame(coach_hours)),"財務-教練營收":sort_account_rows(pd.DataFrame(coach_revenues)),
-        "財務-教練談單獎金":pd.DataFrame(visible(talk_bonus_rows)),"財務-談單獎金總計":talk_summary,
-        "財務-教練結單獎金":pd.DataFrame(visible(completion_rows)),"財務-結單獎金總計":completion_summary,
-        "財務-談單待確認":talk_pending,"財務-結單待確認":completion_pending,
+        "財務-醫生轉介":finance_frame(referral_rows),"財務-課程屬性":finance_frame(course_type_rows),
+        "財務-銷課明細":finance_frame(usage_rows),"財務-課程中止":finance_frame(termination_rows),
+        "財務-教練時數":sort_account_rows(finance_frame(coach_hours)),"財務-教練營收":sort_account_rows(finance_frame(coach_revenues)),
+        "財務-教練談單獎金":finance_frame(visible(talk_bonus_rows)),"財務-談單獎金總計":talk_summary,
+        "財務-教練結單獎金":finance_frame(visible(completion_rows)),"財務-結單獎金總計":completion_summary,
+        "財務-談單待確認":sort_report_dates(talk_pending),"財務-結單待確認":sort_report_dates(completion_pending),
     }
 
 def _full_system_backup_bytes(admin):
@@ -2055,7 +2059,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.43"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.44"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰、Streamlit Secrets及私有schema紀錄（操作收據及特殊假別稽核）；完整還原須另有PostgreSQL資料庫備份"},
@@ -3587,6 +3591,7 @@ def course_termination_report_page(me):
 
 def general_queries_page(me):
     """系統管理員專用的跨模組財務與營運查詢。"""
+    from finance_report_order import report_frame as finance_frame, sort_report_dates
     from termination_reporting import effective_terminations
     if me["role"]!="admin":
         st.warning("此頁僅限系統管理員使用。")
@@ -3655,7 +3660,7 @@ def general_queries_page(me):
                 "銷課金額（未稅）":usage_net_amount(usage),"購買堂數":int(purchase.get("total_sessions") or 0),
                 "銷課堂次":int(usage.get("session_seq") or 0),"時數":float(purchase.get("session_hours") or 1),
                 "補單":"是" if usage.get("is_makeup") else "否"})
-        frame=pd.DataFrame(result,columns=["日期","購買_ID","會員","教練","購買課程","銷課金額（含稅）","銷課金額（未稅）","購買堂數","銷課堂次","時數","補單"])
+        frame=finance_frame(result,columns=["日期","購買_ID","會員","教練","購買課程","銷課金額（含稅）","銷課金額（未稅）","購買堂數","銷課堂次","時數","補單"])
         c1,c2=st.columns(2)
         c1.metric("銷課金額總計（未稅）",f'$ {sum(x["銷課金額（未稅）"] for x in result):,.0f}',border=True)
         c2.metric("銷課金額總計（含稅）",f'$ {sum(x["銷課金額（含稅）"] for x in result):,.0f}',border=True)
@@ -3711,7 +3716,7 @@ def general_queries_page(me):
                 "課程期限":purchase.get("expiry_date"),"狀態":status,"結束日期":end_date,"分期狀態":installment_status,
                 "購買類型":{"first":"首次購買","renewal":"續課"}.get(purchase.get("purchase_kind"),purchase.get("purchase_kind") or ""),
                 "醫生轉介":purchase.get("referral") or "","備註":purchase.get("note") or ""})
-        return pd.DataFrame(result,columns=["成交日期","購買_ID","會員","教練","課程名稱","堂數","成交金額（含稅）","成交金額（未稅）",
+        return finance_frame(result,columns=["成交日期","購買_ID","會員","教練","課程名稱","堂數","成交金額（含稅）","成交金額（未稅）",
             "已收金額（含稅）","已收金額（未稅）","課程期限","狀態","結束日期","分期狀態","購買類型","醫生轉介","備註"])
 
     def render_purchase_results(frame,key):
@@ -3764,7 +3769,7 @@ def general_queries_page(me):
                 "會員":member_name,"教練":coach_name_map.get(purchase.get("coach_id"),"未知教練"),"課程名稱":purchase.get("course_name") or "",
                 "堂數":int(purchase.get("total_sessions") or 0),"預收金額（含稅）":gross,"預收金額（未稅）":payment_net_map[payment["id"]],
                 "付款期次":payment_term,"分期狀態":payment_status})
-        frame=pd.DataFrame(result,columns=["成交／預收日期","購買_ID","會員","教練","課程名稱","堂數","預收金額（含稅）","預收金額（未稅）","付款期次","分期狀態"])
+        frame=finance_frame(result,columns=["成交／預收日期","購買_ID","會員","教練","課程名稱","堂數","預收金額（含稅）","預收金額（未稅）","付款期次","分期狀態"])
         c1,c2=st.columns(2)
         c1.metric("預收金額總計（未稅）",f'$ {frame["預收金額（未稅）"].sum() if not frame.empty else 0:,.0f}',border=True)
         c2.metric("預收金額總計（含稅）",f'$ {frame["預收金額（含稅）"].sum() if not frame.empty else 0:,.0f}',border=True)
@@ -3820,7 +3825,7 @@ def general_queries_page(me):
                 "分期狀態":installment_status})
         columns=["購買_ID","會員","課程名稱","購買堂數","剩餘堂數",f"已收金額（{suffix}）",f"銷課金額（{suffix}）",f"逾期入帳（{suffix}）",
             f"退費手續費（{suffix}）",f"退費金額（{suffix}）",f"餘額（{suffix}）","分期狀態"]
-        frame=pd.DataFrame(result,columns=columns)
+        frame=finance_frame(result,columns=columns)
         total=frame[f"餘額（{suffix}）"].sum() if not frame.empty else 0
         st.metric(f"預收餘額總計（{suffix}）",f"$ {total:,.0f}",border=True)
         st.caption(f"截至 {cutoff}：{len(frame)} 筆；餘額＝已收－銷課－逾期入帳－退費手續費－退費金額。")
@@ -3935,6 +3940,7 @@ def general_queries_page(me):
                     if query_data.ready: render_balance_results(cutoff,keyword,"含稅",f"{cutoff}_{keyword or '全部'}")
 
 def financial_report_page(me):
+    from finance_report_order import report_frame as finance_frame, sort_report_dates
     from monthly_report_layout import cross_month_makeup_hours, bonus_summary, sort_account_rows
     from termination_reporting import effective_terminations, termination_sign, termination_label
     if me["role"]!="admin":
@@ -4056,8 +4062,8 @@ def financial_report_page(me):
                     "銷課金額":used_net_map.get(purchase['id'],0) if detail_tax_mode=='未稅' else _tax_display_amount(used,detail_tax_mode),"剩餘金額":cumulative_net_map.get(purchase['id'],0)-used_net_map.get(purchase['id'],0) if detail_tax_mode=='未稅' else _tax_display_amount(remaining,detail_tax_mode),
                     "_含稅成交":contracted if purchase_in_period else 0,"_含稅預收":period_prepaid,"_未稅預收":period_received_net_map.get(purchase["id"],0),"_含稅銷課":used,"_含稅剩餘":remaining})
             balance_rows.sort(key=lambda x:str(x.get("日期") or ""),reverse=True)
-            balance_df=pd.DataFrame(balance_rows,columns=["日期","會員名稱","成交總金額","實際預收金額","銷課金額","剩餘金額"])
-            totals_df=pd.DataFrame([{"成交總金額":sum(_tax_display_amount(x["_含稅成交"],total_tax_mode) for x in balance_rows),
+            balance_df=finance_frame(balance_rows,columns=["日期","會員名稱","成交總金額","實際預收金額","銷課金額","剩餘金額"])
+            totals_df=finance_frame([{"成交總金額":sum(_tax_display_amount(x["_含稅成交"],total_tax_mode) for x in balance_rows),
                 "實際預收總金額":sum(x["_未稅預收"] for x in balance_rows) if total_tax_mode=="未稅" else _tax_display_amount(sum(x["_含稅預收"] for x in balance_rows),total_tax_mode)}])
             prepaid_total_rows=[{
                 "購買_ID":x["購買_ID"],"成交日期":x["成交日期"],"會員名稱":x["會員名稱"],"堂數":x["堂數"],
@@ -4074,7 +4080,7 @@ def financial_report_page(me):
                 "有效日期":None,"購買類型":"","課程狀態":"","課程結束日期":None,
                 "分期付清":"","醫生轉介":"","備註":"",
             })
-            prepaid_total_df=pd.DataFrame(prepaid_total_rows,columns=["購買_ID","成交日期","會員名稱","堂數","課程名稱","教練","成交金額","有效日期","購買類型","課程狀態","課程結束日期","分期付清","醫生轉介","備註"])
+            prepaid_total_df=finance_frame(prepaid_total_rows,columns=["購買_ID","成交日期","會員名稱","堂數","課程名稱","教練","成交金額","有效日期","購買類型","課程狀態","課程結束日期","分期付清","醫生轉介","備註"])
 
             # 預收餘額明細為截至今日的即時餘額，不受上方日期區間限制。
             outstanding_purchases=query_read(query_data,"financial_report_page:4187",lambda: paged_rows(lambda: client().table("purchases").select("id,member_id,coach_id,course_name,total_sessions,total_amount,purchase_date,expiry_date,status")
@@ -4119,7 +4125,7 @@ def financial_report_page(me):
                     "有效期限":purchase.get("expiry_date"),
                     "課程狀態":status_label_map.get(purchase.get("status"),purchase.get("status") or ""),
                     "_含稅預收餘額":prepaid_balance})
-            outstanding_balance_df=pd.DataFrame(outstanding_rows,columns=["成交日期","購買_ID","會員名稱","課程名稱","實際預收金額","累計銷課金額","實際預收剩餘金額","堂數","有效期限","課程狀態"])
+            outstanding_balance_df=finance_frame(outstanding_rows,columns=["成交日期","購買_ID","會員名稱","課程名稱","實際預收金額","累計銷課金額","實際預收剩餘金額","堂數","有效期限","課程狀態"])
 
             # 專案預收儲值餘額固定列示截至今日的全部儲值交易，不受會員報表篩選條件影響。
             prepaid_projects=query_read(query_data,"financial_report_page:4232",lambda: rows(client().table("projects").select("id,project_name,funding_type").eq("funding_type","stored").order("project_name")))
@@ -4134,7 +4140,7 @@ def financial_report_page(me):
                 "類型":{"opening":"期初儲值","deposit":"後續儲值","reversal":"沖銷"}.get(x.get("transaction_type"),x.get("transaction_type") or ""),
                 "儲值金額（未稅）":event_net(x,"amount"),"備註":x.get("note") or ""
             } for x in prepaid_deposits]
-            project_prepaid_df=pd.DataFrame(project_prepaid_rows,columns=["儲值日期","專案名稱","類型","儲值金額（未稅）","備註"])
+            project_prepaid_df=finance_frame(project_prepaid_rows,columns=["儲值日期","專案名稱","類型","儲值金額（未稅）","備註"])
 
             money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["未稅金額","含稅金額","成交金額","成交總金額","實際預收金額","銷課金額","剩餘金額","實際預收總金額","銷課總金額","剩餘總金額","累計銷課金額","實際預收剩餘金額"]}
             with detail_tabs[0]:
@@ -4158,7 +4164,7 @@ def financial_report_page(me):
                 project_deposit_net=event_net_total(prepaid_deposits,'amount')
                 project_used_net=event_net_total(prepaid_project_entries,'line_amount')
                 project_prepaid_total=project_deposit_net-project_used_net
-                project_prepaid_summary_df=pd.DataFrame([{
+                project_prepaid_summary_df=finance_frame([{
                     "儲值總額（未稅）":project_deposit_net,
                     "已操作項目金額（未稅）":project_used_net,
                     "儲值餘額總計未稅":project_prepaid_total,
@@ -4227,7 +4233,7 @@ def financial_report_page(me):
                         "每日營運時數小計":operation_hours,"時數總計":usage_hours+operation_hours}
                     execution_rows.append(row)
                 execution_columns=["教練"]+course_names+["銷課時數小計","體驗項目","單堂銷售","專案","每日營運時數小計","時數總計"]
-                execution_df=pd.DataFrame(execution_rows,columns=execution_columns)
+                execution_df=finance_frame(execution_rows,columns=execution_columns)
 
                 repurchases=query_read(query_data,"financial_report_page:4338",lambda: paged_rows(lambda: client().table("purchases").select("member_id,coach_id,course_name,purchase_kind,purchase_date").gte("purchase_date",str(coach_start)).lte("purchase_date",str(coach_end)).order("purchase_date",desc=True).order("id")))
                 if selected_coach_id: repurchases=[x for x in repurchases if x.get("coach_id")==selected_coach_id]
@@ -4242,7 +4248,7 @@ def financial_report_page(me):
                     repurchase_rows.append({"教練":coach_name_map.get(cid,"未知"),"會員名稱":member_name_map.get(mid,"未知"),"課程名稱":course_name,
                         "購買次數":group["購買次數"]})
                 repurchase_rows.sort(key=lambda x:(x["教練"],x["會員名稱"],x["課程名稱"]))
-                repurchase_df=pd.DataFrame(repurchase_rows,columns=["教練","會員名稱","課程名稱","購買次數"])
+                repurchase_df=finance_frame(repurchase_rows,columns=["教練","會員名稱","課程名稱","購買次數"])
 
                 with coach_detail_tabs[0]:
                     st.caption("銷課時數會依每項課程名稱分欄顯示；銷課時數小計為各課程時數合計。")
@@ -4304,7 +4310,7 @@ def financial_report_page(me):
                         group["成交總金額"]+=float(purchase.get("total_amount") or 0)
                     referral_rows=[{"醫生轉介":referral,"會員名稱":member_name_map.get(mid,"未知"),**values} for (referral,mid),values in referral_groups.items()]
                     referral_rows.sort(key=lambda x:(x["醫生轉介"],x["會員名稱"]))
-                    referral_df=pd.DataFrame(referral_rows,columns=["醫生轉介","會員名稱","首購","續約","成交總金額"])
+                    referral_df=finance_frame(referral_rows,columns=["醫生轉介","會員名稱","首購","續約","成交總金額"])
                     course_catalog=query_read(query_data,"financial_report_page:4415",lambda: rows(client().table("course_catalog").select("course_name,course_type")))
                     course_type_map={str(x.get("course_name") or "").strip():str(x.get("course_type") or "未分類").strip() or "未分類" for x in course_catalog}
                     course_type_totals={}
@@ -4364,7 +4370,7 @@ def financial_report_page(me):
                             "銷課未稅金額":round(totals["usage"]),
                         })
                     course_type_columns=["課程屬性","實際預收金額（未稅）","銷課未稅金額"]
-                    course_type_df=pd.DataFrame(course_type_rows,columns=course_type_columns)
+                    course_type_df=finance_frame(course_type_rows,columns=course_type_columns)
                     if other_report_view=="醫生轉介":
                         st.caption("日期依課程購買日期；成交總金額為含稅金額。首購與續約欄位為購買筆數。")
                         st.dataframe(referral_df,hide_index=True,use_container_width=True,column_config={"成交總金額":st.column_config.NumberColumn(format="$ %.0f")})
@@ -4442,7 +4448,7 @@ def financial_report_page(me):
                                 "堂數":f"{used_sessions}／{total_sessions}","最後銷課日期":last_usage_date or None,
                                 "有效期限":purchase.get("expiry_date"),"課程狀態":historical_status,
                                 "_含稅預收餘額":prepaid_balance})
-                        historical_df=pd.DataFrame(historical_rows,columns=["成交日期","購買_ID","會員名稱","課程名稱","實際預收金額","累計銷課金額","實際預收剩餘金額","堂數","最後銷課日期","有效期限","課程狀態"])
+                        historical_df=finance_frame(historical_rows,columns=["成交日期","購買_ID","會員名稱","課程名稱","實際預收金額","累計銷課金額","實際預收剩餘金額","堂數","最後銷課日期","有效期限","課程狀態"])
                         # 畫面總計與下載明細採相同口徑：每筆先換算並四捨五入，再加總。
                         historical_balance_total=sum(int(x["實際預收剩餘金額"]) for x in historical_rows)
                         st.metric(f"截至 {historical_cutoff} 預收餘額總計（{historical_tax_mode}）",f"$ {historical_balance_total:,.0f}")
@@ -4486,9 +4492,9 @@ def financial_report_page(me):
                             "操作項目":x["item_name"],"時數":float(x.get("item_hours") or 0)*float(x.get("quantity") or 0),
                             "金額":int(Decimal(str(x.get("line_amount") or 0)).quantize(Decimal("1"),rounding=ROUND_HALF_UP)),
                             "備註":x.get("note") or "","_funding_type":project_by_id.get(x.get("project_id"),{}).get("funding_type")})
-                    stored_detail_df=pd.DataFrame([{k:v for k,v in x.items() if k!="_funding_type"} for x in detail_rows if x["_funding_type"]=="stored"],
+                    stored_detail_df=finance_frame([{k:v for k,v in x.items() if k!="_funding_type"} for x in detail_rows if x["_funding_type"]=="stored"],
                         columns=["日期","專案名稱","使用者","操作項目","時數","金額","備註"])
-                    unfunded_detail_df=pd.DataFrame([{k:v for k,v in x.items() if k!="_funding_type"} for x in detail_rows if x["_funding_type"]=="unfunded"],
+                    unfunded_detail_df=finance_frame([{k:v for k,v in x.items() if k!="_funding_type"} for x in detail_rows if x["_funding_type"]=="unfunded"],
                         columns=["日期","專案名稱","使用者","操作項目","時數","金額","備註"])
 
                     stored_projects=[x for x in report_projects if x["funding_type"]=="stored" and (not selected_project_id or x["id"]==selected_project_id)]
@@ -4496,7 +4502,7 @@ def financial_report_page(me):
                     deposit_records=query_read(query_data,"financial_report_page:4604",lambda: paged_rows(lambda: client().table("project_deposits").select('project_id,deposit_date,amount,transaction_type,note,net_amount,calculation_rule_version')
                         .in_("project_id",stored_ids).lte("deposit_date",str(date.today()))
                         .order("deposit_date",desc=True).order("id"))) if stored_ids else []
-                    deposit_df=pd.DataFrame([{"儲值日期":x["deposit_date"],"專案名稱":project_by_id.get(x["project_id"],{}).get("project_name","未知"),
+                    deposit_df=finance_frame([{"儲值日期":x["deposit_date"],"專案名稱":project_by_id.get(x["project_id"],{}).get("project_name","未知"),
                         "類型":{"opening":"期初儲值","deposit":"後續儲值","reversal":"沖銷"}.get(x["transaction_type"],x["transaction_type"]),
                         "儲值金額":round(float(x.get("amount") or 0)),"備註":x.get("note") or ""} for x in deposit_records],
                         columns=["儲值日期","專案名稱","類型","儲值金額","備註"])
@@ -4509,7 +4515,7 @@ def financial_report_page(me):
                         stored=float(project["stored_amount"]); used=used_by_project.get(project["id"],0)
                         funding_rows.append({"專案名稱":project["project_name"],"儲值金額":round(stored),
                             "已使用金額":round(used),"剩餘金額":round(stored-used)})
-                    funding_df=pd.DataFrame(funding_rows,columns=["專案名稱","儲值金額","已使用金額","剩餘金額"])
+                    funding_df=finance_frame(funding_rows,columns=["專案名稱","儲值金額","已使用金額","剩餘金額"])
 
                     project_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["金額","儲值金額","已使用金額","剩餘金額"]}
                     project_main_tabs=st.tabs(["專案報表"])
@@ -4579,18 +4585,18 @@ def financial_report_page(me):
                     for course_type,amount in sorted(amount_by_course_type.items()):
                         summary_rows.append({"課程屬性":course_type,
                             "未稅金額":int(amount.quantize(Decimal("1"),rounding=ROUND_HALF_UP))})
-                    return pd.DataFrame(summary_rows,columns=["課程屬性","未稅金額"])
+                    return finance_frame(summary_rows,columns=["課程屬性","未稅金額"])
 
                 daily_trial_df=operation_finance_summary(daily_trial_records)
                 daily_single_df=operation_finance_summary(daily_single_records)
                 daily_coach_names={coach_id:name for name,coach_id in daily_coaches.items()}
-                daily_trial_detail_df=pd.DataFrame([{
+                daily_trial_detail_df=finance_frame([{
                     "日期":x.get("entry_date"),"教練":daily_coach_names.get(x.get("coach_id"),"未知教練"),
                     "體驗會員姓名":x.get("member_name") or "","體驗項目":x.get("content") or "",
                     "內容":x.get("detail_content") or "","課程屬性":x.get("course_type") or "未分類",
                     "時數":float(x.get("hours") or 0),"金額（未稅）":event_net(x,"amount"),"備註":x.get("note") or ""
                 } for x in daily_trial_records],columns=["日期","教練","體驗會員姓名","體驗項目","內容","課程屬性","時數","金額（未稅）","備註"])
-                daily_single_detail_df=pd.DataFrame([{
+                daily_single_detail_df=finance_frame([{
                     "日期":x.get("entry_date"),"教練":daily_coach_names.get(x.get("coach_id"),"未知教練"),
                     "單堂銷售會員姓名":x.get("member_name") or "","銷售內容":x.get("content") or "",
                     "課程屬性":x.get("course_type") or "未分類","時數":float(x.get("hours") or 0),
@@ -4672,7 +4678,7 @@ def financial_report_page(me):
 
             all_purchase_keys=query_read(query_data,"financial_report_page:4779",lambda: paged_rows(lambda: client().table("purchases").select("id,purchase_code,purchase_date,created_at").order("purchase_date").order("created_at").order("id")))
             bonus_purchase_code_map=_build_purchase_code_map(all_purchase_keys)
-            monthly_sales_df=pd.DataFrame([{"日期":x["usage_date"],
+            monthly_sales_df=finance_frame([{"日期":x["usage_date"],
                 "購買_ID":bonus_purchase_code_map.get(x["purchase_id"],x["purchase_id"]),
                 "姓名":monthly_member_name.get(monthly_purchase_map.get(x["purchase_id"],{}).get("member_id"),"未知"),
                 "教練":monthly_coach_name.get(x.get("coach_id"),"未知"),
@@ -4681,7 +4687,7 @@ def financial_report_page(me):
                 "購買堂數":int(monthly_purchase_map.get(x["purchase_id"],{}).get("total_sessions") or 0),
                 "購買課程":monthly_purchase_map.get(x["purchase_id"],{}).get("course_name") or ""} for x in monthly_usages],
                 columns=["日期","購買_ID","姓名","教練","報表分類","銷課金額","購買堂數","購買課程"])
-            monthly_stored_project_df=pd.DataFrame([{"日期":x["entry_date"],"專案":x["project_name"],
+            monthly_stored_project_df=finance_frame([{"日期":x["entry_date"],"專案":x["project_name"],
                 "教練":monthly_coach_name.get(x.get("coach_id"),"未知"),
                 "報表分類":monthly_project_report_category.get(x.get("project_catalog_id"),"未分類"),
                 "扣款金額（未稅）":event_net(x,"line_amount"),
@@ -4699,7 +4705,7 @@ def financial_report_page(me):
                     "退費手續費（未稅）":termination_money(item,"fee_amount","未稅") if not is_expired else 0,
                     "實際退費金額（未稅）":termination_money(item,"refund_amount","未稅") if not is_expired else 0,
                     "中止原因":item.get("reason") or ""})
-            monthly_termination_df=pd.DataFrame(monthly_termination_rows,columns=["日期","購買_ID","會員名稱","課程名稱","中止類型","退費前剩餘金額（未稅）","逾期入帳金額（未稅）","退費手續費（未稅）","實際退費金額（未稅）","中止原因"])
+            monthly_termination_df=finance_frame(monthly_termination_rows,columns=["日期","購買_ID","會員名稱","課程名稱","中止類型","退費前剩餘金額（未稅）","逾期入帳金額（未稅）","退費手續費（未稅）","實際退費金額（未稅）","中止原因"])
 
             coach_ids=list(monthly_coach_name)
             coach_hour_rows=[]; coach_revenue_rows=[]
@@ -4728,8 +4734,8 @@ def financial_report_page(me):
                 usage_revenue=sum(usage_net_amount(x) for x in monthly_usages if x.get("coach_id")==coach_id)
                 coach_revenue_rows.append({"帳號":monthly_coach_account.get(coach_id,""),"教練":monthly_coach_name.get(coach_id,"未知"),"體驗項目金額（未稅）":round(trial_revenue),"單堂銷售金額（未稅）":round(single_revenue),
                     "專案（未稅）":round(project_revenue),"銷課（未稅）":round(usage_revenue),"金額總計（未稅）":round(trial_revenue+single_revenue+project_revenue+usage_revenue)})
-            monthly_hours_df=sort_account_rows(pd.DataFrame(coach_hour_rows,columns=["帳號","教練","體驗時數","單堂時數","活動時數","專案時數","銷課時數","可計執行時數","補單","動磁波時數"]))
-            monthly_revenue_df=sort_account_rows(pd.DataFrame(coach_revenue_rows,columns=["帳號","教練","體驗項目金額（未稅）","單堂銷售金額（未稅）","專案（未稅）","銷課（未稅）","金額總計（未稅）"]))
+            monthly_hours_df=sort_account_rows(finance_frame(coach_hour_rows,columns=["帳號","教練","體驗時數","單堂時數","活動時數","專案時數","銷課時數","可計執行時數","補單","動磁波時數"]))
+            monthly_revenue_df=sort_account_rows(finance_frame(coach_revenue_rows,columns=["帳號","教練","體驗項目金額（未稅）","單堂銷售金額（未稅）","專案（未稅）","銷課（未稅）","金額總計（未稅）"]))
 
             try:
                 bonus_rules=query_read(query_data,"financial_report_page:4840",lambda: rows(client().table("bonus_rules").select("*").eq("active",True).order("effective_from",desc=True)))
@@ -4760,9 +4766,10 @@ def financial_report_page(me):
                     "醫生轉介":purchase.get("referral") or "","成交未稅金額":untaxed_amount,"談單率":float(rate)*100,
                     "談單獎金":bonus,"適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
             talk_bonus_columns=["成交日期","購買_ID","會員名稱","教練","購買類型","醫生轉介","成交未稅金額","談單率","談單獎金","適用規則","計算狀態"]
-            monthly_talk_bonus_df=pd.DataFrame(talk_bonus_rows,columns=talk_bonus_columns)
+            monthly_talk_bonus_df=finance_frame(talk_bonus_rows,columns=talk_bonus_columns)
             monthly_talk_bonus_summary_df,talk_pending_df=bonus_summary(
                 monthly_coach_records,talk_bonus_rows,"成交未稅金額","談單獎金","成交日期")
+            talk_pending_df=sort_report_dates(talk_pending_df)
 
             completed_purchase_usage={}
             for usage in monthly_usages:
@@ -4805,9 +4812,10 @@ def financial_report_page(me):
                     "醫生轉介":purchase.get("referral") or "","課程結束成交未稅金額":completed_amount,"結單率":float(rate)*100,
                     "結單獎金":bonus,"適用規則":rule.get("rule_name") if rule else "","計算狀態":"已計算" if eligible else reason})
             completion_bonus_columns=["課程完成日期","購買_ID","會員名稱","教練","課程名稱","購買類型","醫生轉介","課程結束成交未稅金額","結單率","結單獎金","適用規則","計算狀態"]
-            monthly_completion_bonus_df=pd.DataFrame(completion_bonus_rows,columns=completion_bonus_columns)
+            monthly_completion_bonus_df=finance_frame(completion_bonus_rows,columns=completion_bonus_columns)
             monthly_completion_bonus_summary_df,completion_pending_df=bonus_summary(
                 monthly_coach_records,completion_bonus_rows,"課程結束成交未稅金額","結單獎金","課程完成日期")
+            completion_pending_df=sort_report_dates(completion_pending_df)
 
             monthly_sales_total=int(monthly_sales_df["銷課金額"].sum()) if not monthly_sales_df.empty else 0
             monthly_project_total=int(monthly_stored_project_df["扣款金額（未稅）"].sum()) if not monthly_stored_project_df.empty else 0
@@ -4815,7 +4823,7 @@ def financial_report_page(me):
             fee_total=int(monthly_termination_df["退費手續費（未稅）"].sum()) if not monthly_termination_df.empty else 0
             refund_total=int(monthly_termination_df["實際退費金額（未稅）"].sum()) if not monthly_termination_df.empty else 0
             monthly_combined_total=monthly_sales_total+monthly_project_total+expired_total
-            monthly_combined_df=pd.DataFrame([{"銷課總金額（未稅）":monthly_sales_total,"專案總金額（未稅）":monthly_project_total,
+            monthly_combined_df=finance_frame([{"銷課總金額（未稅）":monthly_sales_total,"專案總金額（未稅）":monthly_project_total,
                 "逾期入帳總額（未稅）":expired_total,"每月預收銷課合併計（未稅）":monthly_combined_total}])
             monthly_tabs=st.tabs(["每月預收銷課合併計","每月教練時數","每月教練營收","每月教練談單獎金","每月教練結單獎金"])
             monthly_money_config={name:st.column_config.NumberColumn(format="$ %.0f") for name in ["銷課金額","扣款金額（未稅）","體驗項目金額（未稅）","單堂銷售金額（未稅）","專案（未稅）","銷課（未稅）","金額總計（未稅）","成交未稅金額","談單獎金","課程結束成交未稅金額","結單獎金","符合規則成交未稅金額總計","談單獎金總計","符合規則課程結束成交未稅金額總計","結單獎金總計","退費前剩餘金額（未稅）","逾期入帳金額（未稅）","退費手續費（未稅）","實際退費金額（未稅）"]}

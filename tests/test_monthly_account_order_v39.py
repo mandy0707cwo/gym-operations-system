@@ -51,15 +51,16 @@ class AccountSortTests(unittest.TestCase):
         self.assertEqual(by_account.loc['smc010','不計成交金額'],1000)
         self.assertEqual(by_account.loc['smc010','獎金合計'],200)
 
-    def test_pending_details_sorted_and_same_account_date_order_preserved(self):
+    def test_pending_details_date_first_v44_and_same_date_stable(self):
         fixture=v38.FinanceReportColumnsTests();data=fixture.bonus_data()
         data['profiles'][0]['username']='smc010';data['profiles'][1]['username']='SMC002'
         data['bonus_rules'][0]['effective_from']='2026-10-01'
         app=fixture.monthly(data);frames=app.session_state['exports']
         backup=load_functions()['_financial_backup_frames'](data)
         for key in ('談單待確認','結單待確認'):
-            self.assertEqual(frames[key]['帳號'].tolist(),['SMC002','smc010','smc010'])
-            self.assertEqual(frames[key]['待確認成交金額（未稅）'].tolist(),[3000,2000,1000])
+            self.assertEqual(frames[key]['日期'].tolist(),sorted(frames[key]['日期'].tolist()))
+            self.assertEqual(frames[key]['帳號'].tolist(),['smc010','smc010','SMC002'])
+            self.assertEqual(frames[key]['待確認成交金額（未稅）'].tolist(),[2000,1000,3000])
             assert_frame_equal(frames[key],backup['財務-'+key])
 
 

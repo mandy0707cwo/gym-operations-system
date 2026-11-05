@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import unittest
 
 from confirmed_queries import query_read
+from finance_report_order import report_frame
+from finance_reporting import display_money, usage_net
 import pandas as pd
 
 
@@ -65,7 +67,8 @@ class QueryTests(unittest.TestCase):
         )
         namespace = {
             "query_read": query_read, "query_data": None,
-            "pd": pd, "Decimal": Decimal, "ROUND_HALF_UP": ROUND_HALF_UP, "st": st,
+            "pd": pd, "finance_frame": report_frame, "display_money": display_money, "usage_net": usage_net,
+            "Decimal": Decimal, "ROUND_HALF_UP": ROUND_HALF_UP, "st": st,
             "coaches": {"教練甲": "c1", "教練乙": "c2"}, "coach_name_map": {"c1": "教練甲", "c2": "教練乙"},
             "client": lambda: SimpleNamespace(table=lambda table: Query(tables[table])),
             "paged_rows": lambda builder: builder().records,

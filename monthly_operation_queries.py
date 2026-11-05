@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from confirmed_queries import confirm_query
+from finance_report_order import report_frame
 from financial_calculations import build_operation_result, ENGINE_VERSION, RULE_VERSION
 
 MONEY_COLUMN = "金額（含稅）"
@@ -40,7 +41,7 @@ def operation_result_frame(calculation, report_name, coach_names):
         if report_name == "體驗項目":
             row["項目"] = record.get("content") or ""
         result.append(row)
-    return pd.DataFrame(result, columns=REPORTS[report_name][1])
+    return report_frame(result, columns=REPORTS[report_name][1])
 
 
 def render_operation_query(me, report_name, client, paged_rows, coach_options, excel_bytes):
