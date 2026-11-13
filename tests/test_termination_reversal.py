@@ -48,6 +48,44 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(effective_terminations([t,second],'2026-10-21'),[second])
         self.assertEqual(effective_terminations([t,second],'2026-10-14'),[t])
 
+    def test_backdated_replacement_keeps_original_until_taipei_reversal_day(self):
+        original,_=samples()
+        original=dict(original,termination_type='expired',created_at='2026-10-14T16:01:00Z',
+                      reversed_at='2026-10-14T16:02:00Z',recognized_amount=1400,
+                      recognized_net_amount=1333,fee_amount=0,fee_net_amount=0,
+                      refund_amount=0,refund_net_amount=0)
+        replacement=dict(samples()[0],id='t2',created_at='2026-10-14T16:03:00Z',reversed_at=None)
+        rows=[replacement,original]; before=deepcopy(rows)
+        for day,expected in [('2026-09-29',[]),('2026-09-30',[original]),
+                             ('2026-10-14',[original]),('2026-10-15',[replacement])]:
+            with self.subTest(day=day):
+                self.assertEqual(effective_terminations(rows,day),expected)
+        active=effective_terminations(rows,'2026-10-14')[0]
+        self.assertEqual(ledger_balance(2100,700,active,tax_mode='含稅'),0)
+        self.assertEqual(ledger_balance(2000,667,active),0)
+        self.assertEqual(rows,before)
+
+    def test_three_backdated_cycles_only_pick_proven_active_cycle(self):
+        first,_=samples()
+        first=dict(first,created_at='2026-10-01T00:00:00Z')
+        second=dict(first,id='t2',created_at='2026-10-15T02:00:00Z',reversed_at='2026-10-20T02:00:00Z')
+        third=dict(first,id='t3',created_at='2026-10-20T03:00:00Z',reversed_at=None)
+        rows=[third,first,second]
+        for day,expected in [('2026-10-14',first),('2026-10-15',second),('2026-10-20',third)]:
+            self.assertEqual(effective_terminations(rows,day),[expected])
+
+    def test_unproven_replacement_still_blocks_wrong_totals(self):
+        first,_=samples()
+        first=dict(first,created_at='2026-10-01T00:00:00Z')
+        second=dict(first,id='t2',created_at='2026-10-15T02:00:00Z',reversed_at=None)
+        invalid=[dict(second,created_at=None),dict(second,created_at='2026-10-14T00:00:00Z'),
+                 dict(second,created_at='2026-10-15T02:00:00'),dict(second,id=first['id'])]
+        for row in invalid:
+            with self.assertRaisesRegex(ValueError,'多筆有效中止'):
+                effective_terminations([first,row],'2026-10-14')
+        with self.assertRaisesRegex(ValueError,'多筆有效中止'):
+            effective_terminations([dict(first,reversed_at=None),second],'2026-10-15')
+
     def test_incomplete_links_duplicate_and_negative_dates_fail_closed(self):
         t,r=samples()
         for rows,revs in [([t],[]),([t],[r,r]),([t],[dict(r,purchase_id='other')])]:

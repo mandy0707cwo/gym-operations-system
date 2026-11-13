@@ -1,5 +1,6 @@
 """中止與撤銷的共同日期規則；不連線、不刪除原交易、不重新換算稅額。"""
 from copy import deepcopy
+from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -19,21 +20,43 @@ def reversal_date(record):
     return stamp.astimezone(TAIPEI).date().isoformat()
 
 
+def _first_in_replacement_chain(candidates):
+    """只有登錄時間能證明「撤銷後才重辦」時，才解決補登日期的重疊。"""
+    def timestamp(value):
+        parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            raise ValueError('缺少時區')
+        return parsed
+
+    message = '同一購課有多筆有效中止，停止計算。'
+    ids = [row.get('id') for row in candidates]
+    if not all(ids) or len(ids) != len(set(ids)):
+        raise ValueError(message)
+    try:
+        ordered = sorted((timestamp(row.get('created_at')), row['id'], row) for row in candidates)
+        for (created, _, earlier), (next_created, _, _) in zip(ordered, ordered[1:]):
+            reversed_at = timestamp(earlier.get('reversed_at'))
+            if not (created < next_created and created <= reversed_at <= next_created):
+                raise ValueError(message)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    # 截止日早於原單撤銷，保留原單；後補的中止不應在此期間取代原單。
+    return ordered[0][2]
+
+
 def effective_terminations(records, cutoff):
     """截止日仍有效的中止；撤銷前的歷史不被今天的狀態覆蓋。"""
     end = date.fromisoformat(str(cutoff)[:10]).isoformat()
-    result = []
+    groups = defaultdict(list)
     for row in records:
         day = date.fromisoformat(str(row['termination_date'])[:10]).isoformat()
         undone = reversal_date(row)
         if undone and undone < day:
             raise ValueError('撤銷日期早於原中止，停止計算。')
         if day <= end and (not undone or undone > end):
-            result.append(row)
-    ids = [x['purchase_id'] for x in result]
-    if len(ids) != len(set(ids)):
-        raise ValueError('同一購課有多筆有效中止，停止計算。')
-    return result
+            groups[row['purchase_id']].append(row)
+    return [group[0] if len(group) == 1 else _first_in_replacement_chain(group)
+            for group in groups.values()]
 
 
 def termination_sign(row):

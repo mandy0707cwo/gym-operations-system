@@ -1,6 +1,7 @@
 """查詢按鈕、會員／ID篩選及私有快照的隔離回歸。"""
 import ast
 from copy import deepcopy
+from datetime import date
 from pathlib import Path
 import sys
 import unittest
@@ -58,7 +59,7 @@ import streamlit as st
 from ui_text import section_heading
 from confirmed_queries import confirm_query,query_read
 from finance_reporting import display_money,payment_allocations,usage_net,termination_money,ledger_balance,event_net_total,event_net
-from termination_reporting import termination_events
+from termination_reporting import effective_terminations,termination_events
 st.session_state.setdefault("reads",[])
 class Query:
  def __init__(self,name):
@@ -174,6 +175,30 @@ class QueryUITests(unittest.TestCase):
             self.assertEqual(len(app.button),1)
             self.assertEqual(len(app.dataframe),0)
             self.assertEqual(set(app.session_state["reads"]),{"profiles"})
+
+    def test_prepaid_balance_backdated_replacement_both_tax_modes(self):
+        original={'id':'t1','purchase_id':'p1','termination_date':'2026-11-05','termination_type':'expired',
+                  'created_at':'2026-11-12T07:08:00Z','reversed_at':'2026-11-12T07:09:00Z',
+                  'recognized_amount':1050,'recognized_net_amount':1000}
+        replacement=dict(original,id='t2',termination_type='refund',created_at='2026-11-12T07:10:00Z',
+                         reversed_at=None,fee_amount=210,fee_net_amount=200,refund_amount=840,refund_net_amount=800)
+        tables={'members':[{'id':'m1','member_name':'虛構會員'}],
+                'purchases':[{'id':'p1','member_id':'m1','purchase_date':'2026-11-01','purchase_code':'TEST-001',
+                              'total_amount':1050,'total_sessions':1,'payment_plan':'full','course_name':'測試課程'}],
+                'purchase_payments':[{'id':'pay1','purchase_id':'p1','paid_date':'2026-11-01','amount':1050}],
+                'course_terminations':[replacement,original],'course_termination_events':[]}
+        for tax, suffix, expired, refund in [('未稅','net',1000,800),('含稅','gross',1050,840)]:
+            with self.subTest(tax=tax):
+                app=self.app(general_query_main_tab='預收餘額查詢',general_balance_mode=f'預收餘額（{tax}）',tables=tables)
+                for cutoff, expected_expired, expected_refund in [("2026-11-11",expired,0),("2026-11-12",0,refund)]:
+                    app.date_input(key=f'gb_{suffix}_cutoff').set_value(date.fromisoformat(cutoff))
+                    app.button[0].click().run()
+                    self.assertFalse(app.exception)
+                    self.assertFalse(app.error)
+                    row=app.dataframe[0].value.iloc[0]
+                    self.assertEqual(row[f'逾期入帳（{tax}）'],expected_expired)
+                    self.assertEqual(row[f'退費金額（{tax}）'],expected_refund)
+                    self.assertEqual(row[f'餘額（{tax}）'],0)
 
     def test_customer_selection_keeps_confirmed_results(self):
         tables={"members":[{"id":"m1","member_name":"測試客戶甲","customer_status":"member","active":True},

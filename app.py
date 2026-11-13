@@ -2059,7 +2059,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.45"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.46"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰、Streamlit Secrets及私有schema紀錄（操作收據及特殊假別稽核）；完整還原須另有PostgreSQL資料庫備份"},
@@ -4037,7 +4037,7 @@ def financial_report_page(me):
             completed_ids=[x["id"] for x in purchases if x.get("status")=="completed"]
             terminated_ids=[x["id"] for x in purchases if x.get("status") in ("expired","cancelled")]
             completion_usages=query_read(query_data,"financial_report_page:4132",lambda: paged_rows(lambda: client().table("session_usages").select("purchase_id,usage_date").in_("purchase_id",completed_ids).order("usage_date",desc=True).order("id"))) if completed_ids else []
-            termination_records=query_read(query_data,"financial_report_page:4133",lambda: paged_rows(lambda: client().table("course_terminations").select('purchase_id,termination_date,remaining_amount,recognized_amount,fee_amount,refund_amount,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version,reversed_at').in_("purchase_id",terminated_ids).order("termination_date",desc=True).order("id"))) if terminated_ids else []
+            termination_records=query_read(query_data,"financial_report_page:4133",lambda: paged_rows(lambda: client().table("course_terminations").select('purchase_id,termination_date,id,created_at,remaining_amount,recognized_amount,fee_amount,refund_amount,remaining_net_amount,recognized_net_amount,fee_net_amount,refund_net_amount,calculation_rule_version,reversed_at').in_("purchase_id",terminated_ids).order("termination_date",desc=True).order("id"))) if terminated_ids else []
             termination_records=effective_terminations(termination_records,date.today())
             course_end_date_map={}
             for usage in completion_usages:
