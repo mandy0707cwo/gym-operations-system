@@ -26,7 +26,7 @@ class PrepaidPurchaseTests(unittest.TestCase):
     app=base.FinancialScreenTests.app
 
     def open(self,**state):
-        return self.app('general',tables=fixture(),general_query_main_tab='預收款項',
+        return self.app('general',tables=fixture(),general_query_main_tab='每日預收',
                         general_prepaid_mode='會員查詢',**state)
 
     def search(self,app,purchase='',member='',status='全部'):

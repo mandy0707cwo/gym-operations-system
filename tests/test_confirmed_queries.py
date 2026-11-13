@@ -77,6 +77,8 @@ class Query:
   self.records=[x for x in self.records if str(x.get(field,""))>=value]; return self
  def lte(self,field,value):
   self.records=[x for x in self.records if str(x.get(field,""))<=value]; return self
+ def gt(self,field,value):
+  self.records=[x for x in self.records if x.get(field,0)>value]; return self
  def range(self,a,b): self.records=self.records[a:b+1]; return self
  def execute(self):
   st.session_state["reads"].append(self.name)
@@ -86,6 +88,7 @@ class Client:
 def client(): return Client()
 def admin_client(): return Client()
 def coach_options(): return {"虛構教練":"c1"}
+def scheduling_page(me): st.caption("虛構排班入口")
 def rows(query): return query.execute().data
 def paged_rows(builder,*a,**k): return rows(builder())
 names={"general_queries_page","financial_report_page","usage_query_tabs","customer_admin_page","installment_payment_admin_page","record_admin_page","_load_record_admin_data","_tax_display_amount","_allocate_payment_net_amounts","usage_net_amount","_excel_bytes","_build_purchase_code_map","course_status_label","usage_sequence_by_date","is_magnetic_wave_course","is_magnetic_wave_operation","is_magnetic_wave_purchase","usage_counts_for_execution","completed_purchase_ids","_bonus_rule_for_date","_bonus_eligibility","_financial_backup_frames"}
@@ -161,14 +164,14 @@ class QueryUITests(unittest.TestCase):
     def test_admin_permission_and_renaming(self):
         app=self.app(role="coach")
         self.assertEqual(app.session_state["reads"],[])
-        app=self.app(general_query_main_tab="預收款項")
+        app=self.app(general_query_main_tab="每日預收")
         self.assertEqual(len(app.button),1)
         self.assertEqual(len(app.dataframe),0)
         self.assertNotIn("實際預收收入",(ROOT/"app.py").read_text(encoding="utf-8"))
 
     def test_other_general_tabs_wait_for_query(self):
         for tab,mode_key,mode in [("銷課查詢","general_usage_mode","日期區間"),
-                                 ("預收款項","general_prepaid_mode","會員查詢"),
+                                 ("每日預收","general_prepaid_mode","會員查詢"),
                                  ("預收餘額查詢","general_balance_mode","預收餘額（未稅）"),
                                  ("預收餘額查詢","general_balance_mode","預收餘額（含稅）")]:
             app=self.app(general_query_main_tab=tab,**{mode_key:mode})

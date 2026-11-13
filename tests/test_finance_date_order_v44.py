@@ -103,7 +103,7 @@ class ScreenOrderTests(unittest.TestCase):
         data=base.tables(); p=data['purchase_payments'][0]
         data['purchase_payments']=[dict(p,id='p'+str(i),paid_date=when,amount=700,net_amount=net,installment_no=i+1)
             for i,(when,net) in enumerate([('2026-09-20',666),('2026-09-02',667),('2026-09-10',667)])]
-        app=self.query(self.app('general',tables=data,general_query_main_tab='預收款項',general_prepaid_mode='日期區間'))
+        app=self.query(self.app('general',tables=data,general_query_main_tab='每日預收',general_prepaid_mode='日期區間'))
         frame=app.dataframe[0].value
         self.assertEqual(frame['成交／預收日期'].tolist(),['2026-09-02','2026-09-10','2026-09-20'])
         self.assertEqual(frame['預收金額（未稅）'].tolist(),[667,667,666])

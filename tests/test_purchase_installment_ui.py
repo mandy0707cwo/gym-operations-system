@@ -16,7 +16,9 @@ import streamlit as st
 from course_defaults import apply_purchase_catalog_defaults, catalog_default_payload
 from ui_text import section_heading
 from operation_requests import Operation
-from finance_reporting import termination_money, ledger_balance, display_money
+from finance_reporting import termination_money, ledger_balance, display_money, payment_allocations, usage_net
+def _allocate_payment_net_amounts(purchases,payments): return payment_allocations(purchases,payments)
+def usage_net_amount(row): return usage_net(row)
 names={"rows","purchase_page","course_purchase_entry","installment_payment_entry",
        "_entry_saved","_entry_success","_confirmed_write","course_termination_report_page",
        "_build_purchase_code_map","_course_termination_history_frame","_tax_display_amount","course_admin_page","course_status_label"}
@@ -33,6 +35,7 @@ if "db" not in st.session_state:
   "purchase_payments":[{"id":"first","purchase_id":"p","installment_no":1,"amount":1050,"paid_date":"2026-07-01"}],
   "purchase_balances":[{"purchase_id":"p","member_name":"虛構客戶","course_name":"測試課程","coach_id":"c",
                         "remaining_sessions":8,"remaining_amount":8400,"status":"active","expiry_date":"2027-07-01"}],
+  "session_usages":[{"id":"use","purchase_id":"p","deducted_amount":2100,"deducted_net_amount":2000}],
   "course_terminations":[],
  }
  st.session_state.reads=[]
@@ -98,7 +101,7 @@ class Client:
 def client(): return Client()
 def admin_client(): return Client()
 def paged_rows(factory): return rows(factory())
-def coach_options(): return {"虛構教練":"c"}
+def coach_options(): return {"虛構教練":"c", "另一位教練":"other"}
 def _excel_bytes(*_,**__): return b"mock"
 role=st.session_state.get("role","admin")
 me={"role":role,"id":"c" if role=="coach" else "admin","display_name":"虛構教練"}
@@ -227,6 +230,21 @@ class PurchaseUITests(unittest.TestCase):
         self.assertEqual(app.session_state.db["purchase_payments"][-1]["installment_no"],1)
         self.assertEqual(writes[0]["payload"]["p_first_payment"]["amount"],1050)
         self.assertEqual(app.session_state.db["purchase_payments"][-1]["purchase_id"],"new-1")
+
+    def test_coach_can_select_other_coach_with_same_date_limits(self):
+        from course_query_views import business_today
+        today=business_today()
+        app=self.app(role="coach");self.fill_purchase(app,"分期")
+        self.widget(app,"selectbox","指導教練").set_value("另一位教練")
+        self.widget(app,"date_input","購買日期").set_value(today)
+        self.widget(app,"date_input","支付日期").set_value(today)
+        self.assertEqual(self.widget(app,"date_input","購買日期").min,today)
+        self.assertEqual(self.widget(app,"date_input","支付日期").min,today)
+        self.submit(app,"確認並建立購買紀錄")
+        writes=app.session_state["writes"]
+        self.assertEqual(len(writes),1)
+        self.assertEqual(writes[0]["payload"]["p_purchase"]["coach_id"],"other")
+        self.assertNotIn("created_by",writes[0]["payload"]["p_purchase"])
 
     def test_purchase_validation_keeps_input(self):
         app=self.app();self.fill_purchase(app)
@@ -406,15 +424,15 @@ class PurchaseUITests(unittest.TestCase):
 
     def test_expiry_metrics_hide_fee_and_refund(self):
         app=self.app(tab="課程中止");self.fill_termination(app,"逾期中止")
-        self.assertEqual([x.label for x in app.metric],["退費前剩餘金額(含稅)"])
+        self.assertEqual([x.label for x in app.metric],["退費前剩餘金額（未稅）"])
         self.assertNotIn("course_terminations",app.session_state["reads"])
         self.assertEqual(app.session_state["writes"],[])
 
     def test_refund_metrics_have_tax_labels(self):
         app=self.app(tab="課程中止");self.fill_termination(app)
         self.widget(app,"checkbox","收取剩餘金額 20% 手續費").set_value(True).run()
-        self.assertEqual([x.label for x in app.metric],["退費前剩餘金額(含稅)","手續費(含稅)","實際退費金額(含稅)"])
-        self.assertEqual([x.value for x in app.metric],["$ 8,400","$ 1,680","$ 6,720"])
+        self.assertEqual([x.label for x in app.metric],["退費前剩餘金額（未稅）","手續費（未稅）","實際退費金額（未稅）"])
+        self.assertEqual([x.value for x in app.metric],["$ 8,000","$ 1,600","$ 6,400"])
 
     def test_history_tax_tabs_columns_values_and_no_form_reads(self):
         app=self.app(tab="課程中止")
@@ -427,7 +445,7 @@ class PurchaseUITests(unittest.TestCase):
         app.session_state["selected_termination_main"]="中止記錄"
         app.run();self.clean(app)
         self.assertEqual([x.label for x in app.tabs],["課程購買","登錄後續期款","課程中止","新增中止","中止記錄","含稅","未稅"])
-        expected=["中止日期","購買_id","會員","課程","中止類型","剩餘堂數","餘額","逾期入帳","退費手續費","實際退費","結單計算","中止原因","中止狀態","撤銷日期","撤銷原因"]
+        expected=["中止日期","購買_id","會員","課程","中止類型","剩餘堂數","餘額","逾期入帳","退費手續費","實際退費","結單計算","中止原因","中止狀態","撤銷日期","撤銷原因","更正入帳日"]
         self.assertEqual(list(app.dataframe[0].value.columns),expected)
         self.assertEqual(list(app.dataframe[0].value.iloc[0][["餘額","逾期入帳","退費手續費","實際退費"]]),[8400,0,1680,6720])
         self.assertNotIn("purchase_balances",app.session_state["reads"])

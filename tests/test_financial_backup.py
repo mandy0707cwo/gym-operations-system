@@ -414,7 +414,7 @@ def test_general_query_totals_match_displayed_rows():
 def test_prepaid_income_query_is_submit_gated_and_uses_payment_date():
     source = APP_PATH.read_text(encoding="utf-8")
     assert 'usage_tab,purchase_tab,prepaid_tab,balance_tab,project_tab=st.tabs(' in source
-    assert '["銷課查詢","成交總表","預收款項","預收餘額查詢","專案查詢"]' in source
+    assert '["銷課查詢","成交總表","每日預收","預收餘額查詢","專案查詢"]' in source
     assert 'with st.form("general_prepaid_date_form",border=False):' in source
     assert 'with st.form("general_prepaid_member_form",border=False):' in source
     assert 'if start is not None: query=query.gte("paid_date",str(start))' in source
@@ -450,7 +450,8 @@ def test_general_query_downloads_and_prepaid_balance_formula():
     source = APP_PATH.read_text(encoding="utf-8")
     assert 'st.download_button("下載 Excel"' in source
     assert 'download_frame("銷課查詢"' in source
-    assert 'download_frame("成交總表"' in source
+    assert 'report_name="成交總表"' in source
+    assert 'download_frame(report_name,frame,' in source
     assert 'download_frame("預收款項"' in source
     assert 'download_frame(f"預收餘額（{suffix}）"' in source
     assert 'received-used_amount-expired-fee-refund' in source

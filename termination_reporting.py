@@ -49,7 +49,7 @@ def effective_terminations(records, cutoff):
     end = date.fromisoformat(str(cutoff)[:10]).isoformat()
     groups = defaultdict(list)
     for row in records:
-        day = date.fromisoformat(str(row['termination_date'])[:10]).isoformat()
+        day = date.fromisoformat(str(row.get('correction_posted_on') or row['termination_date'])[:10]).isoformat()
         undone = reversal_date(row)
         if undone and undone < day:
             raise ValueError('撤銷日期早於原中止，停止計算。')
@@ -76,9 +76,10 @@ def termination_events(records, reversals, cutoff):
         raise ValueError('中止撤銷記錄重複，停止計算。')
     output = []
     for row in records:
-        day = str(row['termination_date'])[:10]
+        business_day = str(row['termination_date'])[:10]
+        day = str(row.get('correction_posted_on') or business_day)[:10]
         rev = by_id.get(row['id'])
-        original = dict(deepcopy(row), is_reversal=False, original_termination_date=day,
+        original = dict(deepcopy(row), is_reversal=False, termination_date=day, original_termination_date=business_day,
                         original_termination_id=row['id'], snapshot_available=bool(rev),
                         purchase_snapshot=(rev or {}).get('original_purchase'),
                         bonus_rule_snapshot=(rev or {}).get('bonus_rule_snapshot'))
