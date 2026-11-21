@@ -2067,7 +2067,7 @@ def _full_system_backup_bytes(admin):
     backup_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     financial_frames=_financial_backup_frames(table_data)
     backup_frames={"備份說明":pd.DataFrame([
-        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.47"},
+        {"項目":"系統版本","內容":secret("APP_VERSION") or "v1.13.48"},
         {"項目":"備份時間","內容":backup_time},
         {"項目":"備份範圍","內容":"系統主要資料表完整資料及截至備份日的全部財務報表；保留UUID及關聯欄位"},
         {"項目":"不含內容","內容":"Supabase登入密碼、API金鑰、Streamlit Secrets及私有schema紀錄（操作收據及特殊假別稽核）；完整還原須另有PostgreSQL資料庫備份"},
@@ -3686,7 +3686,7 @@ def general_queries_page(me):
                 "銷課金額（含稅）":st.column_config.NumberColumn(format="$ %.0f"),"銷課金額（未稅）":st.column_config.NumberColumn(format="$ %.0f")})
             download_frame("銷課查詢",frame,f"銷課查詢_{key}.xlsx")
 
-    def build_purchase_results(purchases,cutoff,member_keyword="",coach_name="全部教練",course_status="全部",payment_filter="全部",purchase_keyword="",today_payment_ids=None):
+    def build_purchase_results(purchases,cutoff,member_keyword="",coach_name="全部教練",course_status="全部",payment_filter="全部",purchase_keyword="",period_payment_ids=None):
         names=member_maps(); codes=purchase_codes(); keyword=member_keyword.casefold()
         coach_id=coaches.get(coach_name) if coach_name!="全部教練" else None
         if coach_id: purchases=[x for x in purchases if x.get("coach_id")==coach_id]
@@ -3734,22 +3734,26 @@ def general_queries_page(me):
                 "醫生轉介":purchase.get("referral") or "","備註":purchase.get("note") or ""})
         frame=finance_frame(result,columns=["成交日期","購買_ID","會員","教練","課程名稱","堂數","成交金額（含稅）","成交金額（未稅）",
             "已收金額（含稅）","已收金額（未稅）","課程期限","狀態","結束日期","分期狀態","購買類型","醫生轉介","備註"])
-        if today_payment_ids is not None:
-            selected=[x for x in allocated if x['id'] in today_payment_ids]
-            if len(selected)!=len(today_payment_ids):
-                raise ValueError('今日入帳與購課收款明細不一致，請重新查詢。')
-            frame.attrs['today_paid']=(sum(Decimal(str(x['amount'])) for x in selected),sum(x['_net_amount'] for x in selected))
+        if period_payment_ids is not None:
+            selected=[x for x in allocated if x['id'] in period_payment_ids]
+            if len(selected)!=len(period_payment_ids):
+                raise ValueError('期間入帳與購課收款明細不一致，請重新查詢。')
+            frame.attrs['period_paid']=(sum(Decimal(str(x['amount'])) for x in selected),sum(x['_net_amount'] for x in selected))
         return frame
 
     def render_purchase_results(frame,key,report_name="成交總表"):
         c1,c2=st.columns(2)
-        if 'today_paid' in frame.attrs:
-            gross,net=frame.attrs['today_paid']
+        if 'period_paid' in frame.attrs:
+            from course_query_views import business_today
+            gross,net=frame.attrs['period_paid']
+            start,end=frame.attrs['installment_period']
             frame=frame.copy(deep=False)
-            frame.attrs.pop('today_paid')
-            c1.metric("今日分期入帳（未稅）",f'$ {net:,.0f}',border=True)
-            c2.metric("今日分期入帳（含稅）",f'$ {gross:,.0f}',border=True)
-            st.caption("表內「已收金額」是截至今日的累計收款；上方金額只計今日第 2 期及以後的期款。")
+            frame.attrs.pop('period_paid')
+            frame.attrs.pop('installment_period')
+            label="今日分期入帳" if start==end==business_today().isoformat() else "期間分期入帳"
+            c1.metric(f"{label}（未稅）",f'$ {net:,.0f}',border=True)
+            c2.metric(f"{label}（含稅）",f'$ {gross:,.0f}',border=True)
+            st.caption(f"付款日期：{start} 至 {end}。表內「已收金額」是截至 {end} 的累計收款；上方金額只計區間內第 2 期及以後的期款。")
         else:
             c1.metric("成交金額總計（未稅）",f'$ {frame["成交金額（未稅）"].sum() if not frame.empty else 0:,.0f}',border=True)
             c2.metric("成交金額總計（含稅）",f'$ {frame["成交金額（含稅）"].sum() if not frame.empty else 0:,.0f}',border=True)
@@ -3762,16 +3766,18 @@ def general_queries_page(me):
                 ["成交金額（含稅）","成交金額（未稅）","已收金額（含稅）","已收金額（未稅）"]}})
             download_frame(report_name,frame,f"{report_name}_{key}.xlsx")
 
-    def render_today_installments(today):
-        today_rows=query_read(query_data,'daily_installment_payments',lambda: paged_rows(lambda: client().table('purchase_payments')
-            .select('id,purchase_id').eq('paid_date',str(today)).eq('payment_kind','installment').gt('installment_no',1).order('id')))
-        ids={x['purchase_id'] for x in today_rows}
+    def render_installment_receipts(start,end):
+        period_rows=query_read(query_data,'daily_installment_payments',lambda: paged_rows(lambda: client().table('purchase_payments')
+            .select('id,purchase_id').gte('paid_date',str(start)).lte('paid_date',str(end))
+            .eq('payment_kind','installment').gt('installment_no',1).order('paid_date').order('id')))
+        ids={x['purchase_id'] for x in period_rows}
         purchases=query_read(query_data,'daily_installment_purchases',lambda: paged_rows(lambda: client().table('purchases').select('*')
             .in_('id',sorted(ids)).eq('payment_plan','installment').order('id'))) if ids else []
         qualifying={x['id'] for x in purchases}
-        payment_ids={x['id'] for x in today_rows if x['purchase_id'] in qualifying}
-        frame=build_purchase_results(purchases,today,today_payment_ids=payment_ids)
-        render_purchase_results(frame,str(today),report_name='今日分期入帳')
+        payment_ids={x['id'] for x in period_rows if x['purchase_id'] in qualifying}
+        frame=build_purchase_results(purchases,end,period_payment_ids=payment_ids)
+        frame.attrs['installment_period']=(str(start),str(end))
+        render_purchase_results(frame,f'{start}_{end}',report_name='分期入帳')
 
     def render_prepaid_results(*,start=None,end=None,member_keyword="",installment_filter="全部",purchase_keyword="",key):
         def payment_query_builder():
@@ -3955,10 +3961,16 @@ def general_queries_page(me):
                 today=business_today()
                 with today_tab:
                     with st.form('daily_installment_form',border=False):
-                        st.caption(f"付款日期：{today}（台灣）；不含首期、未分期及補繳款。")
+                        c1,c2=st.columns(2)
+                        start=c1.date_input('開始日期',today,key='daily_installment_start')
+                        end=c2.date_input('結束日期',today,key='daily_installment_end')
+                        st.caption("依付款日期查詢（含起訖日），預設為台灣今日；不含首期、未分期及補繳款。")
                         submitted=st.form_submit_button('查詢',type='primary',width='stretch')
-                    query_data=confirm_query(st,me,'daily_installment',(str(today),),submitted)
-                    if query_data.ready: render_today_installments(today)
+                    query_data=confirm_query(st,me,'daily_installment_period',(str(start),str(end)),submitted)
+                    if query_data.ready:
+                        if start is None or end is None: st.error("請填寫開始日期及結束日期。")
+                        elif start>end: st.error("開始日期不可晚於結束日期。")
+                        else: render_installment_receipts(start,end)
             if date_tab.open:
                 with date_tab:
                     with st.form("general_prepaid_date_form",border=False):
