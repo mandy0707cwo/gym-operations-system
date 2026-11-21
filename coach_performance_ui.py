@@ -10,6 +10,7 @@ import streamlit as st
 
 from coach_performance import CoachPerformance, account_sort, hours_changes
 from coach_performance_repository import fetch_hours, fetch_report, require_management, save_hours
+from coach_visibility import visible_coaches
 from confirmed_queries import confirm_query
 
 SALES = [('教練', None, 'name'), ('成交金額', 'sales_net', 'money'), ('成交堂數', 'sales_sessions', 'count'),
@@ -26,7 +27,8 @@ INDIVIDUAL = [COMPARE[0], COMPARE[1], COMPARE[5], COMPARE[4]]
 
 
 def coach_label(row):
-    return ' '.join(filter(None, [row.get('username'), row.get('display_name')]))
+    label = ' '.join(filter(None, [row.get('username'), row.get('display_name')]))
+    return label + ('（已停用）' if row.get('active') is False else '')
 
 
 def local_time(value):
@@ -107,6 +109,7 @@ def _hours_status(engine, ids):
 
 def _notes():
     with st.expander('績效指標計算說明'):
+        st.write('三個績效分頁及月工時使用同一顯示規則：啟用教練保留；停用教練在本期有紀錄、會員維持率分母或非零月工時時保留，標註「已停用」，其餘隱藏。免費體驗、負數沖回及抵銷紀錄也算本期紀錄；不刪歷史資料。')
         st.write('金額使用正式計算中心保存未稅，整元顯示；成交只計購課，分期續繳不重複算成交；單堂平均＝成交金額／成交堂數。')
         st.write('體驗人次含免費；體驗成交率＝首次購買單數／有收費體驗人次，非同一會員體驗後成交追蹤。')
         st.write('續課人次按課程筆數，續課率＝續約課程數／全部銷完課程數，不含逾期或退費中止。')
@@ -116,6 +119,17 @@ def _notes():
         st.write('銷課達成率＝總執行時數／（手動月上班時數×80%）。只計完整月份，不按天猜算月工時；缺工時或0工時顯示無資料，不當0%。本月統計到今日，未到月底不算本月達成率。')
         st.write('會員維持率：開始日前已購課，且開始日仍未逾期、未有效中止、尚有餘堂的同教練會員，至期末仍符合者／期初會員。餘堂及中止取前一日收盤，按會員去重，新會員不進分母。')
         st.write('比率依分子分母加總，不平均每月百分比；分母0顯示「—」，成交及續課比率可能超過100%，不截斷。')
+
+
+def _hours_entry(data, report=None):
+    entry = {'data': data, 'generation': str(uuid4())}
+    if report is not None:
+        month = date.fromisoformat(data['month'])
+        end = month.replace(day=monthrange(month.year, month.month)[1])
+        report = {**report, 'coaches': data['coaches'], 'hours': data['hours']}
+        engine = CoachPerformance(report, month, end)
+        entry.update(visibility_report=report, visible_ids=[c['id'] for c in visible_coaches(engine)])
+    return entry
 
 
 def _work_hours(me, connection_factory, today):
@@ -136,8 +150,10 @@ def _work_hours(me, connection_factory, today):
         load = st.button('載入／重新載入工時', disabled=bool(pending))
         if load:
             try:
-                data = fetch_hours(connection_factory(), me, month)
-                st.session_state[key] = {'data': data, 'generation': str(uuid4())}
+                connection = connection_factory()
+                data = fetch_hours(connection, me, month)
+                report = fetch_report(connection, me, month, month.replace(day=monthrange(year, month_no)[1]))
+                st.session_state[key] = _hours_entry(data, report)
             except Exception as exc:
                 st.session_state.pop(key, None)
                 st.error(f'工時無法載入：{exc}')
@@ -146,7 +162,12 @@ def _work_hours(me, connection_factory, today):
             st.info('選擇月份後按「載入／重新載入工時」。')
             return
         data = entry['data']
-        coaches = sorted(data['coaches'], key=account_sort)
+        if 'visible_ids' not in entry and not pending:
+            st.info('教練顯示規則已更新，請重新載入本月工時。')
+            return
+        # 舊版未確認的操作仍可沿用原操作碼重試，不因名單改版而遺失。
+        ids = set(entry.get('visible_ids', [c['id'] for c in data['coaches']]))
+        coaches = sorted([c for c in data['coaches'] if c['id'] in ids], key=account_sort)
         if not coaches:
             st.info('沒有可登錄工時的教練。')
             return
@@ -182,7 +203,7 @@ def _work_hours(me, connection_factory, today):
         if send:
             try:
                 fresh = save_hours(connection_factory(), me, pending['id'], pending['month'], pending['rows'])
-                st.session_state[key] = {'data': fresh, 'generation': str(uuid4())}
+                st.session_state[key] = _hours_entry(fresh, entry.get('visibility_report'))
                 st.session_state.pop(pending_key, None)
                 for cache_key in list(st.session_state):
                     if cache_key.startswith('_confirmed_query_performance_'):
@@ -204,47 +225,50 @@ def render_coach_performance(me, connection_factory, today):
         with tab:
             if index == 0:
                 _work_hours(me, connection_factory, today)
-            # 下拉只讀名單；實績必須按查詢。快照不跨帳號或角色。
-            roster_key = '_performance_roster:' + _owner(me)
-            try:
-                if roster_key not in st.session_state:
-                    st.session_state[roster_key] = fetch_hours(connection_factory(), me, today.replace(day=1))['coaches']
-                coaches = sorted(st.session_state[roster_key], key=account_sort)
-            except Exception:
-                st.error('教練績效資料介面尚未就緒，請確認已完成 v1.13.49 資料庫升級；不影響原營運管理。')
-                return
-            if not coaches:
-                st.info('沒有教練資料。')
-                return
             key = f'performance_{index}'
             mode = _date_filters(key, today, monthly=index != 2)
+            st.caption('先查詢日期期間，再選教練；名單依該期間的績效篩選，停用者標註「已停用」。')
             with st.form(key + '_form', border=False):
                 error = None
                 try:
                     start, end = _period_fields(key, mode, today)
                 except ValueError as exc:
                     error = str(exc)
-                labels = {c['id']: coach_label(c) for c in coaches}
-                if index == 0:
-                    selected = st.multiselect('教練（空白為全部）', list(labels), format_func=labels.get, key=key + '_coaches')
-                elif index == 2:
-                    selected = [st.selectbox('教練', list(labels), format_func=labels.get, key=key + '_coach')]
-                else:
-                    selected = []
                 submitted = st.form_submit_button('查詢', type='primary')
             if error:
                 st.warning(error)
                 return
-            if any(c not in labels for c in selected):
-                st.error('教練選擇無效，請重新選擇。')
-                return
-            snap = confirm_query(st, me, key, (str(start), str(end), tuple(selected)), submitted)
+            snap = confirm_query(st, me, key, ('visibility-v50', str(start), str(end)), submitted)
             if not snap.ready:
                 return
             try:
                 raw = snap.load('report', lambda: fetch_report(connection_factory(), me, start, end))
                 engine = CoachPerformance(raw, start, end)
-                ids = set(selected) if selected else engine.ids
+                coaches = visible_coaches(engine)
+                if not coaches:
+                    st.info('本期沒有符合顯示條件的教練；停用且無本期績效依據者不顯示。')
+                    return
+                labels = {c['id']: coach_label(c) for c in coaches}
+                selection_key = key + ':' + _owner(me)
+                if index == 0:
+                    field = selection_key + '_coaches'
+                    previous = st.session_state.get(field, [])
+                    kept = [c for c in previous if c in labels]
+                    if previous != kept:
+                        st.session_state[field] = kept
+                        st.info('原選教練已不在本期顯示名單，已清除該選項；空白代表全部符合條件的教練。')
+                    selected = st.multiselect('教練（空白為全部）', list(labels), format_func=labels.get, key=field)
+                elif index == 2:
+                    field = selection_key + '_coach'
+                    if st.session_state.get(field) not in (None, *labels):
+                        st.session_state.pop(field)
+                        st.info('原選教練已不在本期顯示名單，請重新選擇。')
+                    selected = [st.selectbox('教練', list(labels), format_func=labels.get, key=field)]
+                else:
+                    selected = []
+                if any(c not in labels for c in selected):
+                    raise ValueError('教練選擇無效，請重新選擇。')
+                ids = set(selected) if selected else set(labels)
                 st.caption(f'統計期間：{start:%Y-%m-%d} ～ {end:%Y-%m-%d}｜金額：未稅、元（無小數）｜時數：小時')
                 if index == 0:
                     st.subheader('成交')
@@ -252,7 +276,7 @@ def render_coach_performance(me, connection_factory, today):
                     st.subheader('執行')
                     _table(engine, ids, EXECUTION)
                 elif index == 1:
-                    rows = [{'教練': coach_label(c), **engine.totals(c['id'])} for c in engine.coaches]
+                    rows = [{'教練': coach_label(c), **engine.totals(c['id'])} for c in coaches]
                     for label, field, kind in COMPARE:
                         with st.container(border=True):
                             st.altair_chart(performance_chart(rows, '教練', label, field, kind, f'{start}～{end}'))

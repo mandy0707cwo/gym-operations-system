@@ -154,7 +154,7 @@ class UITests(unittest.TestCase):
 
     def test_three_tabs_query_only_on_confirmation(self):
         app = self.app(operations_primary='教練績效')
-        self.assertEqual(app.session_state['calls'], ['coach_monthly_work_hours'])
+        self.assertNotIn('calls', app.session_state)
         self.assertEqual(len(app.dataframe), 0)
         app.button[0].click().run()
         self.assertFalse(app.exception)

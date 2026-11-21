@@ -6,8 +6,9 @@ from types import SimpleNamespace
 from coach_performance import month_periods
 
 COACHES = [{'id': 'demo-a', 'username': 'smc001', 'display_name': '虛構教練甲', 'active': True},
-           {'id': 'demo-b', 'username': 'smc002', 'display_name': '虛構教練乙', 'active': True},
-           {'id': 'demo-c', 'username': 'smc003', 'display_name': '虛構教練丙', 'active': True}]
+           {'id': 'demo-b', 'username': 'smc002', 'display_name': '虛構教練乙', 'active': False},
+           {'id': 'demo-c', 'username': 'smc003', 'display_name': '虛構教練丙', 'active': True},
+           {'id': 'demo-d', 'username': 'smc004', 'display_name': '虛構停用無資料', 'active': False}]
 
 
 class PerformanceDemoClient:
@@ -46,6 +47,8 @@ class PerformanceDemoClient:
             facts, cohorts = [], []
             for first, last in month_periods(start, end):
                 for index, coach in enumerate(COACHES):
+                    if coach['id'] == 'demo-d':
+                        continue  # 刻意保留在原名單，展示停用且無本期資料時不顯示。
                     day = first.replace(day=min(10, last.day))
                     if first <= day <= last:
                         # 合成數字不是正式業績。
@@ -62,7 +65,7 @@ class PerformanceDemoClient:
                                     'opening_members': 10, 'retained_members': 9 - index})
             if (start, end) not in list(month_periods(start, end)):
                 cohorts.extend({'coach_id': c['id'], 'start_date': str(start), 'end_date': str(end),
-                                'opening_members': 10, 'retained_members': 8} for c in COACHES)
+                                'opening_members': 10, 'retained_members': 8} for c in COACHES if c['id'] != 'demo-d')
             result = {'schema_version': 49, 'start': str(start), 'end': str(end), 'coaches': deepcopy(COACHES),
                       'facts': facts, 'cohorts': cohorts,
                       'hours': [deepcopy(r) for (m, _), r in self.state['demo_hours'].items() if str(start.replace(day=1)) <= m <= str(end.replace(day=1))]}

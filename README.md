@@ -1,3 +1,9 @@
+# v1.13.50 教練績效停用名單（本機候選）
+
+三個績效分頁先查期間，再選教練；目前啟用者正常顯示，停用者只在本期有績效依據時保留並標示。月工時套相同規則；歷史資料不刪除。沿用v49資料庫，不需migration，升級見UPGRADE_v1.13.50.md。
+
+驗證：`python verify_coach_visibility_v50.py`。展示：`python -m streamlit run performance_demo.py --server.port 8519`；合成教練乙停用但有資料會顯示，合成smc004停用且無資料會隱藏。不需要資料庫密碼，不連正式系統。
+
 # v1.13.49 教練績效（本機候選）
 
 虛構展示：`python -m streamlit run performance_demo.py --server.port 8519`。不讀正式憑證，工時只在分頁記憶體，關閉後不保留。先測試「績效總表」內每月工時，再查完整月份；部分月份的達成率顯示無資料。
