@@ -141,12 +141,18 @@ def render_operations_overview(me, connection_factory, today=None):
         st.warning('此頁僅限主管與系統管理員使用。')
         return
     today = today or datetime.now(ZoneInfo('Asia/Taipei')).date()
-    with st.tabs(['營運管理'])[0]:
-        tabs = st.tabs(['年度總表', '同期對比'], key='operations_view', on_change='rerun')
-        for label, tab in zip(['年度總表', '同期對比'], tabs):
-            if tab.open:
-                with tab:
-                    if label == '年度總表':
-                        _annual(me, connection_factory, today)
-                    else:
-                        _comparison(me, connection_factory, today)
+    management, performance = st.tabs(['營運管理', '教練績效'], key='operations_primary', on_change='rerun')
+    if management.open:
+        with management:
+            tabs = st.tabs(['年度總表', '同期對比'], key='operations_view', on_change='rerun')
+            for label, tab in zip(['年度總表', '同期對比'], tabs):
+                if tab.open:
+                    with tab:
+                        if label == '年度總表':
+                            _annual(me, connection_factory, today)
+                        else:
+                            _comparison(me, connection_factory, today)
+    if performance.open:
+        with performance:
+            from coach_performance_ui import render_coach_performance
+            render_coach_performance(me, connection_factory, today)
